@@ -1,0 +1,16 @@
+# One of the six presets a fresh install starts with.
+
+version = 1
+
+[preset]
+name = "Add prefix to filename"
+description = "Put something in front of every name — it asks what."
+
+[[step]]
+# `<Ask>` is the point: a preset that hard-coded its prefix would be one
+# person's preset. The run stops and asks once, before it touches anything
+# (D28), and the answer applies to every file in the batch.
+op = "add_remove"
+mode = "add"
+insert = "<Ask>"
+add_pos = 0

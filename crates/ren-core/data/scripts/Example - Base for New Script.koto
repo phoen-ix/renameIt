@@ -1,0 +1,51 @@
+# description: A good starting point for a script of your own. Copy it, give it a new name, and edit.
+# args: none
+
+# ---------------------------------------------------------------------------
+# EXAMPLE BASE SCRIPT
+#
+# Copy this file under a new name in the same folder, with a .koto extension.
+#
+# RenameIt exposes everything a script may know through the object `fr`:
+#
+#   fr.filename         the string to process. Depends on the card's Scope —
+#                       by default the name without its extension.
+#   fr.full_filename    always the whole name, extension included.
+#   fr.path             the folder the file is in, with a trailing separator.
+#   fr.disk_name        the name on disk, which fr.filename may no longer be.
+#   fr.args             the Arguments box, as one raw string.
+#   fr.preview          always true: a script only ever runs while planning.
+#   fr.num_items        how many files are in this run.
+#   fr.item_order       this file's position, zero-padded so it sorts.
+#   fr.browser_path     the folder being browsed; empty in free-select mode.
+#   fr.format_tags(t)   render a format string, e.g. '<Artist> - <Title>'.
+#   fr.all_filenames()  every filename in the run, as a list.
+#   fr.contents()       this file's text, for scripts that look inside.
+#   fr.args_file()      the text of the file named in the Arguments box.
+#   fr.find_ci(h, n)    case-insensitive index-of; the offset is valid for `h`.
+#   fr.seed             this run's random seed. There is no clock in a script,
+#                       so this is what makes randomness reproducible.
+#
+# The last four are what stands in for unrestricted file access. Neither reader
+# takes a path — one reads the file being renamed, the other the one path the
+# user typed — so a script cannot reach anything it was not handed.
+#
+# Three functions are called, and only `rename` is required:
+#
+#   top level   runs once, before anything else — this is where `init` went.
+#   rename()    runs once per file. Return the new name, or '' to skip.
+#   done()      runs once at the end. Return a string for the log.
+# ---------------------------------------------------------------------------
+
+# State that must survive from one file to the next lives in a MAP, not a bare
+# variable. Koto captures plain values by copy, so `n = 0` at the top and
+# `n += 1` inside `rename` would count to one, over and over, silently.
+state = {seen: 0}
+
+rename = ||
+  state.seen = state.seen + 1
+  bytes = fr.format_tags '<Size>'
+  'File {state.seen} is {bytes}'
+
+done = ||
+  'The example script looked at {state.seen} file(s).'

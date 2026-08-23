@@ -1,0 +1,26 @@
+[package]
+name = "ren-platform"
+description = "OS-specific behaviour for RenameIt, behind a single Platform trait"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Only for the attribute types, which M5's journal records as before-images.
+# `FileTimes`/`TimeChange` deliberately stay off the wire: serde's `SystemTime`
+# impl refuses any instant before 1970, and the journal writer treats a failed
+# serialisation as unreachable.
+serde.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+filetime.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,43 @@
+[package]
+name = "ren-gui"
+description = "RenameIt desktop application"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "renameit"
+path = "src/main.rs"
+
+[dependencies]
+ren-core.workspace = true
+ren-platform.workspace = true
+
+arboard.workspace = true
+eframe.workspace = true
+chrono.workspace = true
+clap.workspace = true
+egui.workspace = true
+egui_table.workspace = true
+lru.workspace = true
+rayon.workspace = true
+rfd.workspace = true
+serde = { workspace = true }
+
+[dev-dependencies]
+egui_kittest.workspace = true
+ron.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+
+# Stamps the Windows .exe with our icon and version metadata (build.rs).
+# MIT, no dependencies of its own; audited under D2.
+#
+# Not gated on `cfg(windows)`: for a build script that cfg means the *host*,
+# and cross-compiling to Windows from a Linux box would then silently drop the
+# icon. build.rs checks `CARGO_CFG_TARGET_OS` instead, which is the target.
+[build-dependencies]
+winresource = "0.1.31"

@@ -1,0 +1,17 @@
+/target
+**/*.rs.bk
+*.pdb
+.DS_Store
+
+# Spike + benchmark output
+/docs/spikes/*.json
+/.claude/scheduled_tasks.lock
+
+# Agent worktrees
+/.claude/worktrees/
+
+# Release staging: `cargo dist`-style output, and the archives it makes.
+/dist
+
+# Screenshots dropped in the root for review.
+/renameit_*.png

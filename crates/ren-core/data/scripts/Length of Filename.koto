@@ -1,0 +1,15 @@
+# description: Show the length of each filename (including its extension) in the preview column. Type 1 in the arguments to count the path as well. Tip: sort by the preview column to find the longest names.
+# args: 1 to include the path, otherwise leave empty
+
+# This script renames nothing — it uses the preview column as a readout, which
+# is why every row's "new name" is a number. Returning a number rather than a
+# string is fine: the engine stringifies it (D98).
+#
+# `fr.args = '1'` is an exact string comparison, so ' 1' and 'true' do not
+# work.
+
+rename = ||
+  if fr.args == '1'
+    size fr.path + fr.full_filename
+  else
+    size fr.full_filename

@@ -1,0 +1,84 @@
+# RenameIt job file — a worked example of every General operation.
+#
+#   ren-cli preview --job examples/cleanup.toml
+#   ren-cli apply   --job examples/cleanup.toml
+#   ren-cli undo
+#
+# Point `dir` at a scratch copy first. `preview` never touches anything, and
+# `apply --simulate` runs the whole plan without a single filesystem call.
+#
+# This is the same schema presets use (D18), so anything here will load into the
+# GUI's pipeline panel unchanged.
+
+[source]
+dir = "."
+files = true
+folders = false
+subfolders = false
+
+# --- 1. Underscores and stray punctuation --------------------------------------
+# Steps run top to bottom, each seeing the previous step's output.
+
+[[step]]
+op = "replace"
+find = "_"
+replace = " "
+
+# Regular expressions get $1-$9 in the replacement, exactly as documented
+# documents. This one collapses "01 - " style prefixes to "01. ".
+[[step]]
+op = "replace"
+regex = true
+find = "^(\\d+) - "
+replace = "$1. "
+
+# --- 2. The shipped batch-replace rules ----------------------------------------
+# Fifty-one rules covering underscores and English contractions. Listed here in
+# short form; the full default list lives in
+# crates/ren-core/data/batch_replace_default.toml.
+
+[[step]]
+op = "batch_replace"
+rules = [
+  { find = "( don)[ `´]?(t) ", replace = "$1'$2 ", regex = true },
+  { find = "( isn)[ `´]?(t) ", replace = "$1'$2 ", regex = true },
+  { find = "( it)[ `´]?(s) ", replace = "$1'$2 ", regex = true },
+]
+
+# --- 3. Casing ------------------------------------------------------------------
+# Casing the name and the extension differently is simply two steps, which is
+# the same thing said out loud.
+
+[[step]]
+op = "casing"
+scope = "name"
+mode = "title"
+lowercase_exceptions = true
+preserve_all_upper = true
+
+[[step]]
+op = "casing"
+scope = "extension"
+mode = "lower"
+
+# --- 4. Trim what is left -------------------------------------------------------
+# Runs last so it cleans up after everything above. The defaults trim both
+# ends, shrink runs of spaces, and keep a space around brackets.
+
+[[step]]
+op = "space_trim"
+
+# --- 5. A step that only applies to some files ----------------------------------
+# Tag anything that still looks like a bootleg. The filter sees the name as the
+# steps above left it, not as it was on disk.
+
+[[step]]
+op = "add_remove"
+mode = "add"
+insert = " [live]"
+add_pos = 0
+add_backwards = true
+
+[step.filter]
+include = { substring = "concert" }
+exclude = { substring = "[live]" }

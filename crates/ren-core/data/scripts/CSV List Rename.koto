@@ -1,0 +1,42 @@
+# description: Rename from a CSV file with two columns, old name and new name. Type the full path to the CSV file in the arguments. Kept as a learning example — the built-in CSV List Rename operation does this better.
+# args: the full path to a CSV file
+
+# Kept as a learning example only.
+#
+# Use the CSV List Rename OPERATION instead. It is better in every way —
+# quoted fields, tab and custom separators, paths in the old column, tags in
+# the new column — and this reproduces none of that, deliberately: the point of
+# the example is the shape of a script, so it keeps the simplest possible
+# limits:
+#
+#  * the separator is a hard-coded comma, with no quoting;
+#  * only rows with exactly two fields are read, so a header line is skipped;
+#  * on a duplicate old name the LAST match wins, because the loop has no
+#    early exit. The native operation uses the first.
+#
+# It reads through fr.args_file(), which reads the path the *user* typed into
+# the Arguments box. A script cannot name a different file.
+
+state = {names: {}, rows: 0}
+
+# --- init ------------------------------------------------------------------
+text = fr.args_file()
+for line in text.lines()
+  fields = line.split(',').to_tuple()
+  if (size fields) == 2
+    # Last one wins: assigning unconditionally keeps scanning after a
+    # match.
+    state.names.insert fields[0], fields[1]
+    state.rows += 1
+
+rename = ||
+  # An empty argument is a card nobody has filled in yet, not an error (P34).
+  if fr.args.trim().is_empty()
+    return ''
+  # A file that read fine but had no usable rows is a different complaint from
+  # one that could not be read at all, and saying the wrong one sends the user
+  # looking in the wrong place.
+  if state.rows == 0
+    throw "no 'old,new' rows in '{fr.args}' — is the path right, and is it comma-separated?"
+  found = state.names.get fr.filename
+  if found == null then '' else found

@@ -1,0 +1,53 @@
+# description: Take the filename from an HTML or XML tag inside the file. Type the tag name (without the angle brackets) in the arguments. The result is cut to 64 characters with newlines removed.
+# args: the tag name, for example title
+
+# Details worth stating, because they are what the script does:
+#
+#  * the tag name is used as typed while the document is matched
+#    case-insensitively, so 'TITLE' finds <title>. Folding only the haystack
+#    would mean "your argument must be lower-case or nothing happens", which is
+#    a defect rather than a feature;
+#  * '</ tag>' with a space is accepted as a closing tag;
+#  * the result is cut to 64 characters BEFORE newlines are stripped, so a
+#    value with newlines in its first 64 characters comes back shorter.
+#
+# Reading happens through fr.contents(), which can only ever read the file
+# being renamed — it takes no path — and applies a ~5 MB limit.
+
+
+rename = ||
+  tag = fr.args.trim()
+  if tag.is_empty()
+    return ''
+
+  text = fr.contents()
+  if text.is_empty()
+    return ''
+
+  # fr.find_ci searches `text` itself and returns an offset into `text`, so the
+  # slice below is taken from the string the offsets were measured in. Folding
+  # the document first and then indexing the original with the copy's offsets
+  # is the obvious approach and it is wrong: the two differ in length wherever
+  # a character's lower-case form has a different UTF-8 width.
+  open_at = fr.find_ci text, '<' + tag
+  if open_at == null then return ''
+  gt = fr.find_ci text, '>', open_at
+  if gt == null then return ''
+  start = gt + 1
+
+  stop = fr.find_ci text, '</' + tag + '>', start
+  if stop == null
+    stop = fr.find_ci text, '</ ' + tag + '>', start
+  if stop == null then return ''
+
+  # Cut to 64 characters first, then strip — that order is deliberate.
+  value = text[start..stop]
+  chars = value.chars().to_tuple()
+  if (size chars) > 64
+    value = chars[0..64].intersperse('').to_string()
+
+  value
+    .replace('\r', '')
+    .replace('\n', '')
+    .replace('\t', ' ')
+    .trim()

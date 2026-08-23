@@ -1,0 +1,196 @@
+# Cuts a release when a version tag is pushed.
+#
+#   git tag -a v1.0.0 -m "1.0.0" && git push origin v1.0.0
+#
+# Nothing here runs on a normal push: a release is a deliberate act, and the
+# gate that decides whether the code is fit to ship is `ci.yml`, which has
+# already run on the commit the tag points at.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  # So the packaging can be exercised without inventing a version.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # Both build jobs used to run `cargo test --workspace` first, with the note
+  # "a tag must not ship code that would have been refused on `main`". That
+  # concern is right and this job is the cheaper way to answer it.
+  #
+  # `ci.yml` already runs the full suite on **both** Linux and Windows for
+  # every push to `main`, plus fmt, clippy, cargo-deny, the Windows
+  # type-check and the two performance budgets. Re-running only `cargo test`
+  # here was both a duplicate *and* a weaker check than the thing it was
+  # standing in for — so this asks whether that gate actually passed on this
+  # exact commit, which is the whole question, and costs seconds instead of
+  # twenty minutes of windows-latest at double rate.
+  #
+  # It refuses rather than waits. CI is not triggered by a tag, so the order
+  # has to be: push `main`, let CI go green, then push the tag. Sleeping here
+  # would burn the minutes this exists to save, and a release cut before its
+  # gate finished is exactly what this is protecting against.
+  gate:
+    name: CI must have passed for this commit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Look up the CI run for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          conclusion=$(gh api \
+            "repos/${{ github.repository }}/actions/workflows/ci.yml/runs?head_sha=${{ github.sha }}&status=completed" \
+            --jq '.workflow_runs[0].conclusion // "none"')
+          echo "CI for ${{ github.sha }}: $conclusion"
+          if [ "$conclusion" != "success" ]; then
+            echo "::error::CI has not passed for this commit (it is '$conclusion')." >&2
+            echo "::error::Push main first, wait for CI to go green, then push the tag." >&2
+            exit 1
+          fi
+
+  windows:
+    name: Windows — build and package
+    needs: gate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      # No toolchain action: `rust-toolchain.toml` pins an exact version (D12)
+      # and rustup honours it, which is how `ci.yml` does it too. Pinning here
+      # and taking `stable` there would mean a release built with a compiler
+      # the gate never ran — which is the one difference a release must not
+      # have.
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --bin renameit --bin ren-cli
+
+      # The archive is built from an explicit list rather than by sweeping a
+      # directory, so nothing reaches a release artifact by accident.
+      - name: Stage the artifact
+        shell: pwsh
+        run: |
+          $stage = "dist/RenameIt"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item target/release/renameit.exe $stage
+          Copy-Item target/release/ren-cli.exe  $stage
+          Copy-Item LICENSE                     $stage
+          Copy-Item README.md                   $stage
+          Copy-Item CHANGELOG.md                $stage
+          # The OFL requires its notice to travel with the font, and the fonts
+          # are compiled into the executable. cargo-deny cannot see an asset
+          # that is not a crate, so this is the only thing carrying the
+          # obligation.
+          Copy-Item THIRD-PARTY-FONTS.md        $stage
+          Copy-Item crates/ren-gui/assets/fonts/OFL.txt "$stage/OFL.txt"
+          Copy-Item examples                    $stage -Recurse
+          # A downloaded, extracted folder is exactly the portable case, so the
+          # marker ships. Deleting it makes the copy behave like an install and
+          # keep its files in the per-user folder instead (D131). If the folder
+          # turns out not to be writable — Program Files, a read-only share —
+          # the app declines the portable path on its own.
+          Set-Content -Path "$stage/renameit-portable.txt" -Value @(
+            "The presence of this file makes this a portable copy of RenameIt:",
+            "presets, scripts, the undo journal and the window layout are kept in",
+            "the RenameIt-data folder beside the program, so copying this folder",
+            "takes them with it.",
+            "",
+            "Delete this file to keep them in your user profile instead."
+          )
+          # Checked rather than trusted: a licence obligation that depends on
+          # somebody remembering a copy step is one that will eventually be
+          # forgotten.
+          foreach ($needed in @("OFL.txt", "THIRD-PARTY-FONTS.md")) {
+            if (-not (Test-Path "$stage/$needed")) { throw "font notice missing: $needed" }
+          }
+          Get-ChildItem $stage -Recurse -File | Select-Object FullName, Length
+
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path dist/RenameIt -DestinationPath dist/RenameIt-windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RenameIt-windows-x64
+          path: dist/RenameIt-windows-x64.zip
+
+      - name: Publish
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/RenameIt-windows-x64.zip
+          body_path: CHANGELOG.md
+          draft: true
+
+  linux:
+    name: Linux — build and package
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: Swatinem/rust-cache@v2
+
+      # eframe's own list. The Windows job needs none of this, which is the
+      # whole reason the two jobs are not one matrix.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libxcb-render0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libxkbcommon-dev libssl-dev
+
+      - name: Build
+        run: cargo build --release --bin renameit --bin ren-cli
+
+      # D3 says `ren-core` builds and tests green on Linux at all times, and M9
+      # promotes that build from "CI artifact" to an alpha. This is the artifact
+      # half, cut by the same tag rather than by a separate act — the binaries
+      # are already built and tested on this runner either way.
+      #
+      # Staged from an explicit copy list, for the same reason as the Windows
+      # job.
+      - name: Stage the artifact
+        run: |
+          stage=dist/RenameIt
+          mkdir -p "$stage"
+          cp target/release/renameit "$stage"
+          cp target/release/ren-cli  "$stage"
+          cp LICENSE README.md CHANGELOG.md THIRD-PARTY-FONTS.md "$stage"
+          # See the Windows job: the OFL notice has to ship with the binary the
+          # fonts are compiled into.
+          cp crates/ren-gui/assets/fonts/OFL.txt "$stage/OFL.txt"
+          cp -r examples "$stage"
+          cat > "$stage/renameit-portable.txt" <<'MARKER'
+          The presence of this file makes this a portable copy of RenameIt:
+          presets, scripts, the undo journal and the window layout are kept in
+          the RenameIt-data folder beside the program, so copying this folder
+          takes them with it.
+
+          Delete this file to keep them in your user profile instead.
+          MARKER
+          # See the Windows job: checked, not trusted.
+          for needed in OFL.txt THIRD-PARTY-FONTS.md; do
+            if [ ! -f "$stage/$needed" ]; then
+              echo "font notice missing: $needed" >&2
+              exit 1
+            fi
+          done
+          find "$stage" -type f -printf '%p\t%s\n'
+
+      - name: Tar
+        run: tar -czf dist/RenameIt-linux-x64.tar.gz -C dist RenameIt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RenameIt-linux-x64
+          path: dist/RenameIt-linux-x64.tar.gz
+
+      - name: Publish
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/RenameIt-linux-x64.tar.gz
+          body_path: CHANGELOG.md
+          draft: true

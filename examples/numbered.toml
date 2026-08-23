@@ -1,0 +1,86 @@
+# RenameIt job file — the Numbers group and the <tag> engine.
+#
+#   ren-cli preview --job examples/numbered.toml
+#   ren-cli apply   --job examples/numbered.toml
+#   ren-cli undo
+#
+# Point `dir` at a scratch copy first. `preview` never touches anything and
+# never asks a question; `apply` collects any <Ask> on stdin before it starts.
+
+[source]
+dir = "."
+files = true
+pattern = "*.mp3"
+
+# Run-wide settings: these belong to the run, not to any one step.
+[settings]
+# Filenames look like "Metallica - Nothing Else Matters.mp3", so <%1> is the
+# artist and <%2> the title. The GUI's magic wand fills this in from a selected
+# file; here it is written out.
+parts = "<%1> - <%2>"
+# A file that cannot fill in every tag is left alone rather than renamed with
+# the gap left empty.
+require_all_tags = true
+
+[settings.counter]
+start = 1
+step = 1
+# Pad to whatever the longest number in this batch needs, so names sort.
+auto_pad = true
+
+# --- 1. Number every track, and put the title first ---------------------------
+#
+# "Replace current filename with:" takes tags, so this rebuilds the name from
+# the parts rather than editing the text that is there.
+
+[[step]]
+op = "add_counter"
+scope = "name"
+placement = "first"
+separator = ". "
+replace_name = true
+replacement = "<%2> (<%1>)"
+
+# --- 2. Pad any numbers that were already in the name -------------------------
+#
+# Zero Padding pads *and* crops: 7 becomes 07, and 007 becomes 07 too, so a
+# batch that has been through this twice stays put.
+
+[[step]]
+op = "zero_padding"
+scope = "name"
+digits = 2
+enabled = false
+
+# --- 3. Shift a numbered series ------------------------------------------------
+#
+# Note that "+1 to all numbers" collides with files that have not
+# been renamed yet, and suggests two passes as a workaround. It is not needed
+# here: the planner orders renames topologically and breaks cycles with a
+# temporary name, so this runs in one pass.
+
+[[step]]
+op = "renumber"
+scope = "name"
+target = "all"
+action = "add"
+operand = "1"
+keep_length = true
+enabled = false
+
+# --- 4. Sort into one folder per year -----------------------------------------
+#
+# `<\>` is the one tag that makes a rename a move. The folder is created if it
+# does not exist, and undo removes it again — but only if it is still empty.
+#
+# Keep it in the *last* step. The separator it produces is ordinary text to
+# every step after it, and tags read the name as earlier steps left it, so a
+# `<\>` in the middle of a pipeline surprises whatever follows.
+
+[[step]]
+op = "add_remove"
+scope = "both"
+mode = "add"
+insert = "<Date-yyyy><\\>"
+add_pos = 0
+enabled = false

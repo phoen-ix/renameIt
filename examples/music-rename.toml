@@ -1,0 +1,35 @@
+# RenameIt preset — a saved pipeline.
+#
+#   ren-cli presets import examples/music-rename.toml
+#   ren-cli preview ~/music --preset "Sort an album"
+#
+# Music Rename's job: name every track from what the track
+# itself says, and file it under artist and album while you are there.
+#
+# Everything absent equals its default (D35), which is why this reads like
+# something a person wrote.
+
+version = 1
+
+[preset]
+name = "Sort an album"
+description = "Name tracks from their tags, into <Artist>/<Album>/ subfolders."
+
+[[step]]
+# The worked example for Setup Parts:
+#
+#   "By using the SubFolder <\> tag you can move your files into subfolders
+#    named after different properties of the file."
+#
+# `<\>` is a *deliberate* move, so it is obeyed. A slash that arrives inside a
+# tag value — AC/DC, a title like "Sympathy/Antipathy" — is not, and gets
+# neutralised before it can scatter the album across directories (D61).
+#
+# The extension is out of scope, because the pattern does not carry one.
+op = "music_rename"
+style = "<Artist><\\><Album><\\><Track>. <Title>"
+
+# A file with none of these tags is left alone rather than renamed to the
+# pattern's punctuation, so a folder with a cover.jpg and a playlist in it
+# still runs. To be stricter — leave a file alone unless *every* tag is there —
+# turn on "Only rename if all tags are available" in Run Settings.

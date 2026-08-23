@@ -1,0 +1,24 @@
+# One of the six presets a fresh install starts with.
+#
+# D6: written as our own data, in the same format a user's presets use.
+
+version = 1
+
+[preset]
+name = "Basic filename cleanup"
+description = "Underscores to spaces, tidy the spacing, capitalise the words."
+
+[[step]]
+# `download_of_my_file.txt` is a filename a program chose; a person would have
+# written spaces. Space Trimming owns the underscore rule rather than a Replace
+# card, because it also cleans up the runs of spaces that turning `a_ b` into
+# `a  b` leaves behind — one card, one pass, no order to get wrong.
+op = "space_trim"
+underscores_to_spaces = true
+shrink = true
+leading = true
+trailing = true
+
+[[step]]
+op = "casing"
+mode = "title"

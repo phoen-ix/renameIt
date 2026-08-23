@@ -1,0 +1,65 @@
+# description: Give each file a different random number from a range. Set the range in the arguments as "Low-High", for example "5-20".
+# args: Low-High, for example 5-20
+
+# Seeding matters here. Seeding from the system clock would mean init runs
+# again on every preview and the numbers shown in the preview column are NOT
+# the numbers written to disk. This seeds from the run (fr.seed, P16), so a
+# preview and the rename that follows it agree.
+#
+# The shuffle is the naive single-pass variant — each element swapped with a
+# uniformly random element of the whole range. That is biased rather than
+# Fisher-Yates, which is acceptable for picking arbitrary distinct numbers and
+# is left as the simpler thing to read.
+
+# A small LCG, because the sandbox has no clock and no random module. Numerical
+# Recipes' constants; ample for shuffling a few thousand numbers.
+#
+# The **high** bits are returned, not the state itself. An LCG with a
+# power-of-two modulus has famously poor low-order bits — bit 0 simply
+# alternates — so `state % count` would give a shuffle with a fixed
+# alternating-parity structure rather than a random one. Discarding the low 16
+# bits costs nothing and removes it.
+rng = {state: 0}
+next_random = ||
+  rng.state = (rng.state * 1664525 + 1013904223) % 4294967296
+  (rng.state / 65536).floor()
+
+state = {numbers: [], at: 0, low: 0, high: 0, problem: null}
+
+# --- init: everything below runs once, before the first file ---------------
+parts = fr.args.split('-').to_tuple()
+if (size parts) != 2
+  state.problem = "the range must look like '5-20'"
+else
+  low = parts[0].trim().to_number()
+  high = parts[1].trim().to_number()
+  if low == null or high == null
+    state.problem = "'{fr.args}' is not a range of two numbers"
+  else if high >= 30000 or low + high >= 30000
+    # A row error rather than a dialog: nothing should pop up mid-preview.
+    state.problem = 'those numbers are too high'
+  else if high < low
+    state.problem = 'the range is back to front'
+  else
+    rng.state = fr.seed % 4294967296
+    for n in low..=high
+      state.numbers.push n
+    state.low = low
+    state.high = high
+
+    count = size state.numbers
+    for i in 0..count
+      j = (next_random() % count).floor()
+      swap = state.numbers[i]
+      state.numbers[i] = state.numbers[j]
+      state.numbers[j] = swap
+
+rename = ||
+  if state.problem != null
+    throw state.problem
+  # Run out of numbers before running out of files? The surplus is skipped.
+  if state.at >= size state.numbers
+    return ''
+  n = state.numbers[state.at]
+  state.at = state.at + 1
+  '{n}'

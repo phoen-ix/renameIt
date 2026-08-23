@@ -1,0 +1,46 @@
+# description: Swap two parts of a filename around a separator. 'AA - BB' swapped around ' - ' gives 'BB - AA'. Type your separator as an input argument.
+# args: the separator, for example ' - '
+
+# Two details are behaviour rather than accident:
+#
+#  * the match is case-INsensitive, but the separator written back into the
+#    middle is taken from the filename, so its own casing survives — search for
+#    ' AND ', keep ' and ';
+#  * only the FIRST occurrence is used, and a filename with no separator in it
+#    is returned unchanged rather than skipped.
+
+rename = ||
+  sep = fr.args
+  if sep.is_empty()
+    return fr.filename
+
+  name = fr.filename
+  target = sep.to_lowercase()
+
+  # Koto's string module has no index-of, so the character boundaries are
+  # walked by hand. The slices are taken from `name` itself and only the
+  # candidate is folded: lower-casing the whole string first and then indexing
+  # `name` with offsets measured in the folded copy is wrong wherever the two
+  # differ in length, and it is not hypothetical — 'İ' (U+0130) is two bytes
+  # and lower-cases to three.
+  positions = name.char_indices().to_tuple()
+  count = size positions
+  width = size sep.chars().to_tuple()
+
+  at = null
+  after = null
+  for i in 0..count
+    if i + width > count
+      break
+    start = positions[i].start()
+    stop = positions[i + width - 1].end()
+    if name[start..stop].to_lowercase() == target
+      at = start
+      after = stop
+      break
+
+  if at == null
+    return name
+
+  # tail, then the separator exactly as it was written, then head.
+  name[after..] + name[at..after] + name[..at]

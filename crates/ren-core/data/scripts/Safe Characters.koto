@@ -1,0 +1,37 @@
+# description: Replace non-English characters with a plainer base version, so that å becomes a and ö becomes o. Edit the table below if something is missing or not to your taste.
+# args: none
+
+# Three entries in the table are worth flagging as choices rather than
+# oversights:
+#
+#   'Þ' -> 'th'   lowercase, where 'ß' -> 'SS' is uppercase
+#   '×' -> 'x'    U+00D7 is a multiplication sign, not a letter
+#   'Ð' -> 'D'    and 'ð' -> 'd', which is Latin-1's eth
+#
+# Not handled, then or now: Œ œ Ł Đ, anything outside Latin-1 plus the five
+# CP1252 letters below, and combining marks.
+
+table =
+  { 'Š': 'S', 'Ž': 'Z', 'š': 's', 'ž': 'z', 'Ÿ': 'Y'
+  , 'À': 'A', 'Á': 'A', 'Â': 'A', 'Ã': 'A', 'Ä': 'A', 'Å': 'A', 'Æ': 'AE'
+  , 'Ç': 'C', 'È': 'E', 'É': 'E', 'Ê': 'E', 'Ë': 'E'
+  , 'Ì': 'I', 'Í': 'I', 'Î': 'I', 'Ï': 'I'
+  , 'Ð': 'D', 'Ñ': 'N'
+  , 'Ò': 'O', 'Ó': 'O', 'Ô': 'O', 'Õ': 'O', 'Ö': 'O', '×': 'x', 'Ø': 'O'
+  , 'Ù': 'U', 'Ú': 'U', 'Û': 'U', 'Ü': 'U'
+  , 'Ý': 'Y', 'Þ': 'th', 'ß': 'SS'
+  , 'à': 'a', 'á': 'a', 'â': 'a', 'ã': 'a', 'ä': 'a', 'å': 'a', 'æ': 'ae'
+  , 'ç': 'c', 'è': 'e', 'é': 'e', 'ê': 'e', 'ë': 'e'
+  , 'ì': 'i', 'í': 'i', 'î': 'i', 'ï': 'i'
+  , 'ð': 'd', 'ñ': 'n'
+  , 'ò': 'o', 'ó': 'o', 'ô': 'o', 'õ': 'o', 'ö': 'o', 'ø': 'o'
+  , 'ù': 'u', 'ú': 'u', 'û': 'u', 'ü': 'u'
+  , 'ý': 'y', 'þ': 'th', 'ÿ': 'y'
+  }
+
+rename = ||
+  out = {text: ''}
+  for c in fr.filename.chars()
+    swap = table.get c
+    out.text = out.text + (if swap == null then c else swap)
+  out.text

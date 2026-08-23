@@ -1,0 +1,41 @@
+# description: Insert spaces before capital letters and a few other characters. Useful for cleaning up the names of downloaded files.
+# args: none
+
+# Character tests are written as Unicode comparisons rather than by codepoint
+# number, so they mean the same thing everywhere.
+#
+# A '.' does not suppress the next insertion. That rule was considered and left
+# out — noted here so it is a decision rather than an oversight.
+
+upper = |c| c >= 'A' and c <= 'Z'
+lower = |c| c >= 'a' and c <= 'z'
+digit = |c| c >= '0' and c <= '9'
+
+rename = ||
+  chars = fr.filename.chars().to_tuple()
+  n = size chars
+  out = {text: '', skip_next: true, prev: ''}  # the first character is always skipped
+
+  for i in 0..n
+    c = chars[i]
+    space = ''
+
+    if not out.skip_next
+      if upper c then space = ' '
+      # A digit, but only the first of a run of them.
+      if (digit c) and not (digit out.prev) then space = ' '
+      if c == '(' or c == '[' or c == '-' or c == '&' then space = ' '
+    else
+      # "this makes the function better in some rare cases...": a capital that
+      # was skipped still gets a space if it opens a word — i.e. it follows
+      # something other than '(', '[' or a space, and is followed by lowercase.
+      if i > 0 and upper c
+        if out.prev != '(' and out.prev != '[' and out.prev != ' '
+          if i < n - 1 and lower chars[i + 1]
+            space = ' '
+
+    out.skip_next = (upper c) or c == '(' or c == '[' or c == ' '
+    out.text = out.text + space + c
+    out.prev = c
+
+  out.text

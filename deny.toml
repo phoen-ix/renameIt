@@ -1,0 +1,88 @@
+# cargo-deny configuration — enforces D2 (project is MIT; every dependency must be
+# MIT / Apache-2.0 / BSD-2/3 / Zlib / ISC / Unicode-3.0 / Unlicense, fonts OFL-1.1).
+# No GPL/LGPL static linking, ever. CI fails the build if this drifts.
+
+[graph]
+targets = [
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+]
+all-features = true
+
+[licenses]
+# SPDX identifiers only. Adding one here is a policy change: record it in
+# docs/DECISIONS.md before you commit it.
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "ISC",
+    "OFL-1.1",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+    "CC0-1.0",
+]
+confidence-threshold = 0.93
+unused-allowed-license = "allow"
+
+# D2 carves out fonts ("fonts: OFL-1.1"). egui's bundled default fonts also
+# include Ubuntu Mono under the Ubuntu Font Licence 1.0 — a DFSG-free font
+# licence in the same class as the OFL: it permits embedding and
+# redistribution, and constrains only modify-and-keep-the-name. It covers the
+# font file, not our code. Scoped to the one crate rather than allowed
+# globally. See D15 in docs/DECISIONS.md.
+[[licenses.exceptions]]
+name = "epaint_default_fonts"
+allow = ["Ubuntu-font-1.0"]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Copyleft or otherwise incompatible libraries that are easy to reach for by
+# accident. See docs/DESIGN.md §6 for the permissive replacements used
+# instead.
+deny = [
+    { name = "symphonia", reason = "MPL-2.0; lofty already supplies bitrate/length/channels" },
+    { name = "taglib", reason = "LGPL; use lofty + id3" },
+    { name = "taglib-sys", reason = "LGPL; use lofty + id3" },
+    { name = "freeimage", reason = "FIPL/GPL; use the image crate + Windows shell thumbnails" },
+    { name = "freeimage-sys", reason = "FIPL/GPL; use the image crate + Windows shell thumbnails" },
+    { name = "slint", reason = "D4: GPLv3 / proprietary dual licence, incompatible with MIT" },
+]
+
+[advisories]
+yanked = "deny"
+# Every entry here is a decision, not a convenience. Say which crate, why the
+# advisory does not reach us, and what would make it reach us.
+ignore = [
+    # `paste` is a compile-time proc macro that expands identifiers. The
+    # advisory is "the author archived the repository", not a vulnerability:
+    # there is no runtime code, no unsafe, and no input it ever sees. It comes
+    # in under `lofty`, which M6 needs, and there is no safe upgrade because
+    # there is nothing to upgrade to.
+    #
+    # Revisit if it ever becomes a *vulnerability* advisory rather than an
+    # unmaintained one, or if lofty drops it.
+    { id = "RUSTSEC-2024-0436", reason = "paste: unmaintained proc macro under lofty; compile-time only, no runtime surface" },
+    # `instant` arrives under `koto_runtime`, which uses it for the script
+    # execution timeout. The advisory is "unmaintained, use web-time instead",
+    # not a vulnerability, and there is no safe upgrade: koto pins it.
+    #
+    # Why it does not reach us: both `[graph] targets` above are non-wasm, and on
+    # any non-wasm target `instant` is a re-export of `std::time::Instant`. Its
+    # only real code is the wasm-bindgen path, which we never compile.
+    #
+    # What would make it reach us: it becoming a *vulnerability* advisory, us
+    # adding a wasm32 target, or koto moving to web-time (then drop this entry).
+    { id = "RUSTSEC-2024-0384", reason = "instant: unmaintained under koto_runtime; on our non-wasm targets it is a re-export of std::time::Instant" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

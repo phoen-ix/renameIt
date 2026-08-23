@@ -1,0 +1,96 @@
+# RenameIt — default Batch Replace list.
+#
+# D6: this is *our* data in *our* format — the underscore rule and the
+# English-contraction coverage written from scratch as structured data.
+#
+# Rather than fifty near-identical regexes, one per contraction, this stores
+# the linguistic facts and lets the engine build the patterns, so the list
+# stays readable and a user can extend it by adding a pair.
+
+version = 1
+
+# --- Literal rules -----------------------------------------------------------
+
+[[rule]]
+find = "_"
+replace = " "
+regex = false
+note = "Underscores usually stand in for spaces."
+
+# --- English contraction repair ----------------------------------------------
+#
+# Filenames often lose the apostrophe, or carry a stand-in typed in its place.
+# Each pair below generates one case-insensitive regex:
+#
+#     find     ( <head>)[<stand_ins>]?(<tail>)<boundary>
+#     replace  $1'$2<boundary>
+#
+# The captured groups preserve the original capitalisation, so "DONT" becomes
+# "DON'T" and "dont" becomes "don't" from the same rule. The leading space and
+# the trailing boundary keep the rule from firing inside a longer word
+# ("pedant" must not become "pedan't").
+
+[contractions]
+# Characters seen where the apostrophe belongs: a space, a backtick, and
+# U+00B4 ACUTE ACCENT.
+stand_ins = [" ", "`", "´"]
+# Written into the pattern after the tail group.
+boundary = " "
+
+# [head, tail] -> head'tail
+pairs = [
+  ["I", "m"],
+  ["I", "ve"],
+  ["I", "ll"],
+  ["I", "d"],
+  ["you", "re"],
+  ["you", "ve"],
+  ["you", "ll"],
+  ["you", "d"],
+  ["he", "s"],
+  ["he", "d"],
+  ["she", "s"],
+  ["she", "d"],
+  ["it", "s"],
+  ["it", "ll"],
+  ["we", "ve"],
+  ["we", "d"],
+  ["they", "re"],
+  ["they", "ve"],
+  ["they", "ll"],
+  ["they", "d"],
+  ["ain", "t"],
+  ["aren", "t"],
+  ["can", "t"],
+  ["couldn", "t"],
+  ["didn", "t"],
+  ["doesn", "t"],
+  ["don", "t"],
+  ["hadn", "t"],
+  ["hasn", "t"],
+  ["haven", "t"],
+  ["isn", "t"],
+  ["mustn", "t"],
+  ["shouldn", "t"],
+  ["wasn", "t"],
+  ["weren", "t"],
+  ["won", "t"],
+  ["wouldn", "t"],
+  ["here", "s"],
+  ["there", "s"],
+  ["there", "ll"],
+  ["that", "s"],
+  ["that", "ll"],
+  ["how", "s"],
+  ["what", "s"],
+  ["what", "ll"],
+  ["when", "s"],
+  ["where", "s"],
+  ["who", "s"],
+  ["who", "d"],
+  ["who", "ll"],
+]
+
+# Known gaps: "we're", "we'll", "he'll", "she'll", "let's", and an "isn't" vs
+# "ain't" asymmetry. Closing them by default would change results for existing
+# users, so they are listed here rather than added quietly.

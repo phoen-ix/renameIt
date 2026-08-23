@@ -1,0 +1,20 @@
+# One of the six presets a fresh install starts with.
+
+version = 1
+
+[preset]
+name = "Create numbered sequence"
+description = "Number the files in the order you are looking at them."
+
+[[step]]
+# The order on screen is the order the counter uses (D28), so sorting the table
+# by date and running this numbers them by date. That is why the counter is a
+# function of the listing rather than of the filenames.
+op = "add_counter"
+placement = "first"
+separator = " - "
+
+[settings.counter]
+start = 1
+step = 1
+auto_pad = true

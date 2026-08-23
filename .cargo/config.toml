@@ -1,0 +1,12 @@
+# The Windows build links the C runtime statically.
+#
+# Without this the executable needs the Visual C++ Redistributable installed,
+# which is a second thing to download before a *renaming tool* will start — and
+# the failure mode is a dialog naming a missing DLL, from an app the user has
+# not yet seen. The cost is a larger binary, which `[profile.release]`'s LTO and
+# strip already more than pay back.
+#
+# It applies to `cargo clippy --target x86_64-pc-windows-msvc` too, which is
+# harmless: clippy checks, it does not link.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

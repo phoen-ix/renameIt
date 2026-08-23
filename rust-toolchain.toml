@@ -1,0 +1,7 @@
+# D12: exact pin. The system apt rustc (1.75) cannot build this project —
+# eframe/egui_table require 1.95+.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]
+targets = ["x86_64-pc-windows-msvc"]
+profile = "default"

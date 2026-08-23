@@ -1,0 +1,38 @@
+# RenameIt preset — a saved pipeline.
+#
+#   ren-cli presets import examples/camera-import.toml
+#   ren-cli apply ~/photos --preset "Camera import"
+#
+# Set Date & Time's job, as one pipeline: name each photo
+# after the moment it was taken, then put that moment back on the file itself,
+# because an image editor will have overwritten the modified date with the time
+# you last saved.
+#
+# Everything absent equals its default (D35), which is why this reads like
+# something a person wrote.
+
+version = 1
+
+[preset]
+name = "Camera import"
+description = "Name photos from their Exif date, then set the file date to match."
+
+[[step]]
+# The photograph's own Exif date — DateTimeOriginal first, so an editor's
+# rewritten DateTime does not win. A file with no Exif date renders nothing
+# there and is left alone (P45), so a folder with a few screenshots in it still
+# runs; the file's own modified date would have renamed those to whenever they
+# were last saved.
+op = "free_format"
+scope = "both"
+pattern = "<ExifDate-yyyy-mm-dd> <Counter><Ext>"
+
+[[step]]
+# The part this pipeline is actually about. The source reads the photograph's own
+# Exif tag — DateTimeOriginal first, so an editor's rewritten DateTime does not
+# win — and only the modified date is written, which is the dialog's default.
+#
+# A file with no Exif date is left alone rather than failing the run, so a
+# folder with a few PNGs in it still works (P45).
+op = "set_date"
+source = "image_exif"

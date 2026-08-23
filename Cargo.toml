@@ -1,0 +1,135 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/ren-core",
+    "crates/ren-platform",
+    "crates/ren-cli",
+    "crates/ren-gui",
+]
+
+[workspace.package]
+version = "1.3.0"
+edition = "2024"
+rust-version = "1.97"
+license = "MIT"
+authors = ["phoen-ix"]
+repository = "https://github.com/phoen-ix/renameIt"
+homepage = "https://github.com/phoen-ix/renameIt"
+keywords = ["rename", "batch", "files"]
+categories = ["command-line-utilities", "filesystem"]
+
+# Every version lives here so `cargo-deny` and upgrades have a single source of
+# truth (D2: licences are audited centrally).
+[workspace.dependencies]
+# Only a dev-dependency, and only so a test can hand-write the blob an
+# older build would have stored. eframe already pulls it in for storage.
+ron = "0.12.2"
+# Clipboard access for the <Clipboard> tag. Already in the tree under
+# egui-winit; named here so the version is ours to pin.
+arboard = { version = "3.6.1", default-features = false }
+ren-core = { path = "crates/ren-core", version = "1.3.0" }
+ren-platform = { path = "crates/ren-platform", version = "1.3.0" }
+
+chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
+clap = { version = "4.6.6", features = ["derive"] }
+crc32fast = "1.5.0"
+criterion = "0.8.2"
+# M5: CSV List Rename. Unlicense OR MIT; audited in docs/DESIGN.md S6.
+csv = "1.4.0"
+# M8: <Width> <Height> <Depth> <Depthb>. MIT OR Apache-2.0.
+#
+# Only the formats we then claim to support are enabled — a decoder we do not
+# name in the docs is a dependency with no reader behind it, and each one is
+# build time and attack surface for nothing. See D122.
+image = { version = "0.25.9", default-features = false, features = [
+    "bmp",
+    "gif",
+    "jpeg",
+    "png",
+    "tiff",
+    "tga",
+] }
+# M5: the Exif date source. BSD-2-Clause; audited in docs/DESIGN.md S6.
+kamadak-exif = "0.6.1"
+# M8: the thumbnail texture cache. MIT, and its only dependency is hashbrown,
+# which is already in the graph.
+#
+# Used as `LruCache::unbounded()`: its own capacity counts *entries*, and the
+# quantity a texture cache has to bound is bytes (D138). We take it for the
+# recency bookkeeping and do the accounting ourselves. Pinned to 0.18 because
+# 0.16 carries RUSTSEC-2026-0253.
+lru = "0.18.2"
+# M7: the scripting engine. MIT, and every crate in its tree was already inside
+# deny.toml's allowlist — which is the whole reason it is here and Rhai is not
+# (D92 reverses D5: rhai depends unconditionally on smartstring, MPL-2.0+).
+#
+# `arc` rather than the default `rc`: the two are mutually exclusive — enabling
+# both trips a compile_error! in koto_memory — and only `arc` (Arc +
+# parking_lot::RwLock) is Send + Sync, which NameTransform requires. So
+# default-features = false is load-bearing, not tidiness.
+koto = { version = "0.16.1", default-features = false, features = ["arc"] }
+# Named directly because the import gate reads bytecode: koto's module loader is
+# a concrete struct with no trait seam, so `import` cannot be closed by
+# configuration and is rejected by scanning the compiled chunk instead (D93).
+koto_bytecode = { version = "0.16.1", default-features = false }
+# M6: the audio tag reader and writer. MIT OR Apache-2.0; audited in
+# docs/DESIGN.md S6. Its ban reason for `symphonia` in deny.toml asserts this
+# crate supplies bitrate/length/channels, so that claim is now load-bearing.
+lofty = "0.25.0"
+env_logger = "0.11.11"
+proptest = "1.11.0"
+rust_decimal = { version = "1.42.1", default-features = false, features = ["std", "serde"] }
+fancy-regex = "0.19.0"
+filetime = "0.2.29"
+infer = "0.22.0"
+log = "0.4.33"
+rayon = "1.12.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tempfile = "3.27.0"
+thiserror = "2.0.20"
+toml = "1.1.4"
+walkdir = "2.5.0"
+
+# GUI (D4). D14: glow backend only — the wgpu tree never enters the graph.
+eframe = { version = "0.36.1", default-features = false, features = [
+    "default_fonts",
+    "glow",
+    "persistence",
+    "wayland",
+    "x11",
+] }
+egui = "0.36.1"
+egui_table = "0.10.0"
+# D24: drives the real App headlessly — no display, no GPU. Default features
+# only; `snapshot`/`wgpu` would pull in a renderer we do not want in CI.
+egui_kittest = "0.36.1"
+# Native file dialogs. Its defaults are xdg-portal + wayland, so the Linux
+# build needs no GTK.
+rfd = "0.17.2"
+
+[workspace.dependencies.windows-sys]
+version = "0.61.2"
+features = [
+    "Win32_Foundation",
+    # CreateFileW takes a *const SECURITY_ATTRIBUTES, which lives here.
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    # M8: the HKCU context-menu entry (D132). Registry only — no admin, and
+    # nothing that needs uninstalling beyond deleting the keys.
+    "Win32_System_Registry",
+    # M8: `GetCommandLineW`, for how much of a selection Windows actually
+    # handed us. `std::env::args` cannot answer that — it has already split
+    # and unquoted, so the number it implies is not the number Windows capped.
+    "Win32_System_Environment",
+    "Win32_UI_Shell",
+]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
+# Spikes and tests are unbearable in a debug build of the dependency tree.
+[profile.dev.package."*"]
+opt-level = 2

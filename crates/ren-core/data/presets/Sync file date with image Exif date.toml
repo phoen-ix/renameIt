@@ -1,0 +1,17 @@
+# One of the six presets a fresh install starts with.
+
+version = 1
+
+[preset]
+name = "Sync file date with image Exif date"
+description = "Set a photograph's file dates to when the camera took it."
+
+[[step]]
+# Renames nothing. The file's own timestamps get the moment the shutter opened,
+# which is what every gallery sorts by and what copying a card full of
+# photographs destroys.
+#
+# A file with no Exif date is left alone rather than failing the run, so a
+# folder with a few PNGs in it still works (P45).
+op = "set_date"
+source = "image_exif"

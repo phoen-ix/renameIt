@@ -1,0 +1,48 @@
+# RenameIt — default casing rules.
+#
+# D6: our data, our format. D20 records why the three lists below are data
+# rather than constants — Title Case word-splitting is undefined until you say
+# exactly which characters start a new word, and that is a thing users want to
+# edit.
+
+version = 1
+
+[title_case]
+# Words kept lower case in Title Case, in accordance with common English
+# spelling rules and to improve readability. Never applied to the first word.
+lowercase_exceptions = [
+  "a", "an", "the",
+  "and", "or", "nor", "but", "so", "yet", "for",
+  "to", "of", "by", "at", "in", "with",
+  "has",
+]
+
+# A letter directly after one of these is capitalised, exactly as after a space.
+# This is what makes "rock (live)" become "Rock (Live)" and "hi-fi" become
+# "Hi-Fi".
+capitalize_after = "()[]{}-_.,!;&~\""
+
+# A letter after *space + one of these* is capitalised. Kept separate from the
+# list above so that "don't" becomes "Don't" and not "Don'T", while "'best'"
+# still becomes "'Best'".
+capitalize_after_quote = "'`´’"
+
+[exceptions]
+# Words that always keep a fixed spelling, whatever the casing mode — common
+# abbreviations and roman numerals. Matched case-insensitively, rewritten to
+# the spelling given here.
+#
+# Note there is no "V": adding it would silently change results for anyone with
+# a file named "v".
+words = [
+  "CD", "CD1", "CD2", "CD3", "CD4",
+  "DJ", "TV", "USA", "UK", "3D",
+  "I", "II", "III", "IV", "VI", "VII", "VIII", "IX",
+]
+
+[space]
+# Space Trimming's "Maintain Space" defaults. The period
+# is deliberately absent from `after`: it would put a space into every version
+# number and every extension the user asked to process.
+maintain_before = "([{"
+maintain_after = ")]};,"

@@ -1,0 +1,92 @@
+# description: Create an m3u playlist for the selected MP3 files. Name it in the arguments, or it is called Playlist.m3u. It is written to the browsed folder, or beside the first file in free-select mode.
+# args: the playlist filename, for example Road Trip.m3u
+
+# This is the script the whole write-a-file design exists for.
+#
+# A script does not open the playlist and write to it. It returns the file it
+# wants, and the executor writes it — so a preview cannot write at all, the
+# write is journalled and undoable, and replacing an existing playlist asks
+# first.
+#
+# Quirks kept:
+#
+#  * the '.mp3' test is case-SENSITIVE, so 'TRACK.MP3' is not included;
+#  * an argument of exactly '.m3u' becomes '.m3u.m3u': the suffix is only
+#    checked when the argument is longer than four characters;
+#  * entries are sorted by item order, not by the order rename() saw them.
+#
+# A one-track playlist is still written. Skipping it would be an off-by-one
+# dressed up as a decision.
+
+state = {entries: []}
+
+rename = ||
+  # Case-sensitive: 'TRACK.MP3' is not included.
+  if not fr.full_filename.ends_with '.mp3'
+    return ''
+
+  # '<LengthS>' renders as m:ss; the m3u header wants whole seconds.
+  seconds = 0
+  parts = fr.format_tags('<LengthS>').split(':').to_tuple()
+  if (size parts) == 2
+    mins = parts[0].to_number()
+    secs = parts[1].to_number()
+    if mins != null and secs != null
+      seconds = (mins * 60 + secs).floor()
+
+  # Falls back to the filename when there are no tags.
+  label = fr.format_tags '<Artist> - <Title>'
+  if label.trim() == '-' or label.trim().is_empty()
+    label = fr.full_filename
+
+  state.entries.push
+    { order: fr.item_order
+    , path: fr.path + fr.full_filename
+    , info: '{seconds},{label}'
+    }
+  ''  # this script renames nothing
+
+done = ||
+  if (size state.entries) == 0
+    return 'No MP3 files, so no playlist was written.'
+
+  # Sorted by item order, because rename() is not promised the list order.
+  state.entries.sort |e| e.order
+
+  name = 'Playlist.m3u'
+  if not fr.args.is_empty()
+    # The suffix is only checked when the argument is longer than four
+    # characters, so an argument of exactly '.m3u' gains a second one.
+    if (size fr.args) > 4 and fr.args.ends_with '.m3u'
+      name = fr.args
+    else
+      name = fr.args + '.m3u'
+
+  folder = fr.browser_path
+  if folder.is_empty()
+    # Free-select mode: beside the first file, once sorted.
+    first = state.entries[0].path
+    cut = first.char_indices().to_tuple()
+    at = null
+    for r in cut
+      c = first[r.start()..r.end()]
+      if c == '/' or c == '\\' then at = r.end()
+    folder = if at == null then '' else first[..at]
+  else if not (folder.ends_with '/' or folder.ends_with '\\')
+    folder = folder + '/'
+
+  lines = ['#EXTM3U']
+  for e in state.entries
+    lines.push '#EXTINF:{e.info}'
+    # Relative to the playlist when the file sits under it.
+    entry = e.path
+    if entry.starts_with folder
+      entry = entry[folder.bytes().count()..]
+    lines.push entry
+
+  # CRLF: an .m3u is a Windows-era format, read by players that are not all
+  # forgiving about line endings.
+  { path: folder + name
+  , contents: lines.intersperse('\r\n').to_string() + '\r\n'
+  , log: "Created mp3 playlist as '{name}'"
+  }

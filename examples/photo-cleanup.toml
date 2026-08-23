@@ -1,0 +1,62 @@
+# RenameIt preset — a saved pipeline.
+#
+#   ren-cli presets import examples/photo-cleanup.toml
+#   ren-cli apply ~/photos --preset "Photo cleanup"
+#
+# A preset is a job file (D18) that names itself and names no source: it runs
+# over whatever folder you point it at. Import it into the preset folder, or
+# load it in the app from Presets ▸ Import.
+#
+# Everything absent equals its default, which is why this reads like something
+# a person wrote rather than a dump of every field every operation has.
+
+version = 1
+
+[preset]
+name = "Photo cleanup"
+description = "Underscores out, title case, numbered, extension lowercased."
+
+[settings.counter]
+start = 1
+step = 1
+auto_pad = true
+
+# --- 1. Underscores back to spaces --------------------------------------------
+
+[[step]]
+op = "replace"
+scope = "name"
+find = "_"
+replace = " "
+
+# --- 2. Title case the name, lowercase the extension --------------------------
+#
+# Two steps rather than one panel with two selectors — the same thing said out
+# loud (D19).
+
+[[step]]
+op = "casing"
+scope = "name"
+mode = "title"
+preserve_all_upper = true
+
+[[step]]
+op = "casing"
+scope = "extension"
+mode = "lower"
+
+# --- 3. Number them -----------------------------------------------------------
+#
+# The counter is configured once for the whole run, in [settings.counter] above.
+
+[[step]]
+op = "add_counter"
+scope = "name"
+placement = "first"
+separator = ". "
+
+# --- 4. Tidy up ---------------------------------------------------------------
+
+[[step]]
+op = "space_trim"
+scope = "name"

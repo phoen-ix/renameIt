@@ -1,0 +1,18 @@
+# One of the six presets a fresh install starts with. See the note in
+# `Basic filename cleanup.toml` about why these are rewritten rather than
+# copied.
+
+version = 1
+
+[preset]
+name = "Rename Mp3s as 'Artist - Title'"
+description = "Name every track from what the track itself says."
+
+[[step]]
+# The tags, not the filename — which is the whole point, and why this reads
+# from the file rather than trying to parse `01 - track.mp3`.
+#
+# A slash inside a tag value (AC/DC, "Sympathy/Antipathy") is neutralised
+# before it can scatter files into directories nobody asked for (D61).
+op = "music_rename"
+style = "<Artist> - <Title>"

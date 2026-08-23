@@ -1,0 +1,22 @@
+[package]
+name = "ren-cli"
+description = "Headless runner for the RenameIt engine — preview, apply, undo"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "ren-cli"
+path = "src/main.rs"
+
+[dependencies]
+ren-core.workspace = true
+ren-platform.workspace = true
+
+clap.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
