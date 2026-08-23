@@ -32,7 +32,7 @@ ships first. MIT licensed.
 
 ## Building
 
-Requires the toolchain pinned in `rust-toolchain.toml` (rustup installs it
+Requires the toolchain pinned in [`rust-toolchain.toml`](rust-toolchain.toml) (rustup installs it
 automatically). On Linux the GUI additionally needs:
 
 ```sh
@@ -80,10 +80,10 @@ table carries the counter, the parts pattern and the tag policy, which belong to
 the run rather than to any one step. Unknown keys are an error, not a silent
 default.
 
-`examples/numbered.toml` is the worked example for the counter, the `<tag>`
-engine and `<\>`; `examples/photo-cleanup.toml` is a saved preset;
-`examples/music-rename.toml` names tracks from their tags and files them into
-`<Artist>/<Album>/` subfolders; `examples/camera-import.toml` names photographs
+[`examples/numbered.toml`](examples/numbered.toml) is the worked example for the counter, the `<tag>`
+engine and `<\>`; [`examples/photo-cleanup.toml`](examples/photo-cleanup.toml) is a saved preset;
+[`examples/music-rename.toml`](examples/music-rename.toml) names tracks from their tags and files them into
+`<Artist>/<Album>/` subfolders; [`examples/camera-import.toml`](examples/camera-import.toml) names photographs
 from their Exif date and then puts that date back on the file.
 
 ## Music and images
@@ -123,7 +123,7 @@ That sounds obvious and is not: the tag library's save replaces the whole tag,
 so writing only the artist wipes everything else unless the write reads first.
 
 WMA and TTA are **not** supported — lofty handles neither. See D55 in
-`docs/DECISIONS.md`.
+[`docs/DECISIONS.md`](docs/DECISIONS.md).
 
 ## Picking positions by eye
 
@@ -159,7 +159,7 @@ source, a preset borrows yours. So `--preset` takes a folder and honours
 
 Any field that builds text takes tags — `<Name>`, `<Counter>`, `<Date-yyyy>`,
 `<Parent>`, `<%1>`, `<Ask>`, `<Crc32>` and the rest of the list in
-`docs/tags.md`. Two things to know:
+[`docs/tags.md`](docs/tags.md). Two things to know:
 
 * **A tag you mistype is an error, not an empty string.** The editor names it
   while you are typing. One silent typo across a thousand files is how a folder
@@ -214,13 +214,13 @@ release build runs on `windows-latest`, where it does not appear.
 
 ## Documentation
 
-- `CLAUDE.md` — how to work in this repo
-- `docs/DECISIONS.md` — **the authority** on every policy and technology call
-- `docs/DESIGN.md` — architecture: engine model, GUI/UX screens, quality strategy
-- `docs/tags.md` — the `<tag>` reference
-- `docs/MIGRATION-legacy-scripts.md` — porting a legacy `.frs` script to Koto
-- `docs/spikes/` — written verdicts on the risky assumptions
-- `docs/manual-checks.md` — the few things CI cannot prove, and how to check them
+- [`CLAUDE.md`](CLAUDE.md) — how to work in this repo
+- [`docs/DECISIONS.md`](docs/DECISIONS.md) — **the authority** on every policy and technology call
+- [`docs/DESIGN.md`](docs/DESIGN.md) — architecture: engine model, GUI/UX screens, quality strategy
+- [`docs/tags.md`](docs/tags.md) — the `<tag>` reference
+- [`docs/MIGRATION-legacy-scripts.md`](docs/MIGRATION-legacy-scripts.md) — porting a legacy `.frs` script to Koto
+- [`docs/spikes/`](docs/spikes/) — written verdicts on the risky assumptions
+- [`docs/manual-checks.md`](docs/manual-checks.md) — the few things CI cannot prove, and how to check them
 
 ## Portable mode
 
@@ -239,9 +239,9 @@ Problem Solver says which mode you are in and where the files actually are.
 
 Push `main` first and **let CI go green**, then tag:
 `git tag -a v1.3.0 -m "1.3.0" && git push origin v1.3.0` runs
-`.github/workflows/release.yml`, which builds, packages
+[`.github/workflows/release.yml`](.github/workflows/release.yml), which builds, packages
 `RenameIt-windows-x64.zip` **and** `RenameIt-linux-x64.tar.gz`, and drafts a
-GitHub release from `CHANGELOG.md`. Draft, not published: the tag is the act of
+GitHub release from [`CHANGELOG.md`](CHANGELOG.md). Draft, not published: the tag is the act of
 building, and deciding it is fit to hand out is a separate one. Each archive is
 built from an explicit list rather than by sweeping a directory.
 
@@ -251,7 +251,7 @@ otherwise. A tag does not trigger CI, so tagging before CI finishes is a
 refusal rather than a wait: sleeping on a paid runner would cost the minutes
 that check exists to save.
 
-The application icon is ours, drawn by `assets/icon.py` and committed with its
+The application icon is ours, drawn by [`assets/icon.py`](assets/icon.py) and committed with its
 generator so that stays checkable:
 
 ```sh
@@ -260,4 +260,4 @@ python3 assets/icon.py    # rewrites crates/ren-gui/assets/renameit.{ico,png,rgb
 
 ## Licence
 
-MIT — see `LICENSE`. Bundled fonts are OFL-1.1; see `THIRD-PARTY-FONTS.md`.
+MIT — see [`LICENSE`](LICENSE). Bundled fonts are OFL-1.1; see [`THIRD-PARTY-FONTS.md`](THIRD-PARTY-FONTS.md).
