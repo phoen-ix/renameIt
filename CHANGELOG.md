@@ -6,6 +6,84 @@ Two things this file does **not** track. Engine and UI decisions live in
 `docs/DECISIONS.md`, which is the authority on why anything behaves as it does;
 and the reasoning behind each default lives beside the code it governs.
 
+## [Unreleased] — the audit
+
+A read of the whole workspace for defects, dead code and cost, with the fixes.
+Every finding is recorded with its decision number in `docs/DECISIONS.md`
+(**D165**–**D170**, **P99**).
+
+### Changed
+
+- **A folder is listed on a worker thread** (**D167**). The walk used to run
+  inside the frame, and the window was frozen until it came back — a stutter
+  on a warm disk, seconds on a share or a deep Subfolders tree. The old
+  listing stays on screen with *listing…* beside it until the new one lands.
+- **A run, and an undo, happen on a worker thread** with *Renaming N of M…*
+  in the status bar and a **Cancel** that stops a run between two files
+  (**D169**). What has been renamed stays renamed and Undo takes it back.
+- **A run costs one `fsync` per file, not two** (**D168**): the confirmation
+  line is carried to the disk by the next file's intent. Over 1 000 files
+  `strace` counts 1 002 syncs where it counted 2 002. A wider write-ahead
+  window was tried and refused by a new property test that crashes a run at
+  every point and recovers it (**P99** says what widening would need).
+- **A keystroke over ten thousand files is inside its budget.** The planner
+  went from 68 ms to 22 ms on the reference box (**D165**): Batch Replace asks
+  one `RegexSet` which of its fifty-one rules can match a name and runs only
+  those (**D166**); plan rows are built in parallel; the conflict passes stop
+  walking paths per row. CI now runs the budget on the real engine
+  (`ren-core/examples/plan_budget.rs`) — the old gate measured a harness that
+  skipped all of the planning and reported 4 ms.
+- **Listing a folder does one `stat` per entry**, not two; on Windows the
+  second was the expensive open-handle call and the whole cost of the walk.
+- **The metadata readers no longer `stat` every file per keystroke**, and no
+  longer queue on one lock inside the parallel pass: one shared cache, keyed
+  on the listing's own size and date.
+- The preset drawer and the Settings window no longer re-read and re-parse
+  every preset file on every frame.
+- `presets list` exits 1, not 3, on an unreadable preset file: nothing ran.
+
+### Fixed
+
+- **`<HtmlTitle>` could panic** on a page whose `&` was followed by non-ASCII
+  text at the wrong byte — and a panic in the preview worker used to wedge the
+  app for the session with *updating…* that never finished. The panic is
+  fixed, and any panic in the engine is now reported in the status bar with
+  Rename disabled, not swallowed.
+- **A journal write that failed mid-run exited 1** ("your command line was
+  wrong") after files had already moved. It is exit 3 now (**D103**), with the
+  count, the transaction and the cause; the GUI relists after it.
+- **The plan on screen could describe another file** for a moment after a
+  selection change, a sort or a relist — the index into it was kept apart
+  from the plan and could disagree with it. The plan now carries its own
+  scope, and every row checks the file before showing a preview for it.
+- **A symlink is listed as the link it is**: a dangling one is a real,
+  renameable row rather than an unreadable one, and a link to a folder is a
+  file row, as the Files chip already treated it.
+- `ren-cli dir --journal-dir /j` filed `/j` as a file to rename; a `/l` list
+  file with a byte-order mark named a first path that did not exist; a switch
+  with no value read as `""`; `/k` without `/l` produced a usage dump.
+- Renaming a preset whose old file could not be removed reported success and
+  left two presets. Recovery's completed count could underflow on a malformed
+  journal. The *Save as preset* box could not be cleared. Deleting a Batch
+  Replace row handed its cursor to the next one. A ⌖ click could be
+  overwritten by the strip in the same frame. Arrowing over an empty,
+  filtered list could panic.
+- The release workflow's gate could not read CI runs on a private repository
+  (`actions: read`), and no build step honoured `Cargo.lock` (`--locked`).
+- Windows: the reserved-name table gains `COM0`/`LPT0` and the superscript
+  aliases; *Show in file manager* quotes only the path, not the whole
+  `/select,` argument; `SetFileAttributesW` is handed only the bits it can
+  set; the system-folder guard keeps `C:\Windows` even with a stripped
+  environment. Unix: a Linux volume mounted inside a FAT or NTFS tree keeps
+  its own naming rules.
+
+### Removed
+
+- Dead code across all four crates, Spike B's harness out of the shipped
+  library and into the examples that run it, two phantom workspace
+  dependencies, and three doc comments describing tests and callers that did
+  not exist.
+
 ## [1.3.0] - 2026-08-22
 
 ### Changed
