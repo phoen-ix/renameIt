@@ -57,7 +57,7 @@ pub use ops::{
 };
 pub use parts::{Parts, PartsSpec};
 pub use pipeline::{NoSubject, Pipeline, Step, StepConfig, StepSubject, evaluate_all};
-pub use plan::{ConflictKind, Plan, PlanItem, PlannedOp, RenameKind, RowState, plan};
+pub use plan::{ConflictKind, Counts, Plan, PlanItem, PlannedOp, RenameKind, RowState, plan};
 pub use preproc::PreProcessor;
 pub use preset::{ImportNotes, Preset, PresetEntry, PresetError, PresetStore};
 pub use regex_flavor::{Pattern, PatternOptions, RegexError};

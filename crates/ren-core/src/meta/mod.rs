@@ -22,6 +22,8 @@
 /// be comfortably past that.
 pub const CACHE_CAPACITY: usize = 16_384;
 
+pub(crate) mod cache;
+
 pub mod audio;
 pub mod exif;
 pub mod folder;

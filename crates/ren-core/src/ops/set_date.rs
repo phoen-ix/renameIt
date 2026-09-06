@@ -264,10 +264,11 @@ impl SetDate {
             DateSource::ImageExif => {
                 // Reads the file, behind the mtime-keyed cache in `meta::exif`
                 // — the same bargain `<Crc32>` already makes.
-                let found = if entry.is_dir && self.folder_peek {
-                    exif::folder_date(&entry.path)
-                } else {
+                let found = if entry.is_dir && !self.folder_peek {
+                    // A folder with the peek off has no date of its own.
                     exif::date_of(&entry.path)
+                } else {
+                    exif::date_of_entry(entry)
                 };
                 match found {
                     Some(when) => Resolved::Fixed(when),

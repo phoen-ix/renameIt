@@ -10,10 +10,11 @@
 //! is required to be in `<head>`, so the prefix is where it is or it is nowhere
 //! worth looking.
 
-use std::collections::HashMap;
 use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::path::Path;
+use std::sync::{Arc, OnceLock};
+
+use super::cache::{MetaCache, Stamp};
 
 /// How much of the file to read.
 ///
@@ -31,41 +32,41 @@ const MAX_TITLE: usize = 512;
 const ENTITY_SCAN_CHARS: usize = 12;
 
 /// Extensions worth opening.
+///
+/// The gate every other reader has and this one lacked: without it
+/// `<HtmlTitle>` opened *every* file in the listing — 64 KiB of each
+/// photograph and each track — on the first preview, and the extension is
+/// the only thing that says a file might be a page at all.
 pub const HTML_EXTENSIONS: [&str; 5] = ["html", "htm", "xhtml", "shtml", "xht"];
+
+/// The smallest thing that could possibly be a page with a title (P50):
+/// `<title>x</title>`.
+const MIN_HTML_BYTES: u64 = 16;
 
 /// The document's title, or `None`.
 ///
 /// `None` covers every reason at once — not HTML, no `<title>`, an empty one.
 /// To a renamer they are the same fact, and none of them is an error.
 pub fn title_of(path: &Path) -> Option<String> {
-    let stamp = std::fs::metadata(path).ok()?;
-    if !stamp.is_file() {
+    title_at(path, Stamp::stat(path)?)
+}
+
+/// The same, for a listed entry — the parallel pass's way in, keyed on the
+/// entry's own stamp so it costs no syscall (see `meta::cache`).
+pub fn title_of_entry(entry: &crate::model::FileEntry) -> Option<String> {
+    title_at(&entry.path, Stamp::of_entry(entry))
+}
+
+fn title_at(path: &Path, stamp: Stamp) -> Option<String> {
+    if stamp.is_dir
+        || stamp.len < MIN_HTML_BYTES
+        || !super::folder::has_extension(path, &HTML_EXTENSIONS)
+    {
         return None;
     }
-    let key = Key {
-        path: path.to_path_buf(),
-        len: stamp.len(),
-        modified: stamp
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()),
-    };
-
-    let cache = READ.get_or_init(Default::default);
-    if let Ok(map) = cache.lock()
-        && let Some(hit) = map.get(&key)
-    {
-        return hit.clone();
-    }
-
-    let value = read_uncached(path);
-    if let Ok(mut map) = cache.lock() {
-        if map.len() >= super::CACHE_CAPACITY {
-            map.clear();
-        }
-        map.insert(key, value.clone());
-    }
-    value
+    READ.get_or_init(Default::default)
+        .get_or_read(path, stamp, || read_uncached(path).map(Arc::from))
+        .map(|title| title.to_string())
 }
 
 fn read_uncached(path: &Path) -> Option<String> {
@@ -184,21 +185,14 @@ fn numeric(body: &str) -> Option<char> {
     char::from_u32(code)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct Key {
-    path: PathBuf,
-    len: u64,
-    modified: Option<std::time::Duration>,
-}
-
-static READ: OnceLock<Mutex<HashMap<Key, Option<String>>>> = OnceLock::new();
+/// Shared with every other reader through [`super::cache::MetaCache`]. The
+/// title is an `Arc<str>` so a hit is a refcount bump rather than a copy.
+static READ: OnceLock<MetaCache<Option<Arc<str>>>> = OnceLock::new();
 
 /// Drops every cached read. Tests only: two tempdirs can reuse a path.
 pub fn forget_all() {
-    if let Some(cache) = READ.get()
-        && let Ok(mut map) = cache.lock()
-    {
-        map.clear();
+    if let Some(cache) = READ.get() {
+        cache.clear();
     }
 }
 
@@ -314,6 +308,22 @@ mod tests {
         assert_eq!(title_of(&path).as_deref(), Some("Saved page"));
         // A second read comes from the cache and says the same thing.
         assert_eq!(title_of(&path).as_deref(), Some("Saved page"));
+    }
+
+    /// Only a file that could be a page is opened at all: a `.jpg` with a
+    /// `<title>` inside is a picture, and reading 64 KiB of every photograph
+    /// on the first preview was the cost this gate removes.
+    #[test]
+    fn only_a_file_with_a_page_extension_is_opened() {
+        forget_all();
+        let dir = tempfile::TempDir::new().unwrap();
+        let body = b"<html><head><title>Saved page</title></head>";
+        let page = dir.path().join("page.HTM");
+        let not = dir.path().join("photo.jpg");
+        std::fs::write(&page, body).unwrap();
+        std::fs::write(&not, body).unwrap();
+        assert_eq!(title_of(&page).as_deref(), Some("Saved page"));
+        assert_eq!(title_of(&not), None);
     }
 
     /// A folder is not a document, and asking is not a failure.

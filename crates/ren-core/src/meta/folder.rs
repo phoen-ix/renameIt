@@ -9,6 +9,9 @@
 //! difference nobody notices until two tags on one folder contradict each other.
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+use super::cache::{MetaCache, Stamp};
 
 /// The first direct child with one of `extensions` that `read` can make
 /// something of.
@@ -145,34 +148,28 @@ pub struct DirStats {
 /// per file per keystroke, which is the cost P44 exists to refuse; F9 relists
 /// and clears it.
 pub fn stats(dir: &Path, recursive: bool) -> Option<DirStats> {
-    let stamp = std::fs::metadata(dir).ok()?;
-    if !stamp.is_dir() {
+    stats_at(dir, Stamp::stat(dir)?, recursive)
+}
+
+/// [`stats`] for a listed entry, without the `stat` (see `meta::cache`). A
+/// `<Dir…>` tag on a *file* row describes the folder the file is in (D130),
+/// and that folder is not listed, so a file row still costs one `stat`.
+pub fn stats_of_entry(entry: &crate::model::FileEntry, recursive: bool) -> Option<DirStats> {
+    if entry.is_dir {
+        stats_at(&entry.path, Stamp::of_entry(entry), recursive)
+    } else {
+        stats(entry.parent(), recursive)
+    }
+}
+
+fn stats_at(dir: &Path, stamp: Stamp, recursive: bool) -> Option<DirStats> {
+    if !stamp.is_dir {
         return None;
     }
-    let key = StatsKey {
-        dir: dir.to_path_buf(),
-        recursive,
-        modified: stamp
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()),
-    };
-
-    let cache = STATS.get_or_init(Default::default);
-    if let Ok(map) = cache.lock()
-        && let Some(hit) = map.get(&key)
-    {
-        return *hit;
-    }
-
-    let value = walk(dir, recursive);
-    if let Ok(mut map) = cache.lock() {
-        if map.len() >= crate::meta::CACHE_CAPACITY {
-            map.clear();
-        }
-        map.insert(key, value);
-    }
-    value
+    let cache = if recursive { &DEEP } else { &SHALLOW };
+    cache
+        .get_or_init(Default::default)
+        .get_or_read(dir, stamp, || walk(dir, recursive))
 }
 
 fn walk(dir: &Path, recursive: bool) -> Option<DirStats> {
@@ -218,21 +215,18 @@ pub fn first_file(dir: &Path, with_extension: bool) -> Option<String> {
     Some(crate::split_file_name(&first).0.to_owned())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct StatsKey {
-    dir: PathBuf,
-    recursive: bool,
-    modified: Option<std::time::Duration>,
-}
-
-type StatsCache = std::sync::Mutex<std::collections::HashMap<StatsKey, Option<DirStats>>>;
-static STATS: std::sync::OnceLock<StatsCache> = std::sync::OnceLock::new();
+/// One cache per depth, both shared through [`super::cache::MetaCache`]: the
+/// shallow and the recursive count of one folder are two answers, and a key
+/// that carried the flag would need a map keyed on something other than the
+/// path.
+static SHALLOW: OnceLock<MetaCache<Option<DirStats>>> = OnceLock::new();
+static DEEP: OnceLock<MetaCache<Option<DirStats>>> = OnceLock::new();
 
 /// Drops every cached count. Tests only: two tempdirs can reuse a path.
 pub fn forget_all() {
-    if let Some(cache) = STATS.get()
-        && let Ok(mut map) = cache.lock()
-    {
-        map.clear();
+    for cache in [&SHALLOW, &DEEP] {
+        if let Some(cache) = cache.get() {
+            cache.clear();
+        }
     }
 }

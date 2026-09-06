@@ -40,12 +40,19 @@ impl PartsSpec {
     /// Returns slot → text for slots 1–9. A slot the pattern does not mention,
     /// or that the name does not reach, is absent — which is what makes
     /// *"only rename if all tags are available"* able to skip a file.
+    ///
+    /// Compiles the pattern every call. The engine does not go through here:
+    /// `RunContext::build` compiles once per run and hands
+    /// [`CompiledParts::split`] to every file, because this used to run once
+    /// per file per keystroke and allocate the whole segment list each time.
     pub fn split(&self, name: &str) -> Parts {
-        let Some(segments) = compile(&self.pattern) else {
-            return Parts::default();
-        };
-        Parts {
-            values: extract(&segments, name),
+        self.compile().split(name)
+    }
+
+    /// The pattern, parsed once, for a run's worth of names.
+    pub fn compile(&self) -> CompiledParts {
+        CompiledParts {
+            segments: compile(&self.pattern),
         }
     }
 
@@ -92,6 +99,30 @@ impl PartsSpec {
     }
 }
 
+/// A [`PartsSpec`] parsed into its literal separators and slots.
+///
+/// Held by `RunContext` (D28's serial pre-pass) rather than re-derived per
+/// file: the pattern is run-wide and constant, and parsing it is a `Vec` of
+/// owned `String`s — exactly the per-file allocation the pre-pass exists to
+/// hoist.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CompiledParts {
+    /// `None` for a pattern with no slot in it, which describes nothing.
+    segments: Option<Vec<Segment>>,
+}
+
+impl CompiledParts {
+    /// See [`PartsSpec::split`].
+    pub fn split(&self, name: &str) -> Parts {
+        let Some(segments) = &self.segments else {
+            return Parts::default();
+        };
+        Parts {
+            values: extract(segments, name),
+        }
+    }
+}
+
 /// The parts of one filename.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Parts {
@@ -112,7 +143,7 @@ impl Parts {
 }
 
 /// The pattern as alternating placeholders and literal separators.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Segment {
     Slot(u8),
     Literal(String),
@@ -166,15 +197,12 @@ fn extract(segments: &[Segment], name: &str) -> Vec<(u8, String)> {
     while index < segments.len() {
         match &segments[index] {
             Segment::Literal(text) => {
-                // The name must contain the separator here, or the pattern does
-                // not describe this file.
-                let Some(at) = rest.find(text.as_str()) else {
+                // The name must continue with the separator here, or the
+                // pattern does not describe this file.
+                let Some(after) = rest.strip_prefix(text.as_str()) else {
                     return values;
                 };
-                if at != 0 {
-                    return values;
-                }
-                rest = &rest[text.len()..];
+                rest = after;
                 index += 1;
             }
             Segment::Slot(slot) => {

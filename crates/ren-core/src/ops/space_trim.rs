@@ -81,6 +81,14 @@ impl NameTransform for SpaceTrim {
         //      is still removed.
         //
         // Any other order leaves observable double spaces.
+        //
+        // A name none of the stages would touch is answered without building
+        // it: this operation is in the shipped cleanup preset with every
+        // stage on, and over a folder that is already clean it allocated four
+        // strings per file per keystroke to hand back `Borrowed`.
+        if self.cannot_change(subject) {
+            return Ok(Cow::Borrowed(subject));
+        }
         let mut out = String::with_capacity(subject.len() + 8);
 
         for c in subject.chars() {
@@ -148,6 +156,36 @@ impl NameTransform for SpaceTrim {
         } else {
             Ok(Cow::Owned(trimmed.to_owned()))
         }
+    }
+}
+
+impl SpaceTrim {
+    /// True when no stage has anything to do on `subject`, decided in one
+    /// pass over its characters and without allocating.
+    ///
+    /// Conservative on purpose: a `false` costs the full pass, which then
+    /// answers exactly; a `true` has to be right. So the maintain rules are
+    /// checked by presence of the character alone, not by whether the space
+    /// is already there.
+    fn cannot_change(&self, subject: &str) -> bool {
+        let mut previous_space = false;
+        for c in subject.chars() {
+            if c == '_' && self.underscores_to_spaces {
+                return false;
+            }
+            if c == ' ' {
+                if previous_space && self.shrink {
+                    return false;
+                }
+                previous_space = true;
+            } else {
+                previous_space = false;
+            }
+            if self.maintain_before.contains(c) || self.maintain_after.contains(c) {
+                return false;
+            }
+        }
+        !(self.leading && subject.starts_with(' ')) && !(self.trailing && subject.ends_with(' '))
     }
 }
 
@@ -284,6 +322,49 @@ mod tests {
     #[test]
     fn a_name_that_needs_nothing_is_left_alone() {
         assert_eq!(run(&SpaceTrim::default(), "already clean"), "already clean");
+    }
+
+    /// The fast path may only say "nothing to do" when the full pass agrees.
+    /// Every combination of stages over a spread of names, so a stage the
+    /// pre-scan forgot shows up as a disagreement rather than a wrong name.
+    #[test]
+    fn the_no_change_fast_path_never_disagrees_with_the_full_pass() {
+        let names = [
+            "already clean",
+            "a_b",
+            " lead",
+            "trail ",
+            "two  spaces",
+            "a(b)c",
+            "x,y",
+            "(a) [b]",
+            "",
+            " ",
+            "_",
+        ];
+        for bits in 0..64u8 {
+            let op = SpaceTrim {
+                leading: bits & 1 != 0,
+                trailing: bits & 2 != 0,
+                shrink: bits & 4 != 0,
+                maintain_before: if bits & 8 != 0 {
+                    "([".into()
+                } else {
+                    String::new()
+                },
+                maintain_after: if bits & 16 != 0 {
+                    ")],".into()
+                } else {
+                    String::new()
+                },
+                underscores_to_spaces: bits & 32 != 0,
+            };
+            for name in names {
+                if op.cannot_change(name) {
+                    assert_eq!(run(&op, name), name, "{op:?} over {name:?}");
+                }
+            }
+        }
     }
 
     #[test]

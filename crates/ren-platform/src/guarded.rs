@@ -14,6 +14,7 @@
 //! rather than the folder.
 
 use std::path::Path;
+use std::sync::OnceLock;
 
 use crate::NamingRules;
 
@@ -36,11 +37,14 @@ fn roots() -> Vec<String> {
             out.push(value);
         }
     }
-    // A machine with none of those set is not one to leave unguarded.
-    if out.is_empty() {
-        out.push(r"C:\Windows".to_owned());
-        out.push(r"C:\Program Files".to_owned());
-    }
+    // The conventional locations, always — not only when *every* variable is
+    // missing. A process started with a stripped environment that still had
+    // `ProgramData` in it used to guard that alone and leave `C:\Windows`
+    // open, which is the one folder D127 exists for. A machine with Windows
+    // on `D:` is covered by the variables above; this covers the machine
+    // that has lost them.
+    out.push(r"C:\Windows".to_owned());
+    out.push(r"C:\Program Files".to_owned());
     out
 }
 
@@ -72,20 +76,48 @@ fn roots() -> Vec<String> {
     .collect()
 }
 
+/// The roots, folded by `rules` and with their separators normalised, built
+/// once per folding rule.
+///
+/// `is_system_folder` is asked once per distinct parent per listing, and it
+/// used to rebuild and fold the whole list on every call — fifteen
+/// allocations, or five environment lookups, per folder. Two cells because
+/// there are two ways to fold: a table folds case or it does not, and that
+/// is the only part of `NamingRules` the answer depends on.
+fn folded_roots(rules: &NamingRules) -> &'static [String] {
+    static INSENSITIVE: OnceLock<Vec<String>> = OnceLock::new();
+    static SENSITIVE: OnceLock<Vec<String>> = OnceLock::new();
+    let cell = if rules.case_insensitive {
+        &INSENSITIVE
+    } else {
+        &SENSITIVE
+    };
+    cell.get_or_init(|| {
+        roots()
+            .iter()
+            .map(|root| {
+                rules
+                    .fold(root)
+                    .replace('\\', "/")
+                    .trim_end_matches('/')
+                    .to_owned()
+            })
+            .collect()
+    })
+}
+
 /// True if `path` is a guarded root or lives under one.
 pub fn is_system_folder(path: &Path, rules: &NamingRules) -> bool {
     let folded = rules.fold(&path.to_string_lossy());
     let folded = folded.replace('\\', "/");
     let folded = folded.trim_end_matches('/');
 
-    roots().iter().any(|root| {
-        let root = rules.fold(root).replace('\\', "/");
-        let root = root.trim_end_matches('/');
+    folded_roots(rules).iter().any(|root| {
         // Equal, or a *path* prefix — `/usrlocal` must not match `/usr`, which
         // a bare `starts_with` would let through.
         folded == root
             || (folded.len() > root.len()
-                && folded.starts_with(root)
+                && folded.starts_with(root.as_str())
                 && folded.as_bytes()[root.len()] == b'/')
     })
 }

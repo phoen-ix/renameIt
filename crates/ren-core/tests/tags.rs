@@ -229,7 +229,7 @@ fn the_exif_date_tags_render_the_date_the_photograph_was_taken() {
     )
     .unwrap();
 
-    let entry = FileEntry::synthetic(&path);
+    let entry = FileEntry::from_path(&path).unwrap();
     let run = RunContext::default();
     let render = |template: &str| {
         Template::compile(template)
@@ -253,7 +253,7 @@ fn the_exif_date_tags_render_the_date_the_photograph_was_taken() {
         ren_core::meta::testing::jpeg_with_exif(None, None, None),
     )
     .unwrap();
-    let entry = FileEntry::synthetic(&plain);
+    let entry = FileEntry::from_path(&plain).unwrap();
     let out = Template::compile("<ExifDate>")
         .unwrap()
         .render(&EvalCx::new(&entry, 0, 1, &run));
@@ -278,7 +278,7 @@ fn every_music_tag_renders_what_the_reference_says_it_does() {
         .write(dir.path(), "track.mp3");
     ren_core::meta::audio::forget_all();
 
-    let entry = FileEntry::synthetic(&path);
+    let entry = FileEntry::from_path(&path).unwrap();
     let run = RunContext::default();
     let render = |template: &str| {
         Template::compile(template)

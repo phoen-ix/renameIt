@@ -2951,3 +2951,28 @@ fn a_file_moved_under_its_own_name_is_blocked_by_a_file_not_by_itself() {
     );
     assert!(!plan.is_executable());
 }
+
+/// `Plan::counts` is the per-question methods in one pass, and it has to stay
+/// so: the status bar draws its summary from it while the button is gated by
+/// them, and the two must not disagree. A plan with a rename, an untouched
+/// row, a conflict and a collision in it.
+#[test]
+fn the_one_pass_counts_agree_with_the_per_question_methods() {
+    let platform = ren_platform::host();
+    let fixture = Fixture::new(&["report", "notes.txt", "same.txt", "keep.txt"]);
+    let entries = fixture.entries();
+    let pipeline = pipeline_of(
+        MapNames::new(&[("notes.txt", "report/notes.txt"), ("same.txt", "keep.txt")]),
+        Scope::Both,
+    );
+    let plan = plan(&entries, &pipeline, platform.as_ref());
+    let counts = plan.counts();
+    assert_eq!(counts.changed, plan.changed());
+    assert_eq!(counts.acted, plan.acted());
+    assert_eq!(counts.affected, plan.affected());
+    assert_eq!(counts.unchanged, plan.unchanged());
+    assert_eq!(counts.conflicts, plan.conflicts());
+    assert_eq!(counts.errors, plan.errors());
+    assert!(counts.conflicts >= 2, "{counts:?}");
+    assert!(counts.unchanged >= 1, "{counts:?}");
+}

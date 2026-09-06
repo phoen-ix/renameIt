@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use lofty::config::ParseOptions;
@@ -18,6 +18,7 @@ use lofty::file::{AudioFile, FileType, TaggedFileExt};
 use lofty::probe::Probe;
 use lofty::tag::{ItemKey, Tag};
 
+use super::cache::{MetaCache, Stamp};
 use super::folder;
 use super::names;
 
@@ -191,18 +192,39 @@ impl AudioTags {
 /// whole run on any row error and a folder of 500 tracks with three `.txt`
 /// files in it must still run.
 pub fn tags_of(path: &Path) -> Option<Arc<AudioTags>> {
-    cached(path, |path, len| {
-        if len < MIN_AUDIO_BYTES {
-            return None;
-        }
-        read_uncached(path)
-    })
+    tags_at(path, Stamp::stat(path)?)
+}
+
+/// The same, for a listed entry — the parallel pass's way in.
+///
+/// The entry's own size and mtime are the key, so this costs no syscall: the
+/// listing is the snapshot (D139, D140), and a `stat` per file per keystroke
+/// was most of what a music pipeline paid over a plain one. A folder row
+/// answers with the first music file inside it.
+pub fn tags_of_entry(entry: &crate::model::FileEntry) -> Option<Arc<AudioTags>> {
+    let stamp = Stamp::of_entry(entry);
+    if entry.is_dir {
+        folder_tags_at(&entry.path, stamp)
+    } else {
+        tags_at(&entry.path, stamp)
+    }
+}
+
+fn tags_at(path: &Path, stamp: Stamp) -> Option<Arc<AudioTags>> {
+    if stamp.len < MIN_AUDIO_BYTES {
+        return None;
+    }
+    cache().get_or_read(path, stamp, || read_uncached(path))
 }
 
 /// The first music file inside a folder speaks for the folder: its tags are
 /// the folder's tags.
 pub fn folder_tags(dir: &Path) -> Option<Arc<AudioTags>> {
-    cached(dir, |dir, _| {
+    folder_tags_at(dir, Stamp::stat(dir)?)
+}
+
+fn folder_tags_at(dir: &Path, stamp: Stamp) -> Option<Arc<AudioTags>> {
+    cache().get_or_read(dir, stamp, || {
         folder::first_inside(dir, &AUDIO_EXTENSIONS, tags_of)
     })
 }
@@ -228,10 +250,8 @@ pub fn parses_so_far() -> usize {
 /// of what they just changed, and a same-length rewrite inside one mtime tick
 /// is exactly what a tag update is.
 pub fn forget_all() {
-    if let Some(cache) = READ.get()
-        && let Ok(mut map) = cache.lock()
-    {
-        map.clear();
+    if let Some(cache) = READ.get() {
+        cache.clear();
     }
 }
 
@@ -366,50 +386,14 @@ fn mpeg_of(_tagged: &lofty::file::TaggedFile) -> MpegInfo {
 
 /// Every file read so far, keyed on what would make the answer stale.
 ///
-/// The P44 pattern, copied from [`super::exif`] deliberately rather than
-/// invented again: `OpKind::to_step` clones and a clone resets `Cached` (D21),
-/// so an operation-local cache would re-read every file on every keystroke.
-type Cache = Mutex<std::collections::HashMap<Key, Option<Arc<AudioTags>>>>;
-static READ: OnceLock<Cache> = OnceLock::new();
+/// The P44 pattern, shared with every other reader through
+/// [`super::cache::MetaCache`]: `OpKind::to_step` clones and a clone resets
+/// `Cached` (D21), so an operation-local cache would re-read every file on
+/// every keystroke.
+static READ: OnceLock<MetaCache<Option<Arc<AudioTags>>>> = OnceLock::new();
 
-use super::CACHE_CAPACITY as CAPACITY;
-
-#[derive(Debug, Clone, PartialEq, Eq, std::hash::Hash)]
-struct Key {
-    path: std::path::PathBuf,
-    len: u64,
-    modified: Option<Duration>,
-}
-
-fn cached(
-    path: &Path,
-    read: impl FnOnce(&Path, u64) -> Option<Arc<AudioTags>>,
-) -> Option<Arc<AudioTags>> {
-    let stamp = std::fs::metadata(path).ok()?;
-    let key = Key {
-        path: path.to_path_buf(),
-        len: stamp.len(),
-        modified: stamp
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()),
-    };
-
-    let cache = READ.get_or_init(Default::default);
-    if let Ok(map) = cache.lock()
-        && let Some(hit) = map.get(&key)
-    {
-        return hit.clone();
-    }
-
-    let value = read(path, key.len);
-    if let Ok(mut map) = cache.lock() {
-        if map.len() >= CAPACITY {
-            map.clear();
-        }
-        map.insert(key, value.clone());
-    }
-    value
+fn cache() -> &'static MetaCache<Option<Arc<AudioTags>>> {
+    READ.get_or_init(Default::default)
 }
 
 #[cfg(test)]

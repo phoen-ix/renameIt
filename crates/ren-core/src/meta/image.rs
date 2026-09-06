@@ -17,12 +17,13 @@
 //! — this is reached from the parallel evaluation pass, once per file per
 //! keystroke (P44).
 
-use std::collections::HashMap;
 use std::io::{BufReader, Read};
 
 use image::ImageDecoder;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::path::Path;
+use std::sync::{Arc, OnceLock};
+
+use super::cache::{MetaCache, Stamp};
 
 /// Below this there is no header to read. **P50**, the same gate and the same
 /// reasoning as `meta::exif`: set at the smallest thing that could be real
@@ -68,34 +69,26 @@ impl ImageInfo {
 
 /// Everything about one image, cached on its path, length and mtime.
 pub fn info_of(path: &Path) -> Option<Arc<ImageInfo>> {
-    let stamp = std::fs::metadata(path).ok()?;
-    if stamp.is_file() && stamp.len() < MIN_IMAGE_BYTES {
+    info_at(path, Stamp::stat(path)?)
+}
+
+/// The same, for a listed entry — the parallel pass's way in, keyed on the
+/// entry's own stamp so it costs no syscall (see `meta::cache`). A folder row
+/// answers with the first image inside it.
+pub fn info_of_entry(entry: &crate::model::FileEntry) -> Option<Arc<ImageInfo>> {
+    let stamp = Stamp::of_entry(entry);
+    if entry.is_dir {
+        folder_info_at(&entry.path, stamp)
+    } else {
+        info_at(&entry.path, stamp)
+    }
+}
+
+fn info_at(path: &Path, stamp: Stamp) -> Option<Arc<ImageInfo>> {
+    if !stamp.is_dir && stamp.len < MIN_IMAGE_BYTES {
         return None;
     }
-    let key = Key {
-        path: path.to_path_buf(),
-        len: stamp.len(),
-        modified: stamp
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()),
-    };
-
-    let cache = READ.get_or_init(Default::default);
-    if let Ok(map) = cache.lock()
-        && let Some(hit) = map.get(&key)
-    {
-        return hit.clone();
-    }
-
-    let value = read_uncached(path).map(Arc::new);
-    if let Ok(mut map) = cache.lock() {
-        if map.len() >= CAPACITY {
-            map.clear();
-        }
-        map.insert(key, value.clone());
-    }
-    value
+    cache().get_or_read(path, stamp, || read_uncached(path).map(Arc::new))
 }
 
 /// The same, for a folder: the first image inside it.
@@ -105,7 +98,15 @@ pub fn info_of(path: &Path) -> Option<Arc<ImageInfo>> {
 /// actually *answers*, so an unreadable file does not veto the photograph
 /// beside it.
 pub fn folder_info(dir: &Path) -> Option<Arc<ImageInfo>> {
-    super::folder::first_inside(dir, &IMAGE_EXTENSIONS, info_of)
+    folder_info_at(dir, Stamp::stat(dir)?)
+}
+
+/// Cached on the folder's own mtime, like `exif::folder_date`: a listing of
+/// folders would otherwise re-read every directory on every keystroke.
+fn folder_info_at(dir: &Path, stamp: Stamp) -> Option<Arc<ImageInfo>> {
+    cache().get_or_read(dir, stamp, || {
+        super::folder::first_inside(dir, &IMAGE_EXTENSIONS, info_of)
+    })
 }
 
 /// How many files have actually had their header parsed.
@@ -213,32 +214,27 @@ fn jpeg_comment(path: &Path) -> Option<String> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct Key {
-    path: PathBuf,
-    len: u64,
-    modified: Option<std::time::Duration>,
+/// Shared with every other reader through [`super::cache::MetaCache`], and
+/// sized by the same constant: the preview budget is written for 10 000
+/// files, so the capacity has to be comfortably past that or the cache serves
+/// almost no hits.
+static READ: OnceLock<MetaCache<Option<Arc<ImageInfo>>>> = OnceLock::new();
+
+fn cache() -> &'static MetaCache<Option<Arc<ImageInfo>>> {
+    READ.get_or_init(Default::default)
 }
-
-/// Cleared wholesale when it fills, like `meta::exif`'s, and sized by the same
-/// constant: the preview budget is written for 10 000 files, so the capacity
-/// has to be comfortably past that or the cache serves almost no hits.
-const CAPACITY: usize = super::CACHE_CAPACITY;
-
-static READ: OnceLock<Mutex<HashMap<Key, Option<Arc<ImageInfo>>>>> = OnceLock::new();
 
 /// Drops every cached read. Tests only: two tempdirs can reuse a path.
 pub fn forget_all() {
-    if let Some(cache) = READ.get()
-        && let Ok(mut map) = cache.lock()
-    {
-        map.clear();
+    if let Some(cache) = READ.get() {
+        cache.clear();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     /// A 2×3 8-bit greyscale PNG, written by the same crate that reads it.

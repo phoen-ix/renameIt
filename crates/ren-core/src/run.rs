@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::counter::CounterSetup;
 use crate::model::FileEntry;
-use crate::parts::PartsSpec;
+use crate::parts::{CompiledParts, PartsSpec};
 
 /// What the engine needs from a user, without knowing there is a user.
 ///
@@ -158,7 +158,8 @@ pub struct RunContext {
     /// *"Time at start of rename"* — one timestamp for the whole run, so every
     /// file in a batch agrees.
     pub now: SystemTime,
-    pub parts: PartsSpec,
+    /// The Parts pattern, compiled once for the run rather than per file.
+    pub parts: CompiledParts,
     pub require_all_tags: bool,
     pub seed: u64,
     /// *"the path that is currently loaded in the file browser … If using free
@@ -186,7 +187,7 @@ impl Default for RunContext {
             answers: Answers::default(),
             num_files: 0,
             now: SystemTime::now(),
-            parts: PartsSpec::default(),
+            parts: CompiledParts::default(),
             require_all_tags: false,
             seed: 0,
             browser_path: String::new(),
@@ -223,7 +224,7 @@ impl RunContext {
             answers,
             num_files: entries.len(),
             now: SystemTime::now(),
-            parts: settings.parts.clone(),
+            parts: settings.parts.compile(),
             require_all_tags: settings.require_all_tags,
             seed: settings.seed,
             browser_path: common_parent(entries),

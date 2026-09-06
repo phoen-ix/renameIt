@@ -8,9 +8,11 @@
 //! So the point is the shutter time, not the last edit — which is what fixes
 //! the order the three candidate tags are tried in.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
+
+use super::cache::{MetaCache, Stamp};
 
 /// Below this an image cannot carry an Exif block of any kind.
 ///
@@ -49,7 +51,30 @@ const IMAGE_EXTENSIONS: [&str; 8] = ["jpg", "jpeg", "jpe", "jfif", "tif", "tiff"
 /// them is an error: a folder of 500 photos with three PNGs in it must still
 /// run, which it could not if this blocked (P4 stops on any row error).
 pub fn date_of(path: &Path) -> Option<NaiveDateTime> {
-    cached(path, read_uncached)
+    date_at(path, Stamp::stat(path)?)
+}
+
+/// The same, for a listed entry — the parallel pass's way in, keyed on the
+/// entry's own stamp so it costs no syscall (see `meta::cache`). A folder row
+/// answers with the first image inside it.
+pub fn date_of_entry(entry: &crate::model::FileEntry) -> Option<NaiveDateTime> {
+    let stamp = Stamp::of_entry(entry);
+    if entry.is_dir {
+        folder_date_at(&entry.path, stamp)
+    } else {
+        date_at(&entry.path, stamp)
+    }
+}
+
+fn date_at(path: &Path, stamp: Stamp) -> Option<NaiveDateTime> {
+    // A directory has no meaningful size — Linux reports its block size,
+    // Windows reports **0** — so the gate that skips a file too small to be
+    // an image must not reject a folder. It did, and `<ExifDate>` on a folder
+    // quietly answered nothing on the platform that ships first.
+    if !stamp.is_dir && stamp.len < MIN_IMAGE_BYTES {
+        return None;
+    }
+    dates().get_or_read(path, stamp, || read_uncached(path))
 }
 
 /// This also works on folders: the first image inside supplies the Exif date.
@@ -58,21 +83,16 @@ pub fn date_of(path: &Path) -> Option<NaiveDateTime> {
 /// folder's own mtime, so a 10 000-folder listing costs one pass rather than
 /// one per keystroke.
 pub fn folder_date(dir: &Path) -> Option<NaiveDateTime> {
-    cached(dir, |dir| {
-        let mut names: Vec<PathBuf> = std::fs::read_dir(dir)
-            .ok()?
-            .filter_map(Result::ok)
-            .map(|e| e.path())
-            .filter(|p| {
-                p.extension()
-                    .and_then(|e| e.to_str())
-                    .is_some_and(|e| IMAGE_EXTENSIONS.contains(&e.to_lowercase().as_str()))
-            })
-            .collect();
-        names.sort();
+    folder_date_at(dir, Stamp::stat(dir)?)
+}
+
+fn folder_date_at(dir: &Path, stamp: Stamp) -> Option<NaiveDateTime> {
+    dates().get_or_read(dir, stamp, || {
         // "the first image": the first that actually yields a date, so a
         // thumbnail with no Exif does not veto the photo beside it.
-        names.iter().find_map(|path| date_of(path))
+        candidates_in(dir, stamp)
+            .iter()
+            .find_map(|path| date_of(path))
     })
 }
 
@@ -85,22 +105,43 @@ pub fn folder_date(dir: &Path) -> Option<NaiveDateTime> {
 /// children, and the first that actually *yields the field*, so an image with
 /// no Exif does not veto the photograph beside it (P51).
 ///
-/// Not cached on the folder the way `folder_date` is: the per-file field set is
-/// already cached by `fields_of`, so the cost of a second field on the same
-/// folder is a `read_dir` rather than a parse.
+/// The per-file field set is cached by `fields_of`, and the folder's sorted
+/// candidate list is cached on the folder's own mtime by [`candidates_in`] —
+/// it used to be a `read_dir` plus a sort per folder row per keystroke.
 pub fn folder_field(dir: &Path, name: &str) -> Option<String> {
-    let mut names: Vec<PathBuf> = std::fs::read_dir(dir)
-        .ok()?
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| {
-            p.extension()
-                .and_then(|e| e.to_str())
-                .is_some_and(|e| IMAGE_EXTENSIONS.contains(&e.to_lowercase().as_str()))
+    folder_field_at(dir, Stamp::stat(dir)?, name)
+}
+
+/// [`folder_field`] for a listed folder, without the `stat`.
+pub fn folder_field_of_entry(entry: &crate::model::FileEntry, name: &str) -> Option<String> {
+    folder_field_at(&entry.path, Stamp::of_entry(entry), name)
+}
+
+fn folder_field_at(dir: &Path, stamp: Stamp, name: &str) -> Option<String> {
+    candidates_in(dir, stamp)
+        .iter()
+        .find_map(|path| field_of(path, name))
+}
+
+/// The images directly inside `dir`, sorted by name, cached on the folder's
+/// mtime — which changes when an entry is added or removed, so the list can
+/// only be stale in the direction of a file that has since appeared (D130).
+fn candidates_in(dir: &Path, stamp: Stamp) -> Arc<[PathBuf]> {
+    static CANDIDATES: OnceLock<MetaCache<Arc<[PathBuf]>>> = OnceLock::new();
+    CANDIDATES
+        .get_or_init(Default::default)
+        .get_or_read(dir, stamp, || {
+            let mut names: Vec<PathBuf> = std::fs::read_dir(dir)
+                .ok()
+                .into_iter()
+                .flatten()
+                .filter_map(Result::ok)
+                .map(|e| e.path())
+                .filter(|p| super::folder::has_extension(p, &IMAGE_EXTENSIONS))
+                .collect();
+            names.sort();
+            names.into()
         })
-        .collect();
-    names.sort();
-    names.iter().find_map(|path| field_of(path, name))
 }
 
 /// Any Exif field, by the name the standard gives it.
@@ -135,34 +176,28 @@ pub fn field_of(path: &Path, name: &str) -> Option<String> {
 /// entirely until M6 step 7, which made `<Exif-Name>` the one reader in the
 /// engine that reopened its file on every keystroke.
 pub fn fields_of(path: &Path) -> Option<Arc<BTreeMap<String, String>>> {
-    let stamp = std::fs::metadata(path).ok()?;
-    if stamp.len() < MIN_IMAGE_BYTES {
+    fields_at(path, Stamp::stat(path)?)
+}
+
+/// [`fields_of`] for a listed file, without the `stat`.
+pub fn fields_of_entry(entry: &crate::model::FileEntry) -> Option<Arc<BTreeMap<String, String>>> {
+    fields_at(&entry.path, Stamp::of_entry(entry))
+}
+
+/// [`field_of`] for a listed file, without the `stat`.
+pub fn field_of_entry(entry: &crate::model::FileEntry, name: &str) -> Option<String> {
+    let fields = fields_of_entry(entry)?;
+    fields
+        .iter()
+        .find(|(known, _)| known.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.clone())
+}
+
+fn fields_at(path: &Path, stamp: Stamp) -> Option<Arc<BTreeMap<String, String>>> {
+    if stamp.is_dir || stamp.len < MIN_IMAGE_BYTES {
         return None;
     }
-    let key = Key {
-        path: path.to_path_buf(),
-        len: stamp.len(),
-        modified: stamp
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()),
-    };
-
-    let cache = FIELDS.get_or_init(Default::default);
-    if let Ok(map) = cache.lock()
-        && let Some(hit) = map.get(&key)
-    {
-        return hit.clone();
-    }
-
-    let value = read_fields(path).map(Arc::new);
-    if let Ok(mut map) = cache.lock() {
-        if map.len() >= CAPACITY {
-            map.clear();
-        }
-        map.insert(key, value.clone());
-    }
-    value
+    fields().get_or_read(path, stamp, || read_fields(path).map(Arc::new))
 }
 
 fn read_fields(path: &Path) -> Option<BTreeMap<String, String>> {
@@ -276,24 +311,30 @@ fn parse(bytes: &[u8]) -> Option<NaiveDateTime> {
     )
 }
 
-/// Every date read so far, keyed on what would make it stale.
-///
-/// The same P40 pattern the regex and CSV caches use, and for the same reason:
+/// The P40 pattern the regex and CSV caches use, and for the same reason:
 /// `OpKind::to_step` clones, and a clone resets `Cached` by design (D21). An
 /// op-local cache alone would mean opening 10 000 JPEGs **per keystroke** on
-/// the preview worker.
-///
-/// Keying on mtime means Set Date's own write invalidates the entry for free.
-type Cache = Mutex<HashMap<Key, Option<NaiveDateTime>>>;
-static READ: OnceLock<Cache> = OnceLock::new();
+/// the preview worker. Shared with every other reader through
+/// [`super::cache::MetaCache`]; keying on the mtime means Set Date's own write
+/// invalidates the entry for free.
+static READ: OnceLock<MetaCache<Option<NaiveDateTime>>> = OnceLock::new();
 
 /// The same cache, for the whole field set rather than the date.
 ///
-/// Keyed the same way and cleared the same way; separate only because the two
-/// answer different questions about the same file and a shared value type would
-/// be a needless `enum`.
-type FieldCache = Mutex<HashMap<Key, Option<Arc<BTreeMap<String, String>>>>>;
-static FIELDS: OnceLock<FieldCache> = OnceLock::new();
+/// Separate only because the two answer different questions about the same
+/// file and a shared value type would be a needless `enum`.
+static FIELDS: OnceLock<MetaCache<Option<Fields>>> = OnceLock::new();
+
+/// Every primary-IFD field of one image, shared between hits.
+type Fields = Arc<BTreeMap<String, String>>;
+
+fn dates() -> &'static MetaCache<Option<NaiveDateTime>> {
+    READ.get_or_init(Default::default)
+}
+
+fn fields() -> &'static MetaCache<Option<Fields>> {
+    FIELDS.get_or_init(Default::default)
+}
 
 /// How many files have actually been parsed.
 ///
@@ -310,72 +351,12 @@ pub fn parses_so_far() -> usize {
 
 /// Empties both caches.
 pub fn forget_all() {
-    for cache in [
-        READ.get().map(|c| c as &dyn ClearAll),
-        FIELDS.get().map(|c| c as &dyn ClearAll),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        cache.clear_all();
+    if let Some(cache) = READ.get() {
+        cache.clear();
     }
-}
-
-/// So the two differently-typed caches can be cleared by one loop.
-trait ClearAll {
-    fn clear_all(&self);
-}
-impl<V> ClearAll for Mutex<HashMap<Key, V>> {
-    fn clear_all(&self) {
-        if let Ok(mut map) = self.lock() {
-            map.clear();
-        }
+    if let Some(cache) = FIELDS.get() {
+        cache.clear();
     }
-}
-
-use super::CACHE_CAPACITY as CAPACITY;
-
-#[derive(Debug, Clone, PartialEq, Eq, std::hash::Hash)]
-struct Key {
-    path: PathBuf,
-    len: u64,
-    modified: Option<std::time::Duration>,
-}
-
-fn cached(path: &Path, read: impl FnOnce(&Path) -> Option<NaiveDateTime>) -> Option<NaiveDateTime> {
-    let stamp = std::fs::metadata(path).ok()?;
-    // `folder_date` comes through here with a *directory*, and a directory has
-    // no meaningful size: Linux reports its block size, Windows reports **0**.
-    // So the gate that skips a file too small to be an image was rejecting
-    // every folder on the platform that ships first, and `<ExifDate>` on a
-    // folder quietly answered nothing there. Green on Linux the whole time.
-    if stamp.is_file() && stamp.len() < MIN_IMAGE_BYTES {
-        return None;
-    }
-    let key = Key {
-        path: path.to_path_buf(),
-        len: stamp.len(),
-        modified: stamp
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()),
-    };
-
-    let cache = READ.get_or_init(Default::default);
-    if let Ok(map) = cache.lock()
-        && let Some(hit) = map.get(&key)
-    {
-        return *hit;
-    }
-
-    let value = read(path);
-    if let Ok(mut map) = cache.lock() {
-        if map.len() >= CAPACITY {
-            map.clear();
-        }
-        map.insert(key, value);
-    }
-    value
 }
 
 #[cfg(test)]

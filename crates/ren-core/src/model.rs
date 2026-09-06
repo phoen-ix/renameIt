@@ -80,6 +80,12 @@ impl FileEntry {
 
     /// An entry that is not backed by disk — for tests, benchmarks and the
     /// synthetic listings the performance harness generates.
+    ///
+    /// Its stamp is empty (size 0, no mtime), and the metadata readers key on
+    /// the entry's stamp rather than on a fresh `stat` (see `meta::cache`) —
+    /// so a synthetic entry over a *real* file reads as an empty file with no
+    /// tags. A test that wants the file read builds the entry with
+    /// [`Self::from_path`].
     pub fn synthetic(path: impl Into<PathBuf>) -> Self {
         let path = path.into();
         let (file_name, name_is_lossy) = path.file_name().map(name_of).unwrap_or_default();

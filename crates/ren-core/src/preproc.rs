@@ -226,14 +226,12 @@ fn char_offset(s: &str, n: usize) -> Option<usize> {
     if n == 0 {
         return Some(0);
     }
+    // `or_else`, not `or`: the eager form counted the whole string on every
+    // call, including the ones `nth` had already answered.
     s.char_indices()
         .nth(n)
         .map(|(i, _)| i)
-        .or(if s.chars().count() == n {
-            Some(s.len())
-        } else {
-            None
-        })
+        .or_else(|| (s.chars().count() == n).then_some(s.len()))
 }
 
 #[cfg(test)]

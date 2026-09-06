@@ -242,7 +242,40 @@ pub struct Plan {
     pub notes: Vec<String>,
 }
 
+/// Every row count a summary wants, from one pass over the items.
+///
+/// The per-question methods on [`Plan`] each walk every item, and the status
+/// bar asked six of those questions two or three times per frame — twelve
+/// passes over ten thousand rows, sixty times a second, to draw one line.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Counts {
+    pub changed: usize,
+    pub acted: usize,
+    pub affected: usize,
+    pub unchanged: usize,
+    pub conflicts: usize,
+    pub errors: usize,
+}
+
 impl Plan {
+    /// Every count at once. Agrees with the per-question methods by
+    /// construction — each is the same predicate — and a test holds them
+    /// equal.
+    pub fn counts(&self) -> Counts {
+        let mut counts = Counts::default();
+        for item in &self.items {
+            let changed = item.state.is_changed();
+            let acts = item.acts();
+            counts.changed += usize::from(changed);
+            counts.acted += usize::from(acts);
+            counts.affected += usize::from(changed || acts);
+            counts.unchanged += usize::from(item.state == RowState::Unchanged && !acts);
+            counts.conflicts += usize::from(item.state.is_conflict());
+            counts.errors += usize::from(matches!(item.state, RowState::Error(_)));
+        }
+        counts
+    }
+
     /// Rows that get a new name.
     ///
     /// Unchanged meaning, deliberately: five analysis passes, the CLI summary

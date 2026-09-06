@@ -130,7 +130,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let entries: Vec<FileEntry> = files
             .iter()
-            .map(|(name, mp3)| FileEntry::synthetic(mp3.write(dir.path(), name)))
+            .map(|(name, mp3)| FileEntry::from_path(mp3.write(dir.path(), name)).unwrap())
             .collect();
         crate::meta::audio::forget_all();
 

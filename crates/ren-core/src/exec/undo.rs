@@ -150,10 +150,14 @@ pub fn undo_transaction(path: &Path, platform: &dyn Platform) -> Result<UndoRepo
     // if the new name is absent the rename never happened and there is nothing
     // to do; if it is there and the old name is free, the rename landed and
     // comes back. First, so it is unwound before anything earlier in the batch.
+    // A set for the membership test: `completed` is a `Vec` because its order
+    // is the replay order, and `contains` on it made undoing a 10 000-file
+    // batch a hundred million comparisons.
+    let finished: std::collections::HashSet<u64> = completed.iter().copied().collect();
     let in_flight: Vec<u64> = planned
         .keys()
         .copied()
-        .filter(|seq| !completed.contains(seq))
+        .filter(|seq| !finished.contains(seq))
         .collect();
     for seq in in_flight.into_iter().rev() {
         let Some((from, to)) = planned.get(&seq) else {

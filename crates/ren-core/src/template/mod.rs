@@ -332,11 +332,9 @@ impl<'a> Resolver<'a> {
     fn audio_tags(&mut self) -> Option<&crate::meta::audio::AudioTags> {
         if self.audio.is_none() {
             let entry = self.cx.entry;
-            self.audio = Some(if entry.is_dir {
-                crate::meta::audio::folder_tags(&entry.path)
-            } else {
-                crate::meta::audio::tags_of(&entry.path)
-            });
+            // Keyed on the entry's own stamp, so no syscall per file per
+            // keystroke (see `meta::cache`); a folder peeks inside.
+            self.audio = Some(crate::meta::audio::tags_of_entry(entry));
         }
         self.audio.as_ref()?.as_deref()
     }
@@ -435,9 +433,9 @@ impl<'a> Resolver<'a> {
                 // that answers one Exif tag and not another is inexplicable.
                 let entry = self.cx.entry;
                 if entry.is_dir {
-                    crate::meta::exif::folder_field(&entry.path, name).map(|v| safe(&v))
+                    crate::meta::exif::folder_field_of_entry(entry, name).map(|v| safe(&v))
                 } else {
-                    crate::meta::exif::field_of(&entry.path, name).map(|v| safe(&v))
+                    crate::meta::exif::field_of_entry(entry, name).map(|v| safe(&v))
                 }
             }
 
@@ -450,7 +448,7 @@ impl<'a> Resolver<'a> {
                 if entry.is_dir {
                     return None;
                 }
-                crate::meta::html::title_of(&entry.path).map(|title| safe(&title))
+                crate::meta::html::title_of_entry(entry).map(|title| safe(&title))
             }
 
             Tag::Folder {
@@ -475,7 +473,7 @@ impl<'a> Resolver<'a> {
                         crate::meta::folder::first_file(dir, true)
                     }
                     _ => {
-                        let stats = crate::meta::folder::stats(dir, *recursive)?;
+                        let stats = crate::meta::folder::stats_of_entry(entry, *recursive)?;
                         Some(match field {
                             FolderField::Size => auto_size(stats.bytes),
                             FolderField::SizeBytes => zero_pad(&stats.bytes.to_string(), *pad),
@@ -496,11 +494,7 @@ impl<'a> Resolver<'a> {
                 // Same folder rule (P51). `<Width>` on a folder is as
                 // meaningful as `<ExifDate>` on one, and for the same reason.
                 let entry = self.cx.entry;
-                let info = if entry.is_dir {
-                    crate::meta::image::folder_info(&entry.path)
-                } else {
-                    crate::meta::image::info_of(&entry.path)
-                }?;
+                let info = crate::meta::image::info_of_entry(entry)?;
                 Some(match field {
                     ImageField::Width => info.width.to_string(),
                     ImageField::Height => info.height.to_string(),
@@ -546,11 +540,7 @@ impl<'a> Resolver<'a> {
             // peeks inside for the first image, exactly as Set Date does.
             TimeSource::Exif => {
                 let entry = self.cx.entry;
-                let found = if entry.is_dir {
-                    crate::meta::exif::folder_date(&entry.path)
-                } else {
-                    crate::meta::exif::date_of(&entry.path)
-                }?;
+                let found = crate::meta::exif::date_of_entry(entry)?;
                 // Exif is a wall clock with no zone, and `DateFormat::render`
                 // takes an instant — so it goes back through the same local
                 // reading `<Date>` uses, or the two would disagree by an offset.
@@ -798,7 +788,7 @@ mod safety_tests {
         let path = Mp3::tagged("AC/DC", "Highway to Hell").write(dir.path(), "track.mp3");
         crate::meta::audio::forget_all();
 
-        let entry = FileEntry::synthetic(&path);
+        let entry = FileEntry::from_path(&path).unwrap();
         let cx = EvalCx::simple(&entry, 0, 1);
         let rendered = Template::compile("<Artist> - <Title>").unwrap().render(&cx);
 
@@ -818,7 +808,7 @@ mod safety_tests {
         let dir = TempDir::new().unwrap();
         let path = Mp3::tagged("AC\\DC", "T").write(dir.path(), "t.mp3");
         crate::meta::audio::forget_all();
-        let entry = FileEntry::synthetic(&path);
+        let entry = FileEntry::from_path(&path).unwrap();
         let cx = EvalCx::simple(&entry, 0, 1);
         let rendered = Template::compile("<Artist>").unwrap().render(&cx);
         assert_eq!(rendered.text, "AC-DC");
@@ -832,7 +822,7 @@ mod safety_tests {
         let dir = TempDir::new().unwrap();
         let path = Mp3::tagged("AC/DC", "Highway").write(dir.path(), "t.mp3");
         crate::meta::audio::forget_all();
-        let entry = FileEntry::synthetic(&path);
+        let entry = FileEntry::from_path(&path).unwrap();
         let cx = EvalCx::simple(&entry, 0, 1);
         let rendered = Template::compile("<Artist><\\><Title>")
             .unwrap()
@@ -858,7 +848,7 @@ mod safety_tests {
                 .frame("TRCK", raw)
                 .write(dir.path(), "t.mp3");
             crate::meta::audio::forget_all();
-            let entry = FileEntry::synthetic(&path);
+            let entry = FileEntry::from_path(&path).unwrap();
             let cx = EvalCx::simple(&entry, 0, 1);
             assert_eq!(
                 Template::compile("<Track>").unwrap().render(&cx).text,

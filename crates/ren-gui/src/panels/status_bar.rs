@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use ren_core::Plan;
+use ren_core::{Counts, Plan};
 
 use crate::viewmodel::{History, RowFilter, Session};
 
@@ -44,8 +44,12 @@ pub fn ui(
         failure,
     } = preview;
 
+    // One pass over the plan for every number this bar shows, rather than
+    // one pass per number per place it is shown.
+    let counts = plan.map(Plan::counts);
+
     ui.horizontal(|ui| {
-        ui.label(summary(session, plan));
+        ui.label(summary(session, counts));
         if stale {
             // Deliberately not a spinner: an animated widget asks egui to
             // repaint forever, which never settles in a headless test and
@@ -79,7 +83,8 @@ pub fn ui(
         }
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let blocked = blocked_reason(plan, pipeline_empty, session.guarded.as_deref(), failure);
+            let blocked =
+                blocked_reason(counts, pipeline_empty, session.guarded.as_deref(), failure);
             // "Run simulation", not "Simulate": the checkbox beside it is
             // already called Simulate, and two adjacent controls with the same
             // word on them do not say which is the verb.
@@ -145,28 +150,32 @@ pub fn ui(
 /// an action-only run changes no *names*, and saying "0 will be renamed" next
 /// to "2 will be modified" is noise.
 pub(crate) fn plan_clauses(plan: &Plan) -> Vec<String> {
+    clauses(plan.counts())
+}
+
+fn clauses(counts: Counts) -> Vec<String> {
     let mut parts = Vec::new();
-    if plan.changed() > 0 || plan.acted() == 0 {
-        parts.push(format!("{} will be renamed", plan.changed()));
+    if counts.changed > 0 || counts.acted == 0 {
+        parts.push(format!("{} will be renamed", counts.changed));
     }
-    if plan.acted() > 0 {
-        parts.push(format!("{} will be modified", plan.acted()));
+    if counts.acted > 0 {
+        parts.push(format!("{} will be modified", counts.acted));
     }
     parts
 }
 
-fn summary(session: &Session, plan: Option<&Plan>) -> String {
+fn summary(session: &Session, counts: Option<Counts>) -> String {
     let total = session.entries().len();
-    let Some(plan) = plan else {
+    let Some(counts) = counts else {
         return ren_core::plural(total, "item");
     };
     let mut parts = vec![ren_core::plural(total, "item")];
-    parts.extend(plan_clauses(plan));
-    if plan.conflicts() > 0 {
-        parts.push(ren_core::plural(plan.conflicts(), "conflict"));
+    parts.extend(clauses(counts));
+    if counts.conflicts > 0 {
+        parts.push(ren_core::plural(counts.conflicts, "conflict"));
     }
-    if plan.errors() > 0 {
-        parts.push(ren_core::plural(plan.errors(), "error"));
+    if counts.errors > 0 {
+        parts.push(ren_core::plural(counts.errors, "error"));
     }
     if !session.selection.is_empty() {
         parts.push(format!("{} selected", session.selection.len()));
@@ -184,11 +193,11 @@ pub fn blocked_reason_for(
     guarded: Option<&Path>,
     failure: Option<&str>,
 ) -> Option<String> {
-    blocked_reason(plan, pipeline_empty, guarded, failure)
+    blocked_reason(plan.map(Plan::counts), pipeline_empty, guarded, failure)
 }
 
 fn blocked_reason(
-    plan: Option<&Plan>,
+    counts: Option<Counts>,
     pipeline_empty: bool,
     guarded: Option<&Path>,
     failure: Option<&str>,
@@ -214,24 +223,24 @@ fn blocked_reason(
     if let Some(failure) = failure {
         return Some(format!("The preview failed: {failure}"));
     }
-    let plan = plan?;
-    if plan.errors() > 0 {
+    let counts = counts?;
+    if counts.errors > 0 {
         return Some(format!(
             "{} item(s) could not be previewed. Hover the ✖ badges to see why.",
-            plan.errors()
+            counts.errors
         ));
     }
-    if plan.conflicts() > 0 {
+    if counts.conflicts > 0 {
         return Some(format!(
             "{} item(s) would collide. Hover the ⛔ badges to see why — renaming anyway would \
              overwrite files.",
-            plan.conflicts()
+            counts.conflicts
         ));
     }
     // `affected`, not `changed`: an action-only pipeline changes no *names*,
     // and reporting that as "nothing would change" disabled the button with a
     // message that was simply false.
-    if plan.affected() == 0 {
+    if counts.affected == 0 {
         return Some("Nothing would change.".to_owned());
     }
     None
@@ -287,7 +296,7 @@ mod tests {
     #[test]
     fn an_action_only_plan_does_not_claim_nothing_would_change() {
         assert_eq!(
-            blocked_reason(Some(&acted_plan(3)), false, None, None),
+            blocked_reason(Some(acted_plan(3).counts()), false, None, None),
             None
         );
     }
@@ -304,7 +313,7 @@ mod tests {
     fn a_plan_that_neither_renames_nor_acts_still_says_nothing_would_change() {
         let plan = plan_with(&[RowState::Unchanged, RowState::Unchanged]);
         assert_eq!(
-            blocked_reason(Some(&plan), false, None, None).as_deref(),
+            blocked_reason(Some(plan.counts()), false, None, None).as_deref(),
             Some("Nothing would change.")
         );
     }
@@ -328,13 +337,13 @@ mod tests {
     #[test]
     fn a_clean_plan_does_not_block_the_button() {
         let plan = plan_with(&[RowState::Changed]);
-        assert_eq!(blocked_reason(Some(&plan), false, None, None), None);
+        assert_eq!(blocked_reason(Some(plan.counts()), false, None, None), None);
     }
 
     #[test]
     fn a_plan_with_nothing_to_do_says_so() {
         let plan = plan_with(&[RowState::Unchanged]);
-        let reason = blocked_reason(Some(&plan), false, None, None).expect("should block");
+        let reason = blocked_reason(Some(plan.counts()), false, None, None).expect("should block");
         assert!(reason.contains("Nothing"), "{reason}");
     }
 
@@ -345,7 +354,7 @@ mod tests {
             RowState::Changed,
             RowState::Conflict(ren_core::ConflictKind::TargetExists),
         ]);
-        let reason = blocked_reason(Some(&plan), false, None, None).expect("should block");
+        let reason = blocked_reason(Some(plan.counts()), false, None, None).expect("should block");
         assert!(reason.contains("collide"), "{reason}");
         assert!(reason.contains("overwrite"), "{reason}");
     }
@@ -353,7 +362,7 @@ mod tests {
     #[test]
     fn errors_block_the_run_too() {
         let plan = plan_with(&[RowState::Error("bad regex".into())]);
-        let reason = blocked_reason(Some(&plan), false, None, None).expect("should block");
+        let reason = blocked_reason(Some(plan.counts()), false, None, None).expect("should block");
         assert!(reason.contains("previewed"), "{reason}");
     }
 
@@ -362,7 +371,7 @@ mod tests {
     #[test]
     fn an_empty_pipeline_blocks_the_run_and_says_what_is_missing() {
         let plan = plan_with(&[RowState::Unchanged]);
-        let reason = blocked_reason(Some(&plan), true, None, None).expect("should block");
+        let reason = blocked_reason(Some(plan.counts()), true, None, None).expect("should block");
         assert!(reason.contains("empty"), "{reason}");
         assert!(reason.contains("add an operation"), "{reason}");
         // And it wins over the vaguer reason underneath it.
