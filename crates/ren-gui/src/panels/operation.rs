@@ -256,6 +256,15 @@ fn summary_toggle(
     };
     let gap = ui.spacing().icon_spacing;
     let padding = ui.spacing().button_padding;
+    // The kebab that follows this on the header row, with the spacing before
+    // it. Without this the truncated text took the whole row, the kebab was
+    // placed one `item_spacing` past the card's edge, and egui widened the card
+    // to include it — which widened the panel, which un-truncated the text a
+    // little, which moved the kebab again: five frames of panel growth every
+    // time a long summary appeared, and a `run()` in the headless harness that
+    // never settled. The old fixed-width editors hid it by keeping the panel
+    // too wide for a summary to ever truncate.
+    let menu_room = crate::widgets::icons::button_size(ui).x + ui.spacing().item_spacing.x;
 
     let mut text = egui::RichText::new(summary);
     if !enabled {
@@ -264,7 +273,7 @@ fn summary_toggle(
     let galley = egui::WidgetText::from(text).into_galley(
         ui,
         Some(egui::TextWrapMode::Truncate),
-        (ui.available_width() - MARK - gap - 2.0 * padding.x).max(0.0),
+        (ui.available_width() - MARK - gap - 2.0 * padding.x - menu_room).max(0.0),
         egui::TextStyle::Button,
     );
 
