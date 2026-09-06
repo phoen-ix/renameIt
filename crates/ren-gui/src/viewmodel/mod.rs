@@ -6,12 +6,14 @@
 
 pub mod columns;
 pub mod history;
+pub mod listing;
 pub mod preview;
 pub mod session;
 pub mod stack;
 
 pub use columns::{Column, ColumnKind, Columns, TableStyle};
 pub use history::{Batch, History, LogLine, describe_counts};
+pub use listing::{Listed, ListingWorker, Source};
 pub use preview::{PreviewWorker, Ready};
 pub use session::{
     RowFilter, Selection, Session, SessionSettings, Sort, SortColumn, SourceMode, THUMB_DEFAULT,

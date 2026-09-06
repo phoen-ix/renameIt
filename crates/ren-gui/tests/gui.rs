@@ -700,6 +700,8 @@ fn a_five_thousand_file_preview_keeps_up_with_typing() {
     }
     let journal = TempDir::new().unwrap();
     let mut app = RenameItApp::headless(dir.path().to_path_buf(), journal.path().to_path_buf());
+    // The listing is a worker's answer now, not the constructor's.
+    app.settle();
     assert_eq!(app.session().entries().len(), 5_000);
 
     // Typing "Holiday" one character at a time.
@@ -3998,7 +4000,7 @@ fn enter_walks_into_the_folder_under_the_keyboard() {
 
     let mut app = fixture.app();
     app.session_mut().settings.folders = true;
-    app.session_mut().refresh();
+    app.session_mut().request_refresh();
     let mut harness = harness(app);
 
     // Walk down to the folder row, then in.
@@ -4084,7 +4086,7 @@ fn neither_key_navigates_in_free_select() {
 
     let mut app = fixture.app();
     app.session_mut().settings.folders = true;
-    app.session_mut().refresh();
+    app.session_mut().request_refresh();
     app.session_mut().settings.mode = ren_gui::viewmodel::SourceMode::FreeSelect;
     let mut harness = harness(app);
     let before = harness.state().session().settings.dir.clone();
@@ -4107,7 +4109,7 @@ fn the_palette_keeps_its_own_enter() {
     std::fs::create_dir(fixture.dir.path().join("sub")).unwrap();
     let mut app = fixture.app();
     app.session_mut().settings.folders = true;
-    app.session_mut().refresh();
+    app.session_mut().request_refresh();
     let mut harness = harness(app);
 
     let before = harness.state().session().settings.dir.clone();

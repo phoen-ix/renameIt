@@ -21,7 +21,7 @@ use crate::panels::{
 };
 use crate::thumbs::Thumbs;
 use crate::viewmodel::{
-    CardId, CardStack, History, PreviewWorker, Session, SessionSettings, ViewMode,
+    CardId, CardStack, History, ListingWorker, PreviewWorker, Session, SessionSettings, ViewMode,
 };
 use crate::widgets::filter_editor::FilterForm;
 use crate::widgets::string_list::tidy;
@@ -197,10 +197,28 @@ struct Hotkeys {
     palette: bool,
 }
 
+/// What a relist was asked for *for*, done once its rows exist.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AfterListing {
+    /// F2's Enter: open the editor on the row that holds this file.
+    OpenEditorOn(PathBuf),
+    /// Backspace: land the keyboard on the folder just left.
+    LandOn(PathBuf),
+}
+
 pub struct RenameItApp {
     platform: Arc<dyn Platform>,
     session: Session,
     preview: PreviewWorker,
+    /// The folder walk, off the frame. `Session::relist_wanted` is drained
+    /// into a request here once per frame, and a listing that lands is
+    /// installed by `poll_listing`, which is also where everything that used
+    /// to follow a synchronous relist now runs.
+    listing: ListingWorker,
+    /// Something to do once the next listing has landed — the row to reopen
+    /// the editor on, the folder to land on — because whatever asked for it
+    /// cannot see the rows yet.
+    after_listing: Option<AfterListing>,
     /// The decode threads and the texture cache. Owned here rather than by the
     /// table or the grid because both views draw from the one cache, and
     /// because a run, an undo and F9 all have to reach it.
@@ -363,7 +381,7 @@ impl RenameItApp {
         // "the preview and the rename that follows it agree" still holds.
         app.settings.reseed();
         ctx.set_theme(egui::ThemePreference::from(app.theme));
-        app.session.refresh();
+        app.session.request_refresh();
         app
     }
 
@@ -431,7 +449,9 @@ impl RenameItApp {
         );
         app.expand_first();
         app.instant = true;
-        app.session.refresh();
+        // Through the worker, like the real window — `settle` waits for it.
+        app.session.request_refresh();
+        app.drain_listing_request();
         app
     }
 
@@ -474,6 +494,11 @@ impl RenameItApp {
                 let repaint = repaint.clone();
                 move || repaint()
             }),
+            listing: ListingWorker::spawn({
+                let repaint = repaint.clone();
+                move || repaint()
+            }),
+            after_listing: None,
             thumbs: Thumbs::new(move || repaint()),
             platform,
             stack: Self::restore(&persisted),
@@ -539,14 +564,25 @@ impl RenameItApp {
     /// are only ever requested by a frame that has already been drawn, so
     /// waiting for them first would wait for a set nothing asked for yet.
     pub fn settle(&mut self) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        // The listing first: it is what the preview is computed over, and a
+        // listing landing asks for a preview, so waiting for the preview
+        // first would wait for one that is about to be superseded.
+        self.drain_listing_request();
+        // Until the *latest* request is answered, not until anything lands: a
+        // listing for the folder before this one can arrive first, and
+        // stopping there would settle on the wrong rows.
+        while self.listing.is_listing() && std::time::Instant::now() < deadline {
+            self.poll_listing();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        self.poll_listing();
+
         if self.needs_preview {
             self.request_preview();
         }
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while self.preview.is_stale() && std::time::Instant::now() < deadline {
-            if self.preview.poll() {
-                break;
-            }
+            self.preview.poll();
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         self.preview.poll();
@@ -560,6 +596,52 @@ impl RenameItApp {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         self.thumbs.poll();
+    }
+
+    /// Turns the session's "a relist is wanted" into a request to the worker.
+    ///
+    /// Once per frame, after everything that could have asked: the session
+    /// cannot send the request itself (it has no worker and no thread), and
+    /// several things in one frame asking for one relist should cost one.
+    fn drain_listing_request(&mut self) {
+        if std::mem::take(&mut self.session.relist_wanted) {
+            self.listing.request(self.session.source());
+        }
+    }
+
+    /// Installs a listing the worker has finished, if there is one.
+    ///
+    /// Returns true if one landed. Everything that used to follow a
+    /// synchronous relist runs here: the preview is asked for over the new
+    /// rows, the index into the old plan is dropped, and whatever was waiting
+    /// for the rows to exist gets them.
+    fn poll_listing(&mut self) -> bool {
+        let Some(listed) = self.listing.poll() else {
+            return false;
+        };
+        self.session.install_listing(listed.outcome);
+        self.needs_preview = true;
+        // The plan on screen is over rows that no longer exist; `item_of`
+        // checks each row's file before trusting the index, so nothing wrong
+        // is drawn, but an empty index is the honest state until the next
+        // plan lands.
+        self.plan_index.clear();
+        match self.after_listing.take() {
+            Some(AfterListing::OpenEditorOn(path)) => {
+                self.open_editor_on_the_next_row(Some(path));
+            }
+            Some(AfterListing::LandOn(path)) => {
+                let back = self
+                    .session
+                    .entries()
+                    .iter()
+                    .position(|entry| entry.path == path);
+                self.session.selection.set_lead(back);
+                self.scroll_to = back;
+            }
+            None => {}
+        }
+        true
     }
 
     /// The thumbnail cache and its decode threads.
@@ -764,8 +846,7 @@ impl RenameItApp {
     /// Points the browser somewhere else and relists, as the address box does.
     pub fn set_dir(&mut self, dir: std::path::PathBuf) {
         self.session.settings.dir = dir;
-        self.session.refresh();
-        self.needs_preview = true;
+        self.session.request_refresh();
     }
 
     /// F9: *"Refresh the file list."* — reads the folder again, and forgets
@@ -791,8 +872,7 @@ impl RenameItApp {
         ren_core::meta::html::forget_all();
         ren_core::meta::image::forget_all();
         self.thumbs.clear();
-        self.session.refresh();
-        self.needs_preview = true;
+        self.session.request_refresh();
     }
 
     /// Row striping and full-row select (Settings ▸ Display).
@@ -1083,8 +1163,7 @@ impl RenameItApp {
         // `Persisted` field by field, and why it is put back by hand here.
         ctx.set_zoom_factor(1.0);
         // The visibility switches decide what is *in* the list.
-        self.session.refresh();
-        self.needs_preview = true;
+        self.session.request_refresh();
         self.status = Some("Settings restored to their defaults".to_owned());
     }
 
@@ -1781,7 +1860,6 @@ impl RenameItApp {
                     // survives the run that used it — the same trick D139
                     // plays for the pictures one line above.
                     self.session.refresh_after_run(&report.renamed);
-                    self.needs_preview = true;
                 }
             }
             // The journal died with files already moved. The listing on
@@ -1792,8 +1870,7 @@ impl RenameItApp {
                 self.status = Some(e.to_string());
                 self.show_log = true;
                 self.close_visual_assist();
-                self.session.refresh();
-                self.needs_preview = true;
+                self.session.request_refresh();
             }
             Err(e) => self.status = Some(e.to_string()),
         }
@@ -1833,8 +1910,7 @@ impl RenameItApp {
                 self.close_visual_assist();
                 // The same move a run makes, in reverse; the pictures follow.
                 self.thumbs.renamed(self.history.last_restored());
-                self.session.refresh();
-                self.needs_preview = true;
+                self.session.request_refresh();
             }
             Err(e) => self.status = Some(e.to_string()),
         }
@@ -1912,9 +1988,10 @@ impl RenameItApp {
             Ok(report) => {
                 self.status = Some(format!("Renamed to {new_name}"));
                 self.thumbs.renamed(&report.renamed);
-                self.session.refresh();
-                self.needs_preview = true;
-                self.open_editor_on_the_next_row(successor);
+                self.session.request_refresh();
+                // Once the rows exist again: the successor is looked up by
+                // path in the listing that has not landed yet.
+                self.after_listing = successor.map(AfterListing::OpenEditorOn);
             }
             Err(e) => self.status = Some(e.to_string()),
         }
@@ -2065,17 +2142,11 @@ impl RenameItApp {
         {
             // Nothing above a drive root, where `parent()` is `None`.
             let leaving = std::mem::replace(&mut self.session.settings.dir, parent);
-            self.session.refresh();
+            self.session.request_refresh();
             // Land on the folder just left, as Explorer does — when it is
-            // listed at all, which is when the Folders chip is on.
-            let back = self
-                .session
-                .entries()
-                .iter()
-                .position(|entry| entry.path == leaving);
-            self.session.selection.set_lead(back);
-            self.scroll_to = back;
-            self.needs_preview = true;
+            // listed at all, which is when the Folders chip is on. Once the
+            // parent's rows exist, which is not yet.
+            self.after_listing = Some(AfterListing::LandOn(leaving));
         }
     }
 
@@ -2192,8 +2263,7 @@ impl RenameItApp {
             && let Some(dir) = self.dialogs.pick_folder(&self.session.settings.dir.clone())
         {
             self.session.settings.dir = dir;
-            self.session.refresh();
-            self.needs_preview = true;
+            self.session.request_refresh();
         }
 
         if f2
@@ -2390,8 +2460,7 @@ impl RenameItApp {
                         if let Err(e) = self.history.recover(self.platform.as_ref()) {
                             self.status = Some(e.to_string());
                         }
-                        self.session.refresh();
-                        self.needs_preview = true;
+                        self.session.request_refresh();
                     }
                     if ui.button("Leave as is").clicked() {
                         self.history.dismiss_recovery();
@@ -2604,6 +2673,13 @@ impl RenameItApp {
             self.rewrite_menu();
         }
 
+        // A listing that landed since the last frame, then anything drawn
+        // last frame that asked for one. The order matters: a request made
+        // after the poll is the newest wish, and a listing installed after
+        // the request would be answered by a stale generation.
+        self.poll_listing();
+        self.drain_listing_request();
+
         if self.preview.poll() {
             self.rebuild_plan_index();
         }
@@ -2678,7 +2754,7 @@ impl RenameItApp {
                 // The File System page decides what is *in* the list, so its
                 // switches take effect on a fresh walk rather than at the next
                 // thing that happens to trigger one.
-                self.session.refresh();
+                self.session.request_refresh();
             }
             if out.changed {
                 self.needs_preview = true;
@@ -2777,10 +2853,10 @@ impl RenameItApp {
                 &mut self.session,
                 &mut self.filter,
                 self.dialogs.as_ref(),
+                self.listing.is_listing(),
             );
             if out.relist {
-                self.session.refresh();
-                self.needs_preview = true;
+                self.session.request_refresh();
             }
             if out.refilter {
                 self.needs_preview = true;
@@ -3139,6 +3215,40 @@ mod tests {
                 "row {row}"
             );
         }
+    }
+
+    /// The folder changes while the previous folder's walk is still out. The
+    /// second request must not be lost when the first walk lands — it was,
+    /// once: installing a listing cleared the session's "relist wanted" flag,
+    /// which the second change had set and the frame had not yet drained.
+    #[test]
+    fn a_folder_changed_while_the_last_walk_was_out_still_gets_listed() {
+        let first = tempfile::TempDir::new().unwrap();
+        let second = tempfile::TempDir::new().unwrap();
+        std::fs::write(first.path().join("first.txt"), b"x").unwrap();
+        std::fs::write(second.path().join("second.txt"), b"x").unwrap();
+        let journal = tempfile::TempDir::new().unwrap();
+
+        // `headless` has already asked for `first`; ask for `second` before
+        // that answer is taken, then let the first answer land by itself.
+        let mut app =
+            RenameItApp::headless(first.path().to_path_buf(), journal.path().to_path_buf());
+        app.set_dir(second.path().to_path_buf());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !app.poll_listing() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(app.session.relist_wanted, "the second folder is still owed");
+
+        app.settle();
+        let names: Vec<&str> = app
+            .session
+            .entries()
+            .iter()
+            .map(|e| e.file_name.as_str())
+            .collect();
+        assert_eq!(names, ["second.txt"]);
+        assert!(!app.listing.is_listing());
     }
 
     /// Between a sort and the next plan the positional index points at rows

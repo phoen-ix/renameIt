@@ -43,6 +43,7 @@ pub fn ui(
     session: &mut Session,
     filter: &mut FilterForm,
     dialogs: &dyn FileDialogs,
+    listing: bool,
 ) -> SourceBarOutput {
     let mut out = SourceBarOutput::default();
 
@@ -109,6 +110,13 @@ pub fn ui(
             }
         });
 
+        if listing {
+            // The walk is on its own thread and the rows on screen are the
+            // previous folder's until it lands. A static label, not a spinner
+            // (D26): the worker wakes the UI once when it is done.
+            ui.separator();
+            ui.label(egui::RichText::new("listing…").weak().italics());
+        }
         if let Some(error) = &session.error {
             ui.separator();
             ui.colored_label(egui::Color32::from_rgb(0xe5, 0x73, 0x73), error);

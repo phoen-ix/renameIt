@@ -6,7 +6,7 @@
 //! anywhere. Both end as a `Vec<FileEntry>`, so everything downstream — the
 //! preview, the plan, the executor — is identical.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -383,6 +383,16 @@ pub struct Session {
     /// A folder the run would touch that the OS needs left alone, found once
     /// per listing rather than once per frame (D127).
     pub guarded: Option<PathBuf>,
+    /// Set by anything that changes what the listing should hold — a drop, a
+    /// cleared free-select set, a folder change — and drained by the app,
+    /// which turns it into a request to the listing worker. The session has
+    /// no worker of its own: it is egui-free and thread-free by design, so
+    /// it says *that* a relist is wanted and the app says *when*.
+    pub relist_wanted: bool,
+    /// A hand-set row order to put back when the next listing lands
+    /// (D157): the paths in the order the user had them, as the run left
+    /// them. Consumed by `install_listing`.
+    pending_order: Option<Vec<PathBuf>>,
 }
 
 impl Default for Session {
@@ -395,6 +405,8 @@ impl Default for Session {
             error: None,
             problems: Vec::new(),
             guarded: None,
+            relist_wanted: false,
+            pending_order: None,
         }
     }
 }
@@ -430,31 +442,61 @@ impl Session {
         .with_pattern(&self.settings.pattern)
     }
 
-    /// Rebuilds the listing from its source, then sorts it.
+    /// What the listing should be built from right now.
+    ///
+    /// Handed to the listing worker, which walks it on its own thread and
+    /// hands the result back to [`Self::install_listing`].
+    pub fn source(&self) -> super::listing::Source {
+        match self.settings.mode {
+            SourceMode::Browser => super::listing::Source::Browser {
+                dir: self.settings.dir.clone(),
+                options: self.list_options(),
+            },
+            SourceMode::FreeSelect => super::listing::Source::FreeSelect {
+                paths: self.free_select.clone(),
+            },
+        }
+    }
+
+    /// Says a relist is wanted. The app drains this into a worker request.
+    pub fn request_refresh(&mut self) {
+        self.relist_wanted = true;
+    }
+
+    /// Rebuilds the listing from its source on the calling thread.
+    ///
+    /// For the session's own tests and for anything with no frame to wait
+    /// in. The app goes through the worker instead, because this is the walk
+    /// that froze the window, and it lands its result through the same
+    /// [`Self::install_listing`].
+    pub fn refresh_now(&mut self) {
+        self.relist_wanted = false;
+        let listed = self.source().list(&|| false);
+        self.install_listing(listed);
+    }
+
+    /// Takes a finished listing, then sorts it.
     ///
     /// Selection is dropped: the indices it held pointed into the old list, and
     /// silently re-pointing them at different files is how a user renames
-    /// something they did not mean to.
-    pub fn refresh(&mut self) {
+    /// something they did not mean to (P23). A hand-set order left by
+    /// `refresh_after_run` is put back, because a rename is not a re-listing
+    /// (D157); any other relist has no hand-set order left to preserve, and
+    /// the previous column takes over again.
+    pub fn install_listing(
+        &mut self,
+        listed: std::io::Result<(Vec<FileEntry>, Vec<ren_core::listing::ListProblem>)>,
+    ) {
+        // `relist_wanted` is deliberately left alone: a listing landing is
+        // not the same event as a request being taken up, and a request
+        // made *after* this walk started — a folder changed while it ran —
+        // is still owed its own walk. Clearing it here lost exactly that
+        // request the first time the two overlapped.
         self.selection.clear();
         self.error = None;
         self.problems.clear();
-        // The listing is about to be rebuilt, so there is no hand-set order
-        // left to preserve and the previous column takes over again.
         self.settings.sort.manual = false;
         self.settings.sort.dragged = false;
-
-        let listed = match self.settings.mode {
-            SourceMode::Browser => {
-                ren_core::listing::list_reporting(&self.settings.dir, self.list_options())
-            }
-            SourceMode::FreeSelect => self
-                .free_select
-                .iter()
-                .map(FileEntry::from_path)
-                .collect::<std::io::Result<Vec<_>>>()
-                .map(|entries| (entries, Vec::new())),
-        };
 
         match listed {
             Ok((entries, problems)) => {
@@ -468,6 +510,10 @@ impl Session {
         }
         self.sort_entries();
         self.guarded = self.find_guarded();
+
+        if let Some(order) = self.pending_order.take() {
+            self.restore_order(&order);
+        }
     }
 
     /// The first folder this listing would touch that the OS needs left alone.
@@ -508,22 +554,26 @@ impl Session {
         }
         if self.settings.mode == SourceMode::Browser && paths.len() == 1 && paths[0].is_dir() {
             self.settings.dir = paths.into_iter().next().expect("checked above");
-            self.refresh();
+            self.request_refresh();
             return;
         }
 
         self.settings.mode = SourceMode::FreeSelect;
+        // A set, so a large drop is not quadratic: `contains` on the list per
+        // dropped path was ten thousand times ten thousand for a folder's
+        // worth of files dragged in at once.
+        let mut known: HashSet<PathBuf> = self.free_select.iter().cloned().collect();
         for path in paths {
-            if !self.free_select.contains(&path) {
+            if known.insert(path.clone()) {
                 self.free_select.push(path);
             }
         }
-        self.refresh();
+        self.request_refresh();
     }
 
     pub fn clear_free_select(&mut self) {
         self.free_select.clear();
-        self.refresh();
+        self.request_refresh();
     }
 
     /// How many distinct folders Free Select is drawing from, for its label.
@@ -630,29 +680,40 @@ impl Session {
     /// Anything the run did not touch keeps its name, so `renamed` only has to
     /// cover what moved.
     pub fn refresh_after_run(&mut self, renamed: &[(PathBuf, PathBuf)]) {
-        if !self.settings.sort.manual {
-            self.refresh();
-            return;
+        if self.settings.sort.manual {
+            // A map, not `find` per entry: ten thousand dragged rows renamed
+            // meant a hundred million path comparisons here, and as many
+            // again in the rank below.
+            let moved: HashMap<&Path, &Path> = renamed
+                .iter()
+                .map(|(from, to)| (from.as_path(), to.as_path()))
+                .collect();
+            let order: Vec<PathBuf> = self
+                .entries
+                .iter()
+                .map(|entry| {
+                    moved
+                        .get(entry.path.as_path())
+                        .map_or_else(|| entry.path.clone(), |to| to.to_path_buf())
+                })
+                .collect();
+            self.pending_order = Some(order);
         }
-        let order: Vec<PathBuf> = self
-            .entries
-            .iter()
-            .map(|entry| {
-                renamed
-                    .iter()
-                    .find(|(from, _)| *from == entry.path)
-                    .map(|(_, to)| to.clone())
-                    .unwrap_or_else(|| entry.path.clone())
-            })
-            .collect();
+        self.request_refresh();
+    }
 
-        self.refresh();
-        // `refresh` cleared it; the order below is the one being restored.
+    /// Puts a hand-set order back over a fresh listing.
+    fn restore_order(&mut self, order: &[PathBuf]) {
+        let position: HashMap<&Path, usize> = order
+            .iter()
+            .enumerate()
+            .map(|(i, path)| (path.as_path(), i))
+            .collect();
         let mut rank: Vec<usize> = (0..self.entries.len()).collect();
         rank.sort_by_key(|&i| {
-            order
-                .iter()
-                .position(|path| *path == self.entries[i].path)
+            position
+                .get(self.entries[i].path.as_path())
+                .copied()
                 // A file the run created, or one that appeared underneath it,
                 // has no place in the old order and goes to the end rather than
                 // silently to the front.
@@ -825,7 +886,7 @@ mod tests {
             },
             ..Default::default()
         };
-        session.refresh();
+        session.refresh_now();
         session
     }
 
@@ -846,7 +907,7 @@ mod tests {
         let dir = tree();
         let mut session = session_on(dir.path());
         session.settings.pattern = "*.txt".into();
-        session.refresh();
+        session.refresh_now();
         assert_eq!(session.entries().len(), 2);
     }
 
@@ -873,7 +934,7 @@ mod tests {
             },
             ..Default::default()
         };
-        session.refresh();
+        session.refresh_now();
         let restore = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755));
 
         assert_eq!(session.error, None, "the run is not a failure");
@@ -1314,7 +1375,7 @@ mod tests {
 
         session.reorder_by_new_names(&plan_of(&session, &pipeline));
         assert!(session.settings.sort.manual);
-        session.refresh();
+        session.refresh_now();
         assert!(!session.settings.sort.manual);
         assert_eq!(names_of(&session), ["a.txt", "b.txt", "c.mp3"]);
     }
@@ -1328,7 +1389,7 @@ mod tests {
             },
             ..Default::default()
         };
-        session.refresh();
+        session.refresh_now();
         assert!(session.error.is_some());
         assert!(session.is_empty());
     }
@@ -1352,7 +1413,7 @@ mod tests {
         let dir = tree();
         let mut session = session_on(dir.path());
         session.selection.set([0]);
-        session.refresh();
+        session.refresh_now();
         assert!(
             session.selection.is_empty(),
             "stale indices would point at different files"
@@ -1375,6 +1436,8 @@ mod tests {
         let dir = tree();
         let mut session = session_on(dir.path());
         session.accept_dropped(vec![dir.path().join("a.txt"), dir.path().join("c.mp3")]);
+        assert!(session.relist_wanted, "a drop asks for a relist");
+        session.refresh_now();
 
         assert_eq!(session.settings.mode, SourceMode::FreeSelect);
         assert_eq!(session.entries().len(), 2);
@@ -1390,6 +1453,7 @@ mod tests {
 
         let mut session = session_on(dir.path());
         session.accept_dropped(vec![sub.clone()]);
+        session.refresh_now();
 
         assert_eq!(session.settings.mode, SourceMode::Browser);
         assert_eq!(session.settings.dir, sub);
@@ -1411,7 +1475,9 @@ mod tests {
         let dir = tree();
         let mut session = session_on(dir.path());
         session.accept_dropped(vec![dir.path().join("a.txt")]);
+        session.refresh_now();
         session.clear_free_select();
+        session.refresh_now();
         assert!(session.is_empty());
     }
 

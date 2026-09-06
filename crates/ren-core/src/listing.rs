@@ -139,6 +139,21 @@ pub fn list_reporting(
     root: &Path,
     options: ListOptions,
 ) -> std::io::Result<(Vec<FileEntry>, Vec<ListProblem>)> {
+    list_reporting_with(root, options, &|| false)
+}
+
+/// The same walk, abandoned when `stop` says so.
+///
+/// For a caller that walks on a thread of its own and may have been asked
+/// for a different folder since: the walk checks between entries and returns
+/// what it has, which the caller then throws away. `Interrupted` rather than
+/// a partial listing, so the two cannot be confused — a listing that stops
+/// early is a listing that quietly lost rows (P63).
+pub fn list_reporting_with(
+    root: &Path,
+    options: ListOptions,
+    stop: &dyn Fn() -> bool,
+) -> std::io::Result<(Vec<FileEntry>, Vec<ListProblem>)> {
     // Answered before the walk, so an unreadable root is still an error rather
     // than an empty listing with one problem beside it.
     std::fs::read_dir(root)?;
@@ -158,6 +173,12 @@ pub fn list_reporting(
     let mut entries = Vec::new();
     let mut problems = Vec::new();
     for entry in walker {
+        if stop() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "the listing was abandoned for a newer one",
+            ));
+        }
         // A folder the account cannot descend into used to abort everything:
         // one `System Volume Information` at a drive root, and the user saw an
         // empty table and a red message. Explorer lists what it can, and so do
