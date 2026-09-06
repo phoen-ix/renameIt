@@ -151,13 +151,28 @@ impl History {
         simulate: bool,
         allow_irreversible: bool,
     ) -> Result<ApplyReport, ExecError> {
-        let options = ApplyOptions {
+        let options = self.run_options(simulate, allow_irreversible);
+        let report = apply(plan, platform, &options)?;
+        self.record_run(&report, simulate);
+        Ok(report)
+    }
+
+    /// What a run needs from here, for a worker that performs it elsewhere.
+    ///
+    /// The other half is [`Self::record_run`], with the report the worker
+    /// hands back. `run` is the two composed, for callers that have no frame
+    /// to wait in — a single inline rename, the tests.
+    pub fn run_options(&self, simulate: bool, allow_irreversible: bool) -> ApplyOptions {
+        ApplyOptions {
             simulate,
             journal_dir: self.journal_dir.clone(),
             allow_irreversible,
-        };
-        let report = apply(plan, platform, &options)?;
+            ..Default::default()
+        }
+    }
 
+    /// Records a finished run: the log, and the batch Undo will revert.
+    pub fn record_run(&mut self, report: &ApplyReport, simulate: bool) {
         self.log.clear();
         if simulate {
             self.log
@@ -221,22 +236,35 @@ impl History {
                 simulated: true,
             });
         }
-        Ok(report)
     }
 
     /// Reverts the most recent real batch.
     pub fn undo(&mut self, platform: &dyn Platform) -> Result<(), ExecError> {
+        let (position, batch) = self.undo_target()?;
+        let report = ren_core::exec::undo_transaction(&batch.journal, platform)?;
+        self.record_undo(position, &report);
+        Ok(())
+    }
+
+    /// The batch Undo would revert, and where it sits: what a worker needs
+    /// to perform the undo elsewhere. The batch is read, not removed — an
+    /// engine error must leave it on the stack, or a failed undo silently
+    /// costs the user the only handle they had on it. [`Self::record_undo`]
+    /// removes it once the report is in.
+    pub fn undo_target(&self) -> Result<(usize, Batch), ExecError> {
         let position = self
             .batches
             .iter()
             .rposition(|b| !b.simulated)
             .ok_or_else(|| ExecError::NothingToUndo(self.journal_dir.clone()))?;
-        // Read, not removed — an engine error must leave the batch on the
-        // stack, or a failed undo silently costs the user the only handle they
-        // had on it.
-        let batch = self.batches[position].clone();
-        let report = ren_core::exec::undo_transaction(&batch.journal, platform)?;
-        self.batches.remove(position);
+        Ok((position, self.batches[position].clone()))
+    }
+
+    /// Records a finished undo of the batch at `position`.
+    pub fn record_undo(&mut self, position: usize, report: &ren_core::exec::UndoReport) {
+        if position < self.batches.len() {
+            self.batches.remove(position);
+        }
         self.log.clear();
         for (from, to) in &report.restored {
             self.log.push(LogLine::Restored {
@@ -261,7 +289,6 @@ impl History {
         }
         self.last_irreversible = report.irreversible.len();
         self.last_restored = report.restored.clone();
-        Ok(())
     }
 
     /// How many changes the last undo could not take back.

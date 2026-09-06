@@ -240,6 +240,7 @@ impl Tree {
             simulate: false,
             allow_irreversible: false,
             journal_dir: self.journal.path().to_path_buf(),
+            ..Default::default()
         }
     }
 }

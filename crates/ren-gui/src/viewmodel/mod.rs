@@ -4,6 +4,7 @@
 //! the headless `egui_kittest` suite (D24) then only has to cover the wiring
 //! rather than the behaviour.
 
+pub mod apply;
 pub mod columns;
 pub mod history;
 pub mod listing;
@@ -11,6 +12,7 @@ pub mod preview;
 pub mod session;
 pub mod stack;
 
+pub use apply::{ApplyWorker, InFlight, JobKind, Outcome};
 pub use columns::{Column, ColumnKind, Columns, TableStyle};
 pub use history::{Batch, History, LogLine, describe_counts};
 pub use listing::{Listed, ListingWorker, Source};

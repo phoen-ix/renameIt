@@ -101,6 +101,7 @@ impl Fixture {
             simulate: false,
             journal_dir: self.journal.path().to_path_buf(),
             allow_irreversible: false,
+            ..Default::default()
         }
     }
 

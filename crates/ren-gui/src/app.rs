@@ -21,7 +21,8 @@ use crate::panels::{
 };
 use crate::thumbs::Thumbs;
 use crate::viewmodel::{
-    CardId, CardStack, History, ListingWorker, PreviewWorker, Session, SessionSettings, ViewMode,
+    ApplyWorker, CardId, CardStack, History, ListingWorker, Outcome, PreviewWorker, Session,
+    SessionSettings, ViewMode,
 };
 use crate::widgets::filter_editor::FilterForm;
 use crate::widgets::string_list::tidy;
@@ -197,6 +198,15 @@ struct Hotkeys {
     palette: bool,
 }
 
+/// A run that has been handed to the worker and not yet come back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RunInFlight {
+    simulate: bool,
+    /// How many rows the plan would touch, for "N of M" when it stops
+    /// short.
+    affected: usize,
+}
+
 /// What a relist was asked for *for*, done once its rows exist.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum AfterListing {
@@ -219,6 +229,13 @@ pub struct RenameItApp {
     /// the editor on, the folder to land on — because whatever asked for it
     /// cannot see the rows yet.
     after_listing: Option<AfterListing>,
+    /// The run and the undo, off the frame. One job at a time; while one is
+    /// out Rename and Undo are disabled and the status bar shows how far it
+    /// has got, with a Cancel that stops a run between two ops.
+    jobs: ApplyWorker,
+    /// What the run that is out was started as, for the words the status
+    /// line uses when it lands. `None` while nothing is out.
+    running: Option<RunInFlight>,
     /// The decode threads and the texture cache. Owned here rather than by the
     /// table or the grid because both views draw from the one cache, and
     /// because a run, an undo and F9 all have to reach it.
@@ -499,6 +516,11 @@ impl RenameItApp {
                 move || repaint()
             }),
             after_listing: None,
+            jobs: ApplyWorker::spawn(platform.clone(), {
+                let repaint = repaint.clone();
+                move || repaint()
+            }),
+            running: None,
             thumbs: Thumbs::new(move || repaint()),
             platform,
             stack: Self::restore(&persisted),
@@ -565,7 +587,15 @@ impl RenameItApp {
     /// waiting for them first would wait for a set nothing asked for yet.
     pub fn settle(&mut self) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        // The listing first: it is what the preview is computed over, and a
+        // A run or an undo first: it is what asks for the listing.
+        while self.jobs.is_busy() && std::time::Instant::now() < deadline {
+            if self.poll_jobs() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        self.poll_jobs();
+        // The listing next: it is what the preview is computed over, and a
         // listing landing asks for a preview, so waiting for the preview
         // first would wait for one that is about to be superseded.
         self.drain_listing_request();
@@ -1027,6 +1057,16 @@ impl RenameItApp {
     /// The drawer's state while it is open, for tests.
     pub fn drawer(&self) -> Option<&presets::DrawerState> {
         self.drawer.as_ref()
+    }
+
+    /// Asks the run that is out to stop, as the Cancel button does.
+    pub fn cancel_run(&mut self) {
+        self.jobs.cancel();
+    }
+
+    /// Whether a run or an undo is out on its thread.
+    pub fn is_running(&self) -> bool {
+        self.jobs.is_busy()
     }
 
     /// The plan item the table shows on row `index`, if the current plan has
@@ -1808,11 +1848,34 @@ impl RenameItApp {
         // One-shot, whatever happens below.
         self.consented_for = None;
 
-        match self
-            .history
-            .run(&plan, self.platform.as_ref(), self.simulate, consented)
-        {
+        // Off the frame. One job at a time: a run pressed while one is out
+        // is refused here rather than queued behind a batch that changes the
+        // listing it was planned over — and the button is disabled while
+        // one is out, so this is the keyboard's path.
+        let affected = plan.affected();
+        let options = self.history.run_options(self.simulate, consented);
+        if self.jobs.run(plan, options).is_err() {
+            self.status = Some("A run is still going".to_owned());
+            return;
+        }
+        self.running = Some(RunInFlight {
+            simulate: self.simulate,
+            affected,
+        });
+    }
+
+    /// Records a run the worker has finished: everything that used to
+    /// follow the synchronous `apply`, in the same order.
+    fn finish_run(
+        &mut self,
+        outcome: Result<ren_core::exec::ApplyReport, ren_core::exec::ExecError>,
+    ) {
+        let Some(RunInFlight { simulate, affected }) = self.running.take() else {
+            return;
+        };
+        match outcome {
             Ok(report) => {
+                self.history.record_run(&report, simulate);
                 // What happened, not what was planned. `apply` stops at the
                 // first failure, so those two numbers part company exactly when
                 // the user most needs to be told.
@@ -1822,14 +1885,15 @@ impl RenameItApp {
                 // `blocked_reason` was fixed for a milestone ago.
                 let what =
                     crate::viewmodel::describe_counts(report.renamed.len(), report.modified());
-                self.status = Some(if self.simulate {
+                self.status = Some(if simulate {
                     format!("Simulated: {what} — nothing was written")
+                } else if report.cancelled {
+                    format!("Stopped: {what} of {affected} planned. Undo reverts what did happen.")
                 } else if report.is_success() {
                     what
                 } else {
                     format!(
-                        "{what} of {} planned — {} failed. Undo reverts what did happen.",
-                        plan.affected(),
+                        "{what} of {affected} planned — {} failed. Undo reverts what did happen.",
                         report.failed.len()
                     )
                 });
@@ -1837,10 +1901,10 @@ impl RenameItApp {
                 // Outside the `!simulate` branch below: a simulation is still
                 // the user saying they meant that pattern.
                 self.remember_fields();
-                if !self.simulate {
+                if !simulate {
                     // A running counter that advanced over renames which never
                     // happened would leave a gap in the next batch.
-                    if report.is_success() {
+                    if report.is_success() && !report.cancelled {
                         self.advance_running_counter();
                     }
                     // A rename is the commit point. The name the strip's
@@ -1895,8 +1959,29 @@ impl RenameItApp {
     }
 
     fn undo(&mut self) {
-        match self.history.undo(self.platform.as_ref()) {
-            Ok(()) => {
+        let (position, batch) = match self.history.undo_target() {
+            Ok(target) => target,
+            Err(e) => {
+                self.status = Some(e.to_string());
+                return;
+            }
+        };
+        // Off the frame, like the run it reverts; refused while a job is out.
+        let ops = batch.renamed + batch.modified;
+        if !self.jobs.undo(position, batch.journal, ops) {
+            self.status = Some("A run is still going".to_owned());
+        }
+    }
+
+    /// Records an undo the worker has finished.
+    fn finish_undo(
+        &mut self,
+        position: usize,
+        outcome: Result<ren_core::exec::UndoReport, ren_core::exec::ExecError>,
+    ) {
+        match outcome {
+            Ok(report) => {
+                self.history.record_undo(position, &report);
                 // "Undone" on its own is a lie for a mixed batch: the renames
                 // came back and the tag writes did not, and the one the user
                 // cannot fix is the one that has to be said (D54).
@@ -1914,6 +1999,16 @@ impl RenameItApp {
             }
             Err(e) => self.status = Some(e.to_string()),
         }
+    }
+
+    /// Takes delivery of a finished run or undo, if there is one.
+    fn poll_jobs(&mut self) -> bool {
+        match self.jobs.poll() {
+            Some(Outcome::Run(outcome)) => self.finish_run(outcome),
+            Some(Outcome::Undo { position, report }) => self.finish_undo(position, report),
+            None => return false,
+        }
+        true
     }
 
     /// F2's one-off rename. Journalled like any other batch, so Undo covers it.
@@ -2673,6 +2768,9 @@ impl RenameItApp {
             self.rewrite_menu();
         }
 
+        // A run or an undo that finished since the last frame, first: what
+        // it did asks for a relist, which the two lines below then carry.
+        self.poll_jobs();
         // A listing that landed since the last frame, then anything drawn
         // last frame that asked for one. The order matters: a request made
         // after the poll is the newest wish, and a listing installed after
@@ -2878,6 +2976,8 @@ impl RenameItApp {
                     plan: self.preview.plan(),
                     stale: self.preview.is_stale(),
                     failure: self.preview.failure(),
+                    job: self.jobs.in_flight(),
+                    cancelling: self.jobs.cancelling(),
                 },
                 &self.history,
                 &mut self.simulate,
@@ -2888,6 +2988,9 @@ impl RenameItApp {
             }
             if out.toggle_log {
                 self.show_log = !self.show_log;
+            }
+            if out.cancel {
+                self.jobs.cancel();
             }
             if out.run {
                 self.run();
@@ -3249,6 +3352,158 @@ mod tests {
             .collect();
         assert_eq!(names, ["second.txt"]);
         assert!(!app.listing.is_listing());
+    }
+
+    /// A platform that holds its first rename until the test lets it go, so
+    /// the test can press Cancel while the run is provably between two ops.
+    struct GatedPlatform {
+        inner: Arc<dyn Platform>,
+        /// `(open, reached)`: the worker sets `reached` when it arrives at
+        /// the gate and waits for `open`; the test waits for `reached`,
+        /// presses Cancel, and opens it.
+        gate: Arc<(std::sync::Mutex<(bool, bool)>, std::sync::Condvar)>,
+        first: std::sync::atomic::AtomicBool,
+    }
+
+    impl std::fmt::Debug for GatedPlatform {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("GatedPlatform")
+        }
+    }
+
+    impl Platform for GatedPlatform {
+        fn name(&self) -> &'static str {
+            self.inner.name()
+        }
+        fn capabilities(&self) -> &'static [ren_platform::Capability] {
+            self.inner.capabilities()
+        }
+        fn rename(&self, from: &Path, to: &Path) -> ren_platform::Result<()> {
+            if self.first.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                let (state, signal) = &*self.gate;
+                let mut state = state.lock().unwrap();
+                state.1 = true;
+                signal.notify_all();
+                while !state.0 {
+                    state = signal.wait(state).unwrap();
+                }
+            }
+            self.inner.rename(from, to)
+        }
+        fn get_attributes(
+            &self,
+            path: &Path,
+        ) -> ren_platform::Result<ren_platform::FileAttributes> {
+            self.inner.get_attributes(path)
+        }
+        fn set_attributes(
+            &self,
+            path: &Path,
+            change: ren_platform::AttributeChange,
+        ) -> ren_platform::Result<()> {
+            self.inner.set_attributes(path, change)
+        }
+        fn get_times(&self, path: &Path) -> ren_platform::Result<ren_platform::FileTimes> {
+            self.inner.get_times(path)
+        }
+        fn set_times(
+            &self,
+            path: &Path,
+            change: ren_platform::TimeChange,
+        ) -> ren_platform::Result<()> {
+            self.inner.set_times(path, change)
+        }
+        fn naming_rules(&self, path: &Path) -> &'static ren_platform::NamingRules {
+            self.inner.naming_rules(path)
+        }
+        fn case_sensitivity(&self, dir: &Path) -> ren_platform::CaseSensitivity {
+            self.inner.case_sensitivity(dir)
+        }
+        fn reveal_in_file_manager(&self, path: &Path) -> ren_platform::Result<()> {
+            self.inner.reveal_in_file_manager(path)
+        }
+        fn notify_shell_changed(&self, path: &Path) {
+            self.inner.notify_shell_changed(path);
+        }
+    }
+
+    /// Cancel stops a run between two ops. The first rename is held at the
+    /// gate while Cancel is pressed, then let go: exactly one file is
+    /// renamed, the report says the run stopped, the listing shows the mixed
+    /// state, and Undo takes the one back.
+    #[test]
+    fn a_cancelled_run_stops_after_the_op_under_way_and_is_undoable() {
+        let dir = tempfile::TempDir::new().unwrap();
+        for name in ["a_1.txt", "a_2.txt", "a_3.txt"] {
+            std::fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        let journal = tempfile::TempDir::new().unwrap();
+        let gate = Arc::new((
+            std::sync::Mutex::new((false, false)),
+            std::sync::Condvar::new(),
+        ));
+        let platform = Arc::new(GatedPlatform {
+            inner: ren_platform::host(),
+            gate: gate.clone(),
+            first: std::sync::atomic::AtomicBool::new(true),
+        });
+        let mut app = RenameItApp::headless_with_platform(
+            dir.path().to_path_buf(),
+            journal.path().to_path_buf(),
+            platform,
+        );
+        *app.operation_mut() = OpKind::Replace(ren_core::ops::Replace::new("_", "-"));
+        app.settle();
+
+        app.run();
+        assert!(app.is_running(), "the run is out");
+        // Wait until the worker is provably inside its first rename — the
+        // cancel check is between ops, so a Cancel pressed before the worker
+        // reached the loop would stop it at zero.
+        {
+            let (state, signal) = &*gate;
+            let mut state = state.lock().unwrap();
+            while !state.1 {
+                state = signal.wait(state).unwrap();
+            }
+            app.cancel_run();
+            state.0 = true;
+            signal.notify_all();
+        }
+        app.settle();
+
+        assert!(!app.is_running());
+        assert!(
+            app.status
+                .as_deref()
+                .is_some_and(|s| s.starts_with("Stopped")),
+            "{:?}",
+            app.status
+        );
+        let mut names: Vec<String> = app
+            .session
+            .entries()
+            .iter()
+            .map(|e| e.file_name.clone())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            ["a-1.txt", "a_2.txt", "a_3.txt"],
+            "one renamed, then stopped"
+        );
+        assert!(app.history.can_undo());
+
+        app.undo();
+        app.settle();
+        let mut names: Vec<String> = app
+            .session
+            .entries()
+            .iter()
+            .map(|e| e.file_name.clone())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["a_1.txt", "a_2.txt", "a_3.txt"]);
     }
 
     /// Between a sort and the next plan the positional index points at rows

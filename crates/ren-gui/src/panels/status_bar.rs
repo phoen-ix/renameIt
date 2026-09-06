@@ -17,6 +17,8 @@ pub struct StatusBarOutput {
     pub undo: bool,
     pub row_filter: Option<RowFilter>,
     pub toggle_log: bool,
+    /// Stop the run that is out before its next op.
+    pub cancel: bool,
 }
 
 /// What the preview worker currently has to show, read once per frame.
@@ -27,6 +29,10 @@ pub struct PreviewState<'a> {
     pub stale: bool,
     /// The latest preview produced no plan because the engine panicked.
     pub failure: Option<&'a str>,
+    /// A run or an undo is out on its thread, and how far it has got.
+    pub job: Option<crate::viewmodel::InFlight>,
+    /// The run out has been asked to stop and has not answered yet.
+    pub cancelling: bool,
 }
 
 pub fn ui(
@@ -42,6 +48,8 @@ pub fn ui(
         plan,
         stale,
         failure,
+        job,
+        cancelling,
     } = preview;
 
     // One pass over the plan for every number this bar shows, rather than
@@ -56,6 +64,36 @@ pub fn ui(
             // burns a core in the real app for a preview that lands in
             // milliseconds.
             ui.label(egui::RichText::new("updating…").weak().italics());
+        }
+        if let Some(job) = job {
+            // Static, like "updating…": the worker wakes the UI once when the
+            // job lands, and the count moves on the frames the user's own
+            // input causes. A spinner here would never settle (D26).
+            ui.separator();
+            // Undo reports no progress of its own — it has to finish to be
+            // exact, so there is no count worth watching — and a "0 of N"
+            // that never moves would read as stuck.
+            let text = match job.kind {
+                crate::viewmodel::JobKind::Run => {
+                    format!("Renaming {} of {}…", job.done, job.total)
+                }
+                crate::viewmodel::JobKind::Undo => "Undoing…".to_owned(),
+            };
+            ui.label(egui::RichText::new(text).italics());
+            if job.kind == crate::viewmodel::JobKind::Run {
+                if cancelling {
+                    ui.label(egui::RichText::new("stopping…").weak().italics());
+                } else if ui
+                    .button("Cancel")
+                    .on_hover_text(
+                        "Stop before the next file. What has been renamed stays renamed, and \
+                         Undo takes it back.",
+                    )
+                    .clicked()
+                {
+                    out.cancel = true;
+                }
+            }
         }
         if let Some(failure) = failure {
             // The engine panicked on this listing. Said here rather than
@@ -83,8 +121,11 @@ pub fn ui(
         }
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let blocked =
-                blocked_reason(counts, pipeline_empty, session.guarded.as_deref(), failure);
+            let blocked = if job.is_some() {
+                Some("A run is still going.".to_owned())
+            } else {
+                blocked_reason(counts, pipeline_empty, session.guarded.as_deref(), failure)
+            };
             // "Run simulation", not "Simulate": the checkbox beside it is
             // already called Simulate, and two adjacent controls with the same
             // word on them do not say which is the verb.
@@ -119,13 +160,17 @@ pub fn ui(
             ui.checkbox(simulate, "Simulate")
                 .on_hover_text("Run the whole plan without touching the disk");
 
-            let can_undo = history.can_undo();
+            let can_undo = history.can_undo() && job.is_none();
             let undo = ui.add_enabled(can_undo, egui::Button::new("Undo"));
             if undo.clicked() {
                 out.undo = true;
             }
             if !can_undo {
-                undo.on_disabled_hover_text("Nothing to undo yet");
+                undo.on_disabled_hover_text(if job.is_some() {
+                    "A run is still going"
+                } else {
+                    "Nothing to undo yet"
+                });
             }
 
             if !history.log.is_empty() && ui.button("Log").clicked() {

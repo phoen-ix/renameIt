@@ -21,6 +21,17 @@ pub struct ApplyOptions {
     /// closed. That is deliberate: the GUI's confirmation and the CLI's flag are
     /// two doors onto the same room, and neither should be the only lock.
     pub allow_irreversible: bool,
+    /// Set from another thread to stop the run before its next op.
+    ///
+    /// Every stopping point is already a consistent one — the journal is
+    /// write-ahead per op — so a cancelled run is a shorter run: the ops that
+    /// happened are confirmed and committed, and undo reverts exactly them.
+    /// The report says it was cancelled, so a front end does not mistake a
+    /// shorter run for a finished one.
+    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Bumped once per op performed, for a front end drawing a progress line
+    /// while the run happens on its thread.
+    pub progress: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
 }
 
 impl Default for ApplyOptions {
@@ -29,6 +40,8 @@ impl Default for ApplyOptions {
             simulate: false,
             journal_dir: default_journal_dir(),
             allow_irreversible: false,
+            cancel: None,
+            progress: None,
         }
     }
 }
@@ -54,6 +67,10 @@ pub struct ApplyReport {
     /// journal; this is the same fact where the GUI can see it.
     pub reversible: usize,
     pub simulated: bool,
+    /// The run was stopped by [`ApplyOptions::cancel`] before it finished.
+    /// What happened before the stop is confirmed and committed, and undo
+    /// reverts it; what did not happen is simply not in the report.
+    pub cancelled: bool,
     /// Lines a script asked to be logged — whatever its `done()` returned, and
     /// any warning from a `done()` that failed (P59).
     ///
@@ -151,7 +168,14 @@ pub fn apply(
     }
 
     let journal = Journal::create(&options.journal_dir)?;
-    apply_journalled(plan, platform, journal, report)
+    apply_journalled(plan, platform, options, journal, report)
+}
+
+fn options_cancelled(options: &ApplyOptions) -> bool {
+    options
+        .cancel
+        .as_ref()
+        .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 /// How many renames are written ahead before any of them runs.
@@ -204,6 +228,7 @@ pub const WRITE_AHEAD_WINDOW: usize = 1;
 fn apply_journalled(
     plan: &Plan,
     platform: &dyn Platform,
+    options: &ApplyOptions,
     mut journal: Journal,
     mut report: ApplyReport,
 ) -> Result<ApplyReport, ExecError> {
@@ -223,6 +248,12 @@ fn apply_journalled(
     // unwinds a broken cycle by replaying them in reverse (P6).
     let mut at = 0usize;
     'run: while at < plan.ops.len() {
+        // Between ops, never inside one: the op under way finishes and is
+        // confirmed, so the journal closes on a consistent state.
+        if options_cancelled(options) {
+            report.cancelled = true;
+            break;
+        }
         // The window: a run of windowable ops, or exactly one of anything
         // else.
         let end = if windowable(&plan.ops[at]) {
@@ -266,6 +297,9 @@ fn apply_journalled(
                         .append(Record::Completed { seq })
                         .map_err(|e| interrupted(&journal, completed, e))?;
                     record_success(&mut report, op, platform);
+                    if let Some(progress) = &options.progress {
+                        progress.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
                 }
                 Err(message) => {
                     journal
@@ -557,8 +591,14 @@ mod tests {
         journal.fail_writes_from(5);
         let report = ApplyReport::default();
 
-        let error = apply_journalled(&plan, platform.as_ref(), journal, report)
-            .expect_err("the journal failure must surface");
+        let error = apply_journalled(
+            &plan,
+            platform.as_ref(),
+            &ApplyOptions::default(),
+            journal,
+            report,
+        )
+        .expect_err("the journal failure must surface");
         match &error {
             ExecError::Interrupted {
                 completed, source, ..
@@ -589,6 +629,121 @@ mod tests {
         assert_eq!(unfinished[0].completed, 2);
         let report = crate::exec::rollback(&unfinished[0], platform.as_ref()).unwrap();
         assert_eq!(report.restored.len(), 2, "{report:?}");
+        let mut names: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["a_1.txt", "a_2.txt", "a_3.txt"]);
+    }
+
+    /// A cancelled run is a shorter run: what happened before the stop is
+    /// confirmed and committed, the report says it stopped, and undo reverts
+    /// exactly what happened. Cancelled through the platform, because that is
+    /// the one hook a test has between two ops.
+    #[test]
+    fn a_cancelled_run_stops_between_ops_and_is_undoable() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        let dir = tempfile::TempDir::new().unwrap();
+        for name in ["a_1.txt", "a_2.txt", "a_3.txt"] {
+            std::fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        let entries = crate::list(dir.path(), Default::default()).unwrap();
+        let pipeline = Pipeline::new().then(Replace::new("_", "-"));
+        let platform = ren_platform::host();
+        let plan = plan(&entries, &pipeline, platform.as_ref());
+
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let progress = std::sync::Arc::new(AtomicUsize::new(0));
+        let journals = tempfile::TempDir::new().unwrap();
+        let options = ApplyOptions {
+            journal_dir: journals.path().to_path_buf(),
+            cancel: Some(cancel.clone()),
+            progress: Some(progress.clone()),
+            ..Default::default()
+        };
+
+        // A platform that pulls the flag after the first rename.
+        struct CancelAfterOne {
+            inner: std::sync::Arc<dyn Platform>,
+            cancel: std::sync::Arc<AtomicBool>,
+        }
+        impl std::fmt::Debug for CancelAfterOne {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("CancelAfterOne")
+            }
+        }
+        impl Platform for CancelAfterOne {
+            fn name(&self) -> &'static str {
+                self.inner.name()
+            }
+            fn capabilities(&self) -> &'static [ren_platform::Capability] {
+                self.inner.capabilities()
+            }
+            fn rename(
+                &self,
+                from: &std::path::Path,
+                to: &std::path::Path,
+            ) -> ren_platform::Result<()> {
+                self.cancel.store(true, Ordering::Relaxed);
+                self.inner.rename(from, to)
+            }
+            fn get_attributes(
+                &self,
+                path: &std::path::Path,
+            ) -> ren_platform::Result<ren_platform::FileAttributes> {
+                self.inner.get_attributes(path)
+            }
+            fn set_attributes(
+                &self,
+                path: &std::path::Path,
+                change: ren_platform::AttributeChange,
+            ) -> ren_platform::Result<()> {
+                self.inner.set_attributes(path, change)
+            }
+            fn get_times(
+                &self,
+                path: &std::path::Path,
+            ) -> ren_platform::Result<ren_platform::FileTimes> {
+                self.inner.get_times(path)
+            }
+            fn set_times(
+                &self,
+                path: &std::path::Path,
+                change: ren_platform::TimeChange,
+            ) -> ren_platform::Result<()> {
+                self.inner.set_times(path, change)
+            }
+            fn naming_rules(&self, path: &std::path::Path) -> &'static ren_platform::NamingRules {
+                self.inner.naming_rules(path)
+            }
+            fn case_sensitivity(&self, dir: &std::path::Path) -> ren_platform::CaseSensitivity {
+                self.inner.case_sensitivity(dir)
+            }
+            fn reveal_in_file_manager(&self, path: &std::path::Path) -> ren_platform::Result<()> {
+                self.inner.reveal_in_file_manager(path)
+            }
+            fn notify_shell_changed(&self, path: &std::path::Path) {
+                self.inner.notify_shell_changed(path);
+            }
+        }
+        let cancelling = CancelAfterOne {
+            inner: platform.clone(),
+            cancel: cancel.clone(),
+        };
+
+        let report = apply(&plan, &cancelling, &options).unwrap();
+        assert!(report.cancelled);
+        assert_eq!(report.renamed.len(), 1);
+        assert_eq!(progress.load(Ordering::Relaxed), 1);
+        assert!(report.is_success(), "a stop is not a failure");
+
+        // Committed, so it is offered for undo rather than for recovery, and
+        // undo puts back exactly the one.
+        assert!(crate::exec::unfinished(journals.path()).unwrap().is_empty());
+        let undo = crate::exec::undo_last(platform.as_ref(), journals.path()).unwrap();
+        assert_eq!(undo.restored.len(), 1);
         let mut names: Vec<String> = std::fs::read_dir(dir.path())
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())

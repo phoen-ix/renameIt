@@ -259,7 +259,7 @@ impl PreviewWorker {
 ///
 /// A `panic!` with a literal carries a `&str`; one with a format string
 /// carries a `String`; anything else is somebody's custom payload.
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(text) = payload.downcast_ref::<&str>() {
         (*text).to_owned()
     } else if let Some(text) = payload.downcast_ref::<String>() {

@@ -579,6 +579,7 @@ fn run() -> Result<Exit, Box<dyn std::error::Error>> {
                 simulate: *simulate,
                 journal_dir,
                 allow_irreversible: *allow_irreversible,
+                ..Default::default()
             };
             match apply(&plan, platform.as_ref(), &options) {
                 Ok(report) => {

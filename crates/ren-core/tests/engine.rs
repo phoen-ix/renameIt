@@ -118,6 +118,7 @@ impl Fixture {
             simulate: false,
             journal_dir: self.journal.path().to_path_buf(),
             allow_irreversible: false,
+            ..Default::default()
         }
     }
 
@@ -1232,6 +1233,7 @@ fn simulating_an_action_reads_nothing_and_writes_nothing() {
             simulate: true,
             journal_dir: fixture.journal.path().to_path_buf(),
             allow_irreversible: false,
+            ..Default::default()
         },
     )
     .unwrap();
