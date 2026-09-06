@@ -448,17 +448,6 @@ pub fn tag_field_with_history(
     edit(ui, id, field, width, "", true, history)
 }
 
-/// The same, with placeholder text in the empty box.
-pub fn tag_field_hinted(
-    ui: &mut egui::Ui,
-    id: &str,
-    field: &mut TextTemplate,
-    width: f32,
-    hint: &str,
-) -> bool {
-    edit(ui, id, field, width, hint, true, &[])
-}
-
 /// The same, with a history.
 pub fn tag_field_hinted_with_history(
     ui: &mut egui::Ui,

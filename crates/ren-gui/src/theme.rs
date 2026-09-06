@@ -42,8 +42,6 @@ pub mod space {
     pub const TIGHT: f32 = 4.0;
     /// Between controls inside one group.
     pub const SNUG: f32 = 8.0;
-    /// Between groups inside one panel.
-    pub const LOOSE: f32 = 14.0;
     /// Between top-level sections, either side of a separator.
     pub const SECTION: f32 = 20.0;
 }
