@@ -26,6 +26,10 @@ const HEAD_BYTES: usize = 64 * 1024;
 /// A title longer than this is not a filename anybody wants.
 const MAX_TITLE: usize = 512;
 
+/// How far past an `&` the closing `;` of an entity is looked for. The longest
+/// form this decoder accepts is `&#x10FFFF;`, ten characters.
+const ENTITY_SCAN_CHARS: usize = 12;
+
 /// Extensions worth opening.
 pub const HTML_EXTENSIONS: [&str; 5] = ["html", "htm", "xhtml", "shtml", "xht"];
 
@@ -131,7 +135,17 @@ fn decode_entities(text: &str) -> String {
     while let Some(at) = rest.find('&') {
         out.push_str(&rest[..at]);
         let tail = &rest[at..];
-        let Some(end) = tail[..tail.len().min(12)].find(';') else {
+        // The `;` is looked for within the first twelve **characters**, never
+        // by slicing at byte twelve: `tail` starts at an ASCII `&`, but what
+        // follows is a stranger's title, and slicing a `str` inside a
+        // multi-byte character panics. Found by a title of the shape
+        // `& Tom and Jé…`, where the `é` straddles byte twelve.
+        let end = tail
+            .char_indices()
+            .take(ENTITY_SCAN_CHARS)
+            .find(|(_, c)| *c == ';')
+            .map(|(i, _)| i);
+        let Some(end) = end else {
             out.push('&');
             rest = &tail[1..];
             continue;
@@ -255,6 +269,25 @@ mod tests {
             Some("Q &amp A"),
             "an unterminated entity is text too"
         );
+    }
+
+    /// The entity scan is bounded in characters, not bytes. Slicing at byte
+    /// twelve panics whenever a multi-byte character straddles it, and this
+    /// title puts the `é` exactly there: `&` plus ten ASCII characters is
+    /// eleven bytes, so the two-byte `é` occupies bytes eleven and twelve.
+    #[test]
+    fn an_ampersand_followed_by_non_ascii_text_does_not_panic() {
+        assert_eq!(
+            extract("<title>Q & Tom and Jérôme</title>").as_deref(),
+            Some("Q & Tom and Jérôme")
+        );
+        // Three-byte and four-byte characters at every offset in the window.
+        for filler in 0..ENTITY_SCAN_CHARS + 2 {
+            let title = format!("&{}—😀;x", "a".repeat(filler));
+            let _ = decode_entities(&title);
+        }
+        // A real entity still decodes when non-ASCII text follows it.
+        assert_eq!(decode_entities("&amp;Jérôme"), "&Jérôme");
     }
 
     #[test]

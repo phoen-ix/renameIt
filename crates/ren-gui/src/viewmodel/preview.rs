@@ -16,6 +16,20 @@
 //! Spike B measured the work itself at 4 ms for 10 000 rows
 //! (`docs/spikes/preview-perf.md`), so this is about *never* stuttering rather
 //! than about the average case.
+//!
+//! # A panic is an answer, not the end of the session
+//!
+//! `plan()` runs user-shaped input through a regex engine, a script
+//! interpreter and half a dozen file-format readers, and a panic anywhere in
+//! that path used to kill this thread outright. Nothing noticed: `request`
+//! sends into a closed channel and ignores the error, `is_stale` stays true
+//! forever, and P35 makes every run wait for a preview that will never come —
+//! the app was wedged for the rest of the session with "updating…" in the
+//! status bar and no way to find out why. So the work runs under
+//! `catch_unwind`, the same containment the thumbnail decoder has (P75), and a
+//! panic comes back as a *failed generation*: answered, so nothing waits on it,
+//! with the message where the status bar can show it, and with no plan, so
+//! nothing can run against it.
 
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
@@ -33,7 +47,8 @@ struct Request {
 
 struct Response {
     generation: u64,
-    plan: Plan,
+    /// The plan, or what the engine panicked with.
+    outcome: Result<Plan, String>,
     elapsed: Duration,
 }
 
@@ -51,14 +66,23 @@ pub struct PreviewWorker {
     responses: Receiver<Response>,
     /// Bumped on every request; a response carrying anything older is dropped.
     generation: u64,
+    /// The newest generation the worker has answered, with a plan or with a
+    /// failure. Kept apart from `ready` so a failed generation counts as
+    /// answered without there being a plan to show for it.
+    answered: u64,
     ready: Option<Ready>,
+    /// Why the latest answered generation produced no plan. Cleared by the
+    /// next plan that lands.
+    failure: Option<String>,
 }
 
 impl std::fmt::Debug for PreviewWorker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PreviewWorker")
             .field("generation", &self.generation)
+            .field("answered", &self.answered)
             .field("ready", &self.ready.as_ref().map(|r| r.generation))
+            .field("failure", &self.failure)
             .finish()
     }
 }
@@ -85,10 +109,13 @@ impl PreviewWorker {
                     }
 
                     let started = Instant::now();
-                    let computed = plan(&request.entries, &request.pipeline, platform.as_ref());
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        plan(&request.entries, &request.pipeline, platform.as_ref())
+                    }))
+                    .map_err(|payload| panic_message(payload.as_ref()));
                     let response = Response {
                         generation: request.generation,
-                        plan: computed,
+                        outcome,
                         elapsed: started.elapsed(),
                     };
                     if response_tx.send(response).is_err() {
@@ -103,7 +130,9 @@ impl PreviewWorker {
             requests: request_tx,
             responses: response_rx,
             generation: 0,
+            answered: 0,
             ready: None,
+            failure: None,
         }
     }
 
@@ -128,18 +157,28 @@ impl PreviewWorker {
         while let Ok(response) = self.responses.try_recv() {
             // A response older than one we already have is stale — the user has
             // typed since.
-            let newer = self
-                .ready
-                .as_ref()
-                .is_none_or(|r| response.generation > r.generation);
-            if newer {
-                self.ready = Some(Ready {
-                    generation: response.generation,
-                    plan: response.plan,
-                    elapsed: response.elapsed,
-                });
-                changed = true;
+            if response.generation <= self.answered {
+                continue;
             }
+            self.answered = response.generation;
+            match response.outcome {
+                Ok(plan) => {
+                    self.ready = Some(Ready {
+                        generation: response.generation,
+                        plan,
+                        elapsed: response.elapsed,
+                    });
+                    self.failure = None;
+                }
+                // No plan at all rather than the previous one: a stale plan
+                // under a fresh pipeline is exactly what P35 forbids running,
+                // and `run()` reads `ready()`.
+                Err(message) => {
+                    self.ready = None;
+                    self.failure = Some(message);
+                }
+            }
+            changed = true;
         }
         changed
     }
@@ -152,12 +191,15 @@ impl PreviewWorker {
         self.ready.as_ref()
     }
 
+    /// What the engine panicked with, when the latest preview produced no plan.
+    pub fn failure(&self) -> Option<&str> {
+        self.failure.as_deref()
+    }
+
     /// True when a newer request is still in flight, so the visible preview is
     /// one or more keystrokes behind.
     pub fn is_stale(&self) -> bool {
-        self.ready
-            .as_ref()
-            .is_none_or(|r| r.generation < self.generation)
+        self.answered < self.generation
     }
 
     /// Blocks until the plan for the latest request has arrived.
@@ -172,6 +214,20 @@ impl PreviewWorker {
         }
         self.poll();
         self.plan()
+    }
+}
+
+/// The text of a panic, for the status bar.
+///
+/// A `panic!` with a literal carries a `&str`; one with a format string
+/// carries a `String`; anything else is somebody's custom payload.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(text) = payload.downcast_ref::<&str>() {
+        (*text).to_owned()
+    } else if let Some(text) = payload.downcast_ref::<String>() {
+        text.clone()
+    } else {
+        "the preview engine panicked".to_owned()
     }
 }
 
@@ -259,5 +315,63 @@ mod tests {
             repaints.load(Ordering::SeqCst) >= 1,
             "an idle UI must be woken when the preview is ready"
         );
+    }
+
+    /// A transform that panics on one name, the way a reader given a hostile
+    /// file might.
+    #[derive(Debug)]
+    struct Explodes;
+
+    impl ren_core::ops::NameTransform for Explodes {
+        fn id(&self) -> &'static str {
+            "explodes"
+        }
+        fn summary(&self) -> String {
+            "explodes".into()
+        }
+        fn apply<'a>(
+            &self,
+            subject: &'a str,
+            _cx: &ren_core::ops::EvalCx<'_>,
+        ) -> Result<std::borrow::Cow<'a, str>, ren_core::ops::OpError> {
+            if subject.contains("boom") {
+                panic!("byte index 12 is not a char boundary");
+            }
+            Ok(std::borrow::Cow::Borrowed(subject))
+        }
+    }
+
+    /// A panic inside the engine is a failed generation, not a dead worker:
+    /// the request is answered, the message is reported, there is no plan to
+    /// run, and the next request still gets a plan.
+    #[test]
+    fn a_panic_in_the_engine_is_reported_and_the_worker_survives() {
+        // The default hook prints the panic to stderr, which is noise here and
+        // nothing else; it is left in place because a test that swapped the
+        // process-wide hook would race every other test in the binary.
+        let mut worker = worker();
+        let files = entries(&["boom.txt"]);
+
+        worker.request(files.clone(), Arc::new(Pipeline::new().then(Explodes)));
+        assert!(worker.wait(Duration::from_secs(5)).is_none(), "no plan");
+        assert!(
+            !worker.is_stale(),
+            "the failed generation counts as answered"
+        );
+        assert_eq!(
+            worker.failure(),
+            Some("byte index 12 is not a char boundary")
+        );
+
+        // The thread is still there and a sound pipeline still gets a plan.
+        worker.request(
+            files,
+            Arc::new(Pipeline::new().then(Replace::new("boom", "ok"))),
+        );
+        let plan = worker
+            .wait(Duration::from_secs(5))
+            .expect("the worker survived");
+        assert_eq!(plan.items[0].new_name, "ok.txt");
+        assert_eq!(worker.failure(), None, "cleared by the next plan");
     }
 }

@@ -19,16 +19,30 @@ pub struct StatusBarOutput {
     pub toggle_log: bool,
 }
 
+/// What the preview worker currently has to show, read once per frame.
+#[derive(Debug, Clone, Copy)]
+pub struct PreviewState<'a> {
+    pub plan: Option<&'a Plan>,
+    /// A newer request is still in flight.
+    pub stale: bool,
+    /// The latest preview produced no plan because the engine panicked.
+    pub failure: Option<&'a str>,
+}
+
 pub fn ui(
     ui: &mut egui::Ui,
     session: &Session,
-    plan: Option<&Plan>,
+    preview: PreviewState<'_>,
     history: &History,
     simulate: &mut bool,
-    stale: bool,
     pipeline_empty: bool,
 ) -> StatusBarOutput {
     let mut out = StatusBarOutput::default();
+    let PreviewState {
+        plan,
+        stale,
+        failure,
+    } = preview;
 
     ui.horizontal(|ui| {
         ui.label(summary(session, plan));
@@ -38,6 +52,20 @@ pub fn ui(
             // burns a core in the real app for a preview that lands in
             // milliseconds.
             ui.label(egui::RichText::new("updating…").weak().italics());
+        }
+        if let Some(failure) = failure {
+            // The engine panicked on this listing. Said here rather than
+            // nowhere: without it the table shows "—" on every row and the
+            // Rename button is disabled, which looks like a run that was
+            // never asked for.
+            ui.label(
+                egui::RichText::new(format!("preview failed: {failure}"))
+                    .color(ui.visuals().error_fg_color),
+            )
+            .on_hover_text(
+                "The preview engine hit a bug on one of these files. Change the pipeline or \
+                 the listing to try again; if it keeps happening, please report it.",
+            );
         }
 
         ui.separator();
@@ -51,7 +79,7 @@ pub fn ui(
         }
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let blocked = blocked_reason(plan, pipeline_empty, session.guarded.as_deref());
+            let blocked = blocked_reason(plan, pipeline_empty, session.guarded.as_deref(), failure);
             // "Run simulation", not "Simulate": the checkbox beside it is
             // already called Simulate, and two adjacent controls with the same
             // word on them do not say which is the verb.
@@ -154,14 +182,16 @@ pub fn blocked_reason_for(
     plan: Option<&Plan>,
     pipeline_empty: bool,
     guarded: Option<&Path>,
+    failure: Option<&str>,
 ) -> Option<String> {
-    blocked_reason(plan, pipeline_empty, guarded)
+    blocked_reason(plan, pipeline_empty, guarded, failure)
 }
 
 fn blocked_reason(
     plan: Option<&Plan>,
     pipeline_empty: bool,
     guarded: Option<&Path>,
+    failure: Option<&str>,
 ) -> Option<String> {
     // Before everything, including the empty pipeline: this is the one refusal
     // that is not about the plan being wrong, and it outranks any reason the
@@ -178,6 +208,11 @@ fn blocked_reason(
     // would hide the actual reason.
     if pipeline_empty {
         return Some("The pipeline is empty — add an operation.".to_owned());
+    }
+    // A preview that panicked has no plan, and "no plan" alone would read as
+    // "nothing listed". Name the failure so the disabled button says why.
+    if let Some(failure) = failure {
+        return Some(format!("The preview failed: {failure}"));
     }
     let plan = plan?;
     if plan.errors() > 0 {
@@ -251,14 +286,25 @@ mod tests {
     /// change — at the very moment the run was about to change something.
     #[test]
     fn an_action_only_plan_does_not_claim_nothing_would_change() {
-        assert_eq!(blocked_reason(Some(&acted_plan(3)), false, None), None);
+        assert_eq!(
+            blocked_reason(Some(&acted_plan(3)), false, None, None),
+            None
+        );
+    }
+
+    /// A preview that panicked has no plan, and the button has to say so
+    /// rather than look like a folder with nothing listed.
+    #[test]
+    fn a_failed_preview_names_the_failure() {
+        let reason = blocked_reason(None, false, None, Some("boom")).expect("should block");
+        assert!(reason.contains("boom"), "{reason}");
     }
 
     #[test]
     fn a_plan_that_neither_renames_nor_acts_still_says_nothing_would_change() {
         let plan = plan_with(&[RowState::Unchanged, RowState::Unchanged]);
         assert_eq!(
-            blocked_reason(Some(&plan), false, None).as_deref(),
+            blocked_reason(Some(&plan), false, None, None).as_deref(),
             Some("Nothing would change.")
         );
     }
@@ -282,13 +328,13 @@ mod tests {
     #[test]
     fn a_clean_plan_does_not_block_the_button() {
         let plan = plan_with(&[RowState::Changed]);
-        assert_eq!(blocked_reason(Some(&plan), false, None), None);
+        assert_eq!(blocked_reason(Some(&plan), false, None, None), None);
     }
 
     #[test]
     fn a_plan_with_nothing_to_do_says_so() {
         let plan = plan_with(&[RowState::Unchanged]);
-        let reason = blocked_reason(Some(&plan), false, None).expect("should block");
+        let reason = blocked_reason(Some(&plan), false, None, None).expect("should block");
         assert!(reason.contains("Nothing"), "{reason}");
     }
 
@@ -299,7 +345,7 @@ mod tests {
             RowState::Changed,
             RowState::Conflict(ren_core::ConflictKind::TargetExists),
         ]);
-        let reason = blocked_reason(Some(&plan), false, None).expect("should block");
+        let reason = blocked_reason(Some(&plan), false, None, None).expect("should block");
         assert!(reason.contains("collide"), "{reason}");
         assert!(reason.contains("overwrite"), "{reason}");
     }
@@ -307,7 +353,7 @@ mod tests {
     #[test]
     fn errors_block_the_run_too() {
         let plan = plan_with(&[RowState::Error("bad regex".into())]);
-        let reason = blocked_reason(Some(&plan), false, None).expect("should block");
+        let reason = blocked_reason(Some(&plan), false, None, None).expect("should block");
         assert!(reason.contains("previewed"), "{reason}");
     }
 
@@ -316,7 +362,7 @@ mod tests {
     #[test]
     fn an_empty_pipeline_blocks_the_run_and_says_what_is_missing() {
         let plan = plan_with(&[RowState::Unchanged]);
-        let reason = blocked_reason(Some(&plan), true, None).expect("should block");
+        let reason = blocked_reason(Some(&plan), true, None, None).expect("should block");
         assert!(reason.contains("empty"), "{reason}");
         assert!(reason.contains("add an operation"), "{reason}");
         // And it wins over the vaguer reason underneath it.
@@ -326,7 +372,7 @@ mod tests {
     #[test]
     fn without_a_plan_the_button_is_simply_unavailable() {
         assert_eq!(
-            blocked_reason(None, false, None),
+            blocked_reason(None, false, None, None),
             None,
             "no plan yet is not a conflict"
         );

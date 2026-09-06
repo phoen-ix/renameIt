@@ -1258,6 +1258,7 @@ impl RenameItApp {
             self.preview.plan(),
             self.pipeline_is_empty(),
             self.session.guarded.as_deref(),
+            self.preview.failure(),
         )
     }
 
@@ -2706,10 +2707,13 @@ impl RenameItApp {
             let out = status_bar::ui(
                 ui,
                 &self.session,
-                self.preview.plan(),
+                status_bar::PreviewState {
+                    plan: self.preview.plan(),
+                    stale: self.preview.is_stale(),
+                    failure: self.preview.failure(),
+                },
                 &self.history,
                 &mut self.simulate,
-                self.preview.is_stale(),
                 pipeline_empty,
             );
             if let Some(filter) = out.row_filter {
