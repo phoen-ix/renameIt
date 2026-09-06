@@ -413,8 +413,8 @@ fn announce(
             // No before-image, no attempt. A change that cannot be undone is
             // worse than a change that did not happen, and nothing was
             // written — so the `Failed` record stands alone without a
-            // `PlanAct`, which `recover::unfinished`'s saturating arithmetic
-            // already tolerates.
+            // `PlanAct`, which `recover::unfinished` counts with saturating
+            // arithmetic for exactly this reason.
             Err(e) => return Ok(Some(e.to_string())),
             // An effect with no before-image reaching the reversible branch
             // means its `undoability()` and the action's `undoable()`

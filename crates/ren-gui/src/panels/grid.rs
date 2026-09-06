@@ -91,10 +91,6 @@ impl<'a> Grid<'a> {
         }
     }
 
-    pub fn visible_count(&self) -> usize {
-        self.visible.len()
-    }
-
     /// One tile's footprint, picture plus caption.
     ///
     /// Public so the performance harness can work out how many tiles a given

@@ -10,8 +10,7 @@
 //! user's mental map of the product, and hiding half of them makes the app look
 //! smaller than it is while leaving "when does X arrive" unanswerable.
 
-use ren_core::model::Scope;
-use ren_core::ops::{OpGroup, OpKind};
+use ren_core::ops::OpKind;
 
 /// One entry in the catalogue.
 pub struct Item {
@@ -315,16 +314,6 @@ pub fn implemented() -> Vec<OpKind> {
         .flat_map(|group| group.items.iter())
         .filter_map(|item| item.build.map(|build| build()))
         .collect()
-}
-
-/// What group an operation belongs to, for the panel's own use.
-pub fn group_of(op: &OpKind) -> OpGroup {
-    op.group()
-}
-
-/// The scope a fresh card of this operation starts with.
-pub fn scope_for(op: &OpKind) -> Scope {
-    op.default_scope()
 }
 
 #[cfg(test)]

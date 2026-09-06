@@ -24,13 +24,17 @@
 //! cargo run --release -p ren-gui --example spike_preview_headless -- 10000 100 grid
 //! ```
 
+// The shared harness, `examples/spike/mod.rs`: a directory without a
+// `main.rs`, so cargo does not take it for an example of its own.
+mod spike;
+
 use std::time::{Duration, Instant};
 
 use ren_gui::panels::grid::Grid;
 use ren_gui::panels::tile::Look;
-use ren_gui::spike::{PreviewEngine, PreviewTable, synthetic_entries};
 use ren_gui::thumbs::Thumbs;
 use ren_gui::viewmodel::{RowFilter, THUMB_DEFAULT};
+use spike::{PreviewEngine, PreviewTable, synthetic_entries};
 
 /// A user typing `Holiday` one character at a time, then deleting it again.
 fn keystrokes() -> Vec<String> {

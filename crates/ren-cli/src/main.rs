@@ -809,10 +809,13 @@ fn run_presets(action: &PresetAction) -> Result<Exit, Box<dyn std::error::Error>
             for problem in &problems {
                 eprintln!("unreadable: {}", problem.error);
             }
+            // 1, not 3: nothing ran and there is no journal, so D103's "the
+            // next step is `recover`" does not apply. 1 is the code for a
+            // filesystem that refused something before any work started.
             Ok(if problems.is_empty() {
                 Exit::Success
             } else {
-                Exit::Failed
+                Exit::Usage
             })
         }
 

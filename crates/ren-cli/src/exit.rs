@@ -59,12 +59,6 @@ impl Exit {
     }
 }
 
-impl From<Exit> for ExitCode {
-    fn from(exit: Exit) -> Self {
-        exit.code()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

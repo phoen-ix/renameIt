@@ -201,18 +201,33 @@ pub fn translate(args: &[String]) -> Translated {
             passthrough.push(arg.clone());
             continue;
         };
-        let mut value = || rest.next().cloned().unwrap_or_default();
+        // A switch's value is the next argument — unless there is none, or
+        // the next argument is itself a switch. Defaulting to `""` there used
+        // to turn `/p` at the end of a line into "list the current folder"
+        // and `/p /s` into a pattern called `/s` with Subfolders lost; both
+        // are the line the user typed missing something, and are said.
+        let mut value = |name: &str| -> Option<String> {
+            match rest.clone().next() {
+                Some(next) if switch_of(next).is_none() => rest.next().cloned(),
+                _ => {
+                    notes.push(format!("note: {name} needs a value and had none; ignored"));
+                    None
+                }
+            }
+        };
         match switch {
             'p' => {
-                let (d, m) = split_path(&value());
-                if let Some(m) = &m {
-                    notes.push(format!("/p split into {d} with pattern {m}"));
+                if let Some(raw) = value("/p") {
+                    let (d, m) = split_path(&raw);
+                    if let Some(m) = &m {
+                        notes.push(format!("/p split into {d} with pattern {m}"));
+                    }
+                    dir = Some(d);
+                    pattern = m;
                 }
-                dir = Some(d);
-                pattern = m;
             }
-            'l' => list = Some(value()),
-            'r' => preset = Some(value()),
+            'l' => list = value("/l"),
+            'r' => preset = value("/r"),
             'f' => include_files = true,
             'd' => include_folders = true,
             's' => subfolders = true,
@@ -252,12 +267,18 @@ pub fn translate(args: &[String]) -> Translated {
         argv.push("--preset".to_owned());
         argv.push(preset);
     }
+    let has_list = list.is_some();
     if let Some(list) = list {
         argv.push("--list".to_owned());
         argv.push(list);
     }
-    if delete_list {
+    // `/k` without `/l` has nothing to delete. Dropped with a note rather
+    // than passed on: clap would reject `--delete-list` without `--list`
+    // with a usage dump for a flag the user never typed.
+    if delete_list && has_list {
         argv.push("--delete-list".to_owned());
+    } else if delete_list {
+        notes.push("note: /k has no /l list to delete; ignored".to_owned());
     }
     if subfolders {
         argv.push("--subfolders".to_owned());
@@ -497,6 +518,31 @@ mod tests {
         let line = vec!["ren-cli".to_owned(), path.clone(), "--verbose".to_owned()];
         assert!(looks_legacy(&line));
         assert_eq!(translate(&line).argv[1..], ["preview", &path, "--verbose"]);
+    }
+
+    /// A switch at the end of the line, or followed by another switch, has
+    /// no value — and says so, rather than reading `""` and listing the
+    /// current folder or swallowing the next switch.
+    #[test]
+    fn a_switch_with_no_value_is_noted_and_ignored() {
+        assert_eq!(argv(&["/p"]), ["preview"]);
+        assert_eq!(argv(&["/p", "/s"]), ["preview", "--subfolders"]);
+        let line = vec!["ren-cli".to_owned(), "/r".to_owned()];
+        let translated = translate(&line);
+        assert_eq!(translated.argv[1..], ["preview"]);
+        assert!(
+            translated
+                .notes
+                .iter()
+                .any(|n| n.contains("/r needs a value"))
+        );
+    }
+
+    /// `/k` with no `/l` has nothing to delete; it is dropped with a note
+    /// rather than handed to clap as a flag that requires `--list`.
+    #[test]
+    fn delete_list_without_a_list_is_dropped() {
+        assert_eq!(argv(&["/k", "/f"]), ["preview"]);
     }
 
     /// A flag's *value* is not a path. Partitioning by first character used

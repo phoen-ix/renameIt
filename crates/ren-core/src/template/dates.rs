@@ -129,17 +129,6 @@ impl DateFormat {
         named(spec)
     }
 
-    /// The names the tag picker offers.
-    pub const NAMES: [&str; 7] = [
-        "General Date",
-        "Long Date",
-        "Medium Date",
-        "Short Date",
-        "Long Time",
-        "Medium Time",
-        "Short Time",
-    ];
-
     fn compile(spec: &str) -> Self {
         let mut tokens = Vec::new();
         let chars: Vec<char> = spec.chars().collect();
@@ -550,7 +539,6 @@ mod tests {
             "Short Time",
         ] {
             assert!(DateFormat::named(name).is_some(), "{name}");
-            assert!(DateFormat::NAMES.contains(&name), "{name}");
             assert!(DateFormat::named(&name.to_uppercase()).is_some(), "{name}");
             assert!(!render(name).is_empty(), "{name}");
         }

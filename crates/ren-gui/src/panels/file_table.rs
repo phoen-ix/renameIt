@@ -138,10 +138,6 @@ impl<'a> FileTable<'a> {
         self.shown.iter().any(|c| c.kind == ColumnKind::Thumbnail)
     }
 
-    pub fn visible_count(&self) -> usize {
-        self.visible.len()
-    }
-
     pub fn show(&mut self, ui: &mut egui::Ui) {
         self.points_per_pixel = ui.pixels_per_point();
         self.row_text_height = ui.text_style_height(&egui::TextStyle::Body);

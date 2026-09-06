@@ -7,15 +7,16 @@
 //! * [`app`] — layout, hotkeys, persistence.
 //! * [`theme`] — the `Style` both themes are built from.
 //!
-//! `spike` is M0's throwaway performance harness, kept because it is still the
-//! benchmark CI runs against the 50 ms budget.
+//! M0's preview-performance harness lives with the two examples that run it
+//! (`examples/spike/mod.rs`), not in this library: it is still CI's frame
+//! gate, but it is not production code and the shipped binary has no use
+//! for it.
 
 pub mod app;
 pub mod dialogs;
 pub mod editors;
 pub mod launch;
 pub mod panels;
-pub mod spike;
 pub mod theme;
 pub mod thumbs;
 pub mod viewmodel;

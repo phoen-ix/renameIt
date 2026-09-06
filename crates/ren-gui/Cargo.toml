@@ -8,6 +8,9 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "renameit"
 path = "src/main.rs"
@@ -23,12 +26,14 @@ clap.workspace = true
 egui.workspace = true
 egui_table.workspace = true
 lru.workspace = true
-rayon.workspace = true
 rfd.workspace = true
 serde = { workspace = true }
 
 [dev-dependencies]
 egui_kittest.workspace = true
+# Only the Spike B examples parallelise anything here; the app's own
+# parallelism is the engine's (D134 keeps the thumbnail decoders off rayon).
+rayon.workspace = true
 ron.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
@@ -40,4 +45,4 @@ tempfile.workspace = true
 # and cross-compiling to Windows from a Linux box would then silently drop the
 # icon. build.rs checks `CARGO_CFG_TARGET_OS` instead, which is the target.
 [build-dependencies]
-winresource = "0.1.31"
+winresource.workspace = true

@@ -9,9 +9,13 @@
 //! xvfb-run -a cargo run --release -p ren-gui --example spike_preview_app   # headless box
 //! ```
 
+// The shared harness, `examples/spike/mod.rs`: a directory without a
+// `main.rs`, so cargo does not take it for an example of its own.
+mod spike;
+
 use std::time::Duration;
 
-use ren_gui::spike::{PreviewEngine, PreviewTable, RecomputeStats, synthetic_entries};
+use spike::{PreviewEngine, PreviewTable, RecomputeStats, synthetic_entries};
 
 fn main() -> eframe::Result {
     let rows: usize = std::env::args()

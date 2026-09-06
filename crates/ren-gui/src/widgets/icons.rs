@@ -284,18 +284,6 @@ pub fn sized_icon(ui: &mut Ui, icon: Icon, side: f32, sense: Sense) -> Response 
     response
 }
 
-/// The mark alone, at whatever size the caller has already reserved.
-///
-/// For a tile, where the icon is the content rather than a decoration.
-pub fn paint_into(painter: &Painter, icon: Icon, rect: Rect, color: Color32) {
-    let side = rect.width().min(rect.height());
-    icon.paint(
-        painter,
-        Rect::from_center_size(rect.center(), Vec2::splat(side)),
-        color,
-    );
-}
-
 /// How wide an [`IconButton`] comes out, so a caller laying out a row by hand
 /// does not have to guess.
 pub fn button_size(ui: &Ui) -> Vec2 {

@@ -18,6 +18,7 @@ pub struct Diff<'a> {
 }
 
 impl Diff<'_> {
+    #[cfg(test)]
     pub fn is_unchanged(&self) -> bool {
         self.removed.is_empty() && self.added.is_empty()
     }
@@ -111,42 +112,6 @@ pub fn new_name(ui: &mut egui::Ui, old: &str, new: &str, style: DiffStyle) {
     push(diff.prefix, style.unchanged);
     push(diff.added, style.added);
     push(diff.suffix, style.unchanged);
-
-    ui.label(job);
-}
-
-/// Renders the *old* name with its removed stretch struck through.
-pub fn old_name(ui: &mut egui::Ui, old: &str, new: &str, style: DiffStyle) {
-    let diff = diff(old, new);
-    let font = egui::TextStyle::Body.resolve(ui.style());
-    let mut job = egui::text::LayoutJob::default();
-
-    if diff.prefix.is_empty() && diff.removed.is_empty() && diff.suffix.is_empty() {
-        ui.label("");
-        return;
-    }
-
-    let mut push = |text: &str, color: egui::Color32, strike: bool| {
-        if !text.is_empty() {
-            job.append(
-                text,
-                0.0,
-                egui::TextFormat {
-                    font_id: font.clone(),
-                    color,
-                    strikethrough: if strike {
-                        egui::Stroke::new(1.0, color)
-                    } else {
-                        egui::Stroke::NONE
-                    },
-                    ..Default::default()
-                },
-            );
-        }
-    };
-    push(diff.prefix, style.unchanged, false);
-    push(diff.removed, style.removed, true);
-    push(diff.suffix, style.unchanged, false);
 
     ui.label(job);
 }

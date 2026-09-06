@@ -102,6 +102,7 @@ impl Card {
     /// Whether this card is using the run-wide filter rather than one of
     /// its own — which the card says out loud, so inheritance is never a
     /// surprise.
+    #[cfg(test)]
     pub fn inherits_filter(&self) -> bool {
         self.filter.is_none()
     }

@@ -250,10 +250,6 @@ impl RunContext {
         crate::counter::pad(self.counter(index), self.counter_width)
     }
 
-    pub fn counter_width(&self) -> usize {
-        self.counter_width
-    }
-
     /// The value the running counter should start at next time — *"the number
     /// that would have been next in line if the counter had continued"*.
     pub fn next_start(&self, settings: &CounterSetup) -> i64 {

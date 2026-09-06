@@ -8,6 +8,9 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 # Only for the attribute types, which M5's journal records as before-images.
 # `FileTimes`/`TimeChange` deliberately stay off the wire: serde's `SystemTime`

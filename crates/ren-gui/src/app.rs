@@ -1733,11 +1733,6 @@ impl RenameItApp {
         self.visual_assist.as_ref().map(|state| state.target)
     }
 
-    /// The card whose editor is open.
-    pub fn expanded_card(&self) -> Option<CardId> {
-        self.expanded
-    }
-
     /// Drops answers for `<Ask>` slots the pipeline no longer has.
     ///
     /// Otherwise deleting the card that asked and adding another leaves the

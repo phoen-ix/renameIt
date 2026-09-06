@@ -259,8 +259,9 @@ pub trait Platform: Send + Sync + fmt::Debug {
     /// Constant per platform and free to ask — no probing, no syscall — so the
     /// planner can pre-flight a whole batch (P4) and the GUI can grey a control
     /// the user's machine cannot honour. It must agree with what `set_times`
-    /// and `set_attributes` really accept; `the_capability_table_and_the_setters_never_disagree`
-    /// is the guard.
+    /// and `set_attributes` really accept;
+    /// `every_capability_the_platform_claims_it_can_do_it_actually_does` in
+    /// `tests/platform.rs` is the guard.
     fn capabilities(&self) -> &'static [Capability];
 
     fn supports(&self, capability: Capability) -> bool {

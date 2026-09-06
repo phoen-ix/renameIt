@@ -214,9 +214,11 @@ impl Platform for UnixPlatform {
         // `std::fs::rename` clobbers an existing destination. Probe first.
         //
         // This is a TOCTOU window: another process can create `to` between the
-        // probe and the rename. Closing it needs `renameat2(RENAME_NOREPLACE)`,
-        // which is not supported on every filesystem and therefore needs a
-        // fallback path — deferred to M1 with the rest of the executor.
+        // probe and the rename. Closing it needs `renameat2(RENAME_NOREPLACE)`
+        // — a `libc` dependency, and a fallback for the filesystems that
+        // refuse it — and it is still open (P13). Windows ships first and is
+        // atomic through `MoveFileExW`; the window here is microseconds wide
+        // and needs a second process writing into the same folder to matter.
         if to.symlink_metadata().is_ok() && !is_same_file(from, to) {
             return Err(PlatformError::TargetExists {
                 path: to.to_path_buf(),

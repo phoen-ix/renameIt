@@ -6,7 +6,17 @@
 //! This is not production code. It exists to produce the number in
 //! `docs/spikes/preview-perf.md` and to prove the architecture in
 //! `docs/DESIGN.md` Part 1 §4 — parallel pure pass, generation counter,
-//! virtualized table — before M2 commits to it.
+//! virtualized table — before M2 commits to it. Shared by the two examples
+//! as `mod spike;`, and compiled into nothing else: it used to be a module
+//! of the library, where a harness that says "not production code" was
+//! shipped in the production binary.
+//!
+//! Its recompute is `Pipeline::evaluate` alone, which is why it is the
+//! *frame* gate and `ren-core/examples/plan_budget.rs` is the planning gate
+//! (D165).
+
+// Each example uses a different half of this.
+#![allow(dead_code)]
 
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

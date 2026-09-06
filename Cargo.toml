@@ -76,7 +76,6 @@ koto_bytecode = { version = "0.16.1", default-features = false }
 # docs/DESIGN.md S6. Its ban reason for `symphonia` in deny.toml asserts this
 # crate supplies bitrate/length/channels, so that claim is now load-bearing.
 lofty = "0.25.0"
-env_logger = "0.11.11"
 proptest = "1.11.0"
 rust_decimal = { version = "1.42.1", default-features = false, features = ["std", "serde"] }
 fancy-regex = "0.19.0"
@@ -88,7 +87,6 @@ fancy-regex = "0.19.0"
 regex = "1.13.1"
 filetime = "0.2.29"
 infer = "0.22.0"
-log = "0.4.33"
 rayon = "1.12.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
@@ -113,6 +111,9 @@ egui_kittest = "0.36.1"
 # Native file dialogs. Its defaults are xdg-portal + wayland, so the Linux
 # build needs no GTK.
 rfd = "0.17.2"
+# Stamps the Windows .exe with our icon and version metadata
+# (`ren-gui/build.rs`). MIT, no dependencies of its own; audited under D2.
+winresource = "0.1.31"
 
 [workspace.dependencies.windows-sys]
 version = "0.61.2"
@@ -130,6 +131,14 @@ features = [
     "Win32_System_Environment",
     "Win32_UI_Shell",
 ]
+
+# The gate is `-D warnings` (CLAUDE.md, ci.yml). Stated here as well, so a
+# plain `cargo clippy` on a developer's machine gives the verdict CI gives
+# rather than a softer one; every crate opts in with `[lints] workspace =
+# true`. Rust's own `warnings` group only — clippy's are already denied by
+# the command line, and denying them here too would double every message.
+[workspace.lints.rust]
+warnings = "deny"
 
 [profile.release]
 lto = "thin"

@@ -87,7 +87,7 @@ pub const VERSION_VALUE: &str = "RenameItMenuVersion";
 pub const MENU_VERSION: u32 = 1;
 
 /// The submenu's own label.
-pub const MENU_LABEL: &str = "RenameIt";
+pub(crate) const MENU_LABEL: &str = "RenameIt";
 
 /// Where the shared child menus live, **relative to HKCR** — which is exactly
 /// the form `ExtendedSubCommandsKey` wants written into it.
@@ -349,13 +349,19 @@ impl ShellPlan {
         steps.push(Step::sz(&format!(r"{key}\command"), "", command));
     }
 
-    /// The menu's labels, in menu order — for Settings to draw what will be
-    /// written rather than a description of it.
-    pub fn menu_labels(&self) -> Vec<&str> {
+    /// The menu's labels, in menu order, for the tests that read a plan back
+    /// as a menu. The three verb roots carry the submenu's own label and are
+    /// left out, so what remains is the items a user would see.
+    #[cfg(test)]
+    pub(crate) fn menu_labels(&self) -> Vec<&str> {
         self.steps
             .iter()
             .filter_map(|step| match step {
-                Step::Set { key, name, value } if name == "MUIVerb" && key.contains(r"\shell\") => {
+                Step::Set { key, name, value }
+                    if name == "MUIVerb"
+                        && key.contains(r"\shell\")
+                        && !key.ends_with(&format!(r"\{MENU_LABEL}")) =>
+                {
                     match value {
                         Value::Sz(text) => Some(text.as_str()),
                         Value::Dword(_) => None,
@@ -366,12 +372,14 @@ impl ShellPlan {
             .collect()
     }
 
-    /// The plan as `.reg` text — for the snapshot test, and for a bug report a
-    /// user can paste into a reply.
+    /// The plan as `.reg` text, for the snapshot test to hold beside
+    /// Microsoft's own sample.
     ///
-    /// It has to be **importable**, not merely readable: half the point of the
-    /// snapshot is that a human can hold it beside Microsoft's own sample, and
-    /// the other half is that a user on a broken install can double-click it.
+    /// It has to be **importable**, not merely readable: a snapshot that a
+    /// human can read but `regedit` cannot import would prove nothing about
+    /// the values, and a user on a broken install could double-click a saved
+    /// one — nothing offers it to them yet, which is why this doc no longer
+    /// claims it does.
     /// Every value here contains quotes — `Icon` is `"<exe>",0` and every
     /// command starts with a quoted path — so unescaped output would have
     /// looked fine and imported as garbage.

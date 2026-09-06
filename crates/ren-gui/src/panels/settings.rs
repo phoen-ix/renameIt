@@ -912,11 +912,14 @@ fn shell_ui(
     ui.add_space(6.0);
     if installed {
         ui.horizontal(|ui| {
+            // What the menu holds, not what the folder holds: the plan stops
+            // at `MAX_PRESETS`, and a count above it would describe a menu
+            // that does not exist.
+            let shown = menu.len().min(ren_platform::shell::plan::MAX_PRESETS);
             ui.label(
                 egui::RichText::new(format!(
-                    "Installed, with {} preset{} in it.",
-                    menu.len(),
-                    if menu.len() == 1 { "" } else { "s" }
+                    "Installed, with {shown} preset{} in it.",
+                    if shown == 1 { "" } else { "s" }
                 ))
                 .small(),
             );
@@ -932,6 +935,21 @@ fn shell_ui(
                 failure = platform.set_context_menu(true, &menu).err();
             }
         });
+    }
+
+    if menu.len() > ren_platform::shell::plan::MAX_PRESETS {
+        // Said here because nothing else says it: the plan truncates the
+        // list silently, and a user with forty-five presets would otherwise
+        // find five missing from the menu with no clue why.
+        ui.label(
+            egui::RichText::new(format!(
+                "The menu holds the first {} presets by name; {} more are here but not in it.",
+                ren_platform::shell::plan::MAX_PRESETS,
+                menu.len() - ren_platform::shell::plan::MAX_PRESETS
+            ))
+            .color(ui.visuals().warn_fg_color)
+            .small(),
+        );
     }
 
     if let Some(error) = failure {
