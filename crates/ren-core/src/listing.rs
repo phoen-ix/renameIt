@@ -82,13 +82,10 @@ impl ListOptions {
     /// An entry whose metadata could not be read is **shown**: it is a real row
     /// in the folder, and hiding it because a `stat` failed would be the
     /// silent-subset failure P63 exists to prevent.
-    fn shows(&self, path: &Path, metadata: Option<&std::fs::Metadata>) -> bool {
+    fn shows(&self, path: &Path, metadata: &std::fs::Metadata) -> bool {
         if self.hidden && self.system && self.read_only {
             return true; // The default; nothing to ask.
         }
-        let Some(metadata) = metadata else {
-            return true;
-        };
         let seen = ren_platform::visibility(path, metadata);
         (self.hidden || !seen.hidden)
             && (self.system || !seen.system)
@@ -190,14 +187,29 @@ pub fn list_reporting(
                 continue;
             }
         }
-        // After the pattern, before the `stat`: `metadata()` here is the one
-        // walkdir already took, so the three switches cost no syscall.
-        if !options.shows(entry.path(), entry.metadata().ok().as_ref()) {
+        // One `stat` per entry, after the pattern so a masked-out file costs
+        // none. On Windows walkdir's record is the `FindNextFileW` data and
+        // this is free; on Unix it is a `symlink_metadata`. Either way it is
+        // taken once and serves both the visibility switches and the row —
+        // the row used to `stat` again on its own, which on Windows was the
+        // expensive open-handle call and the whole cost of the listing.
+        //
+        // A file that vanished between the walk and the `stat` is one row
+        // missing, not a dead listing (P63).
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                problems.push(ListProblem {
+                    path: entry.path().to_path_buf(),
+                    error: error.to_string(),
+                });
+                continue;
+            }
+        };
+        if !options.shows(entry.path(), &metadata) {
             continue;
         }
-        // Same rule one level down: a file that vanished between the walk and
-        // the `stat` is one row missing, not a dead listing.
-        match FileEntry::from_path(entry.path()) {
+        match FileEntry::from_metadata(entry.path(), &metadata) {
             Ok(file) => entries.push(file),
             Err(error) => problems.push(ListProblem {
                 path: entry.path().to_path_buf(),
@@ -219,6 +231,37 @@ mod tests {
             .into_iter()
             .map(|e| e.file_name)
             .collect()
+    }
+
+    /// A symlink is listed as the entry it is, not as what it points at: a
+    /// dangling one is a real, renameable row rather than a problem, and one
+    /// pointing at a folder is a file row — which is what the Files chip
+    /// already admitted it as, from walkdir's own file type. Following the
+    /// link made the two disagree, and `<DirFiles>` on such a row counted
+    /// the target folder's contents.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_is_a_row_about_the_link_and_not_its_target() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("plain.txt"), b"x").unwrap();
+        std::fs::create_dir(dir.path().join("folder")).unwrap();
+        std::fs::write(dir.path().join("folder/inside.txt"), b"x").unwrap();
+        std::os::unix::fs::symlink("nowhere", dir.path().join("dangling")).unwrap();
+        std::os::unix::fs::symlink("folder", dir.path().join("to-folder")).unwrap();
+
+        let (entries, problems) = list_reporting(dir.path(), ListOptions::default()).unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        let names: Vec<&str> = entries.iter().map(|e| e.file_name.as_str()).collect();
+        assert_eq!(names, ["dangling", "plain.txt", "to-folder"]);
+        assert!(
+            entries.iter().all(|e| !e.is_dir),
+            "a link to a folder is not a folder row"
+        );
+
+        // And the same answer from the constructor Free Select uses.
+        let linked = FileEntry::from_path(dir.path().join("to-folder")).unwrap();
+        assert!(!linked.is_dir);
+        assert!(FileEntry::from_path(dir.path().join("dangling")).is_ok());
     }
 
     /// *"Show write protected … files and folders"*, and what happens when it

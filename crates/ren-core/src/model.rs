@@ -56,9 +56,29 @@ pub(crate) fn name_of(raw: &std::ffi::OsStr) -> (String, bool) {
 }
 
 impl FileEntry {
+    /// An entry read from disk, with one `stat`.
+    ///
+    /// `symlink_metadata`, not `metadata`: the row describes the directory
+    /// entry as it is, the way the Files/Folders chips (walkdir's own file
+    /// type) and every other probe in the engine already do. Following the
+    /// link listed a symlink to a folder under the Files chip and then called
+    /// it a folder, and dropped a dangling one as unreadable (P63's failure)
+    /// when it is a real, renameable entry.
     pub fn from_path(path: impl Into<PathBuf>) -> std::io::Result<Self> {
         let path = path.into();
-        let metadata = std::fs::metadata(&path)?;
+        let metadata = std::fs::symlink_metadata(&path)?;
+        Self::from_metadata(path, &metadata)
+    }
+
+    /// An entry from a `stat` somebody else already took — the listing walk,
+    /// whose `walkdir` record is free on Windows and one syscall on Unix. A
+    /// second `stat` per entry was the whole cost of listing a folder on the
+    /// platform that ships first.
+    pub fn from_metadata(
+        path: impl Into<PathBuf>,
+        metadata: &std::fs::Metadata,
+    ) -> std::io::Result<Self> {
+        let path = path.into();
         let raw = path.file_name().ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
