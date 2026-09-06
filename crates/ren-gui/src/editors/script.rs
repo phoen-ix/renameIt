@@ -11,123 +11,124 @@
 
 use ren_core::ops::Script;
 
+use crate::widgets::form::{After, Form};
+use crate::widgets::icons::{Icon, icon_button};
+
 pub fn ui(ui: &mut egui::Ui, op: &mut Script, cx: &crate::editors::EditorCx<'_>) -> bool {
     let mut changed = false;
     let store = op.store();
+    let error = ui.visuals().error_fg_color;
 
-    ui.horizontal(|ui| {
-        ui.label("Choose script:");
-        egui::ComboBox::from_id_salt("script_choice")
-            .selected_text(if op.script.is_empty() {
-                "— none —".to_owned()
-            } else {
-                op.script.clone()
+    Form::new("script").show(ui, |form| {
+        changed |= form
+            .row("Choose script:", After::Buttons(1), |row| {
+                let width = row.field_width();
+                let ui = row.ui();
+                let mut changed = false;
+                egui::ComboBox::from_id_salt("script_choice")
+                    .selected_text(if op.script.is_empty() {
+                        "— none —".to_owned()
+                    } else {
+                        op.script.clone()
+                    })
+                    .width(width)
+                    .show_ui(ui, |ui| {
+                        // Only here, so the folder is read when the user opens the
+                        // list rather than sixty times a second.
+                        let (scripts, legacy) = store.list();
+                        changed |= ui
+                            .selectable_value(&mut op.script, String::new(), "— none —")
+                            .changed();
+                        for entry in &scripts {
+                            let response = ui
+                                .selectable_value(&mut op.script, entry.name.clone(), &entry.name)
+                                .on_hover_text(if entry.header.description.is_empty() {
+                                    entry.path.display().to_string()
+                                } else {
+                                    entry.header.description.clone()
+                                });
+                            changed |= response.changed();
+                        }
+                        if scripts.is_empty() {
+                            ui.label(
+                                egui::RichText::new("No scripts in the folder.")
+                                    .weak()
+                                    .small(),
+                            );
+                        }
+                        // Listed, not hidden: a folder of .frs files that simply did
+                        // not appear would leave the user with nothing to go on.
+                        if !legacy.is_empty() {
+                            ui.separator();
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} .frs script(s) here cannot run — see docs/MIGRATION-legacy-scripts.md",
+                                    legacy.len()
+                                ))
+                                .weak()
+                                .small(),
+                            );
+                        }
+                    });
+
+                // Opening the folder rather than one file: it avoids hard-coding an
+                // editor, and it is also the only way to *add* a script.
+                if icon_button(ui, Icon::Folder, "Open the scripts folder")
+                    .on_hover_text(format!("Open {}", store.dir().display()))
+                    .clicked()
+                {
+                    let _ = cx.platform.reveal_in_file_manager(store.dir());
+                }
+                changed
             })
-            .width(220.0)
-            .show_ui(ui, |ui| {
-                // Only here, so the folder is read when the user opens the
-                // list rather than sixty times a second.
-                let (scripts, legacy) = store.list();
-                changed |= ui
-                    .selectable_value(&mut op.script, String::new(), "— none —")
-                    .changed();
-                for entry in &scripts {
-                    let response = ui
-                        .selectable_value(&mut op.script, entry.name.clone(), &entry.name)
-                        .on_hover_text(if entry.header.description.is_empty() {
-                            entry.path.display().to_string()
-                        } else {
-                            entry.header.description.clone()
-                        });
-                    changed |= response.changed();
-                }
-                if scripts.is_empty() {
-                    ui.label(
-                        egui::RichText::new("No scripts in the folder.")
-                            .weak()
-                            .small(),
-                    );
-                }
-                // Listed, not hidden: a folder of .frs files that simply did
-                // not appear would leave the user with nothing to go on.
-                if !legacy.is_empty() {
-                    ui.separator();
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{} .frs script(s) here cannot run — see docs/MIGRATION-legacy-scripts.md",
-                            legacy.len()
-                        ))
-                        .weak()
-                        .small(),
-                    );
-                }
-            });
+            .inner;
 
-        // Opening the folder rather than one file: it avoids hard-coding an
-        // editor, and it is also the only way to *add* a script.
-        if ui
-            .button("📂")
-            .on_hover_text(format!("Open {}", store.dir().display()))
-            .clicked()
-        {
-            let _ = cx.platform.reveal_in_file_manager(store.dir());
-        }
-    });
-
-    // The description, and the argument hint, both read off the chosen script.
-    let chosen = op.chosen();
-    if let Some(chosen) = &chosen {
-        match &**chosen {
-            Ok(compiled) => {
-                let header = compiled.header();
-                if !header.description.is_empty() {
-                    ui.label(
-                        egui::RichText::new(format!("Description: {}", header.description))
-                            .weak()
-                            .small(),
-                    );
+        // The description, and the argument hint, both read off the chosen script.
+        let chosen = op.chosen();
+        if let Some(chosen) = &chosen {
+            match &**chosen {
+                Ok(compiled) => {
+                    let header = compiled.header();
+                    if !header.description.is_empty() {
+                        form.note(format!("Description: {}", header.description));
+                    }
+                }
+                Err(error_text) => {
+                    form.note(egui::RichText::new(format!("⚠ {error_text}")).color(error));
                 }
             }
-            Err(error) => {
-                ui.label(
-                    egui::RichText::new(format!("⚠ {error}"))
-                        .color(ui.visuals().error_fg_color)
-                        .small(),
+        }
+
+        let hint = chosen
+            .as_ref()
+            .and_then(|c| c.as_ref().as_ref().ok())
+            .and_then(|c| c.header().args.clone());
+
+        changed |= form
+            .row("Arguments:", After::Nothing, |row| {
+                let width = row.field_width();
+                let field = row.ui().add(
+                    egui::TextEdit::singleline(&mut op.args)
+                        .desired_width(width)
+                        .hint_text(hint.clone().unwrap_or_default())
+                        .id_salt("script_args"),
                 );
-            }
-        }
-    }
+                let changed = field.changed();
+                // `# args:` pulls the argument syntax out of the description
+                // paragraph to where it is actually needed.
+                if let Some(hint) = &hint
+                    && !hint.is_empty()
+                {
+                    field.on_hover_text(hint);
+                }
+                changed
+            })
+            .inner;
 
-    let hint = chosen
-        .as_ref()
-        .and_then(|c| c.as_ref().as_ref().ok())
-        .and_then(|c| c.header().args.clone());
-
-    ui.horizontal(|ui| {
-        ui.label("Arguments:");
-        let field = ui.add(
-            egui::TextEdit::singleline(&mut op.args)
-                .desired_width(220.0)
-                .hint_text(hint.clone().unwrap_or_default())
-                .id_salt("script_args"),
-        );
-        changed |= field.changed();
-        // `# args:` pulls the argument syntax out of the description
-        // paragraph to where it is actually needed.
-        if let Some(hint) = &hint
-            && !hint.is_empty()
-        {
-            field.on_hover_text(hint);
+        if hint.is_none() && chosen.is_some() {
+            form.note("This script does not take arguments.");
         }
     });
-
-    if hint.is_none() && chosen.is_some() {
-        ui.label(
-            egui::RichText::new("This script does not take arguments.")
-                .weak()
-                .small(),
-        );
-    }
 
     ui.add_space(4.0);
     ui.label(

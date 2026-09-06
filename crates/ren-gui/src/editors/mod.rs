@@ -22,6 +22,7 @@ use ren_core::model::{FileEntry, Scope};
 use ren_core::ops::OpKind;
 
 use crate::dialogs::FileDialogs;
+use crate::widgets::form::After;
 
 mod add_counter;
 mod add_remove;
@@ -186,14 +187,8 @@ impl<'a> EditorCx<'a> {
 /// panics on two matches and an Add & Remove card in *Both* mode has two.
 pub(crate) fn assist_button(ui: &mut egui::Ui, cx: &EditorCx<'_>, target: assist::AssistTarget) {
     let lit = cx.assist_for(target).is_some();
-    let label = match target {
-        assist::AssistTarget::ReplaceFind => "⌖ find",
-        assist::AssistTarget::AddPos => "⌖ position",
-        assist::AssistTarget::RemoveSection => "⌖ section",
-        assist::AssistTarget::MoveCut => "⌖ cut",
-    };
     if ui
-        .selectable_label(lit, label)
+        .selectable_label(lit, assist_label(target))
         .on_hover_text(format!("{} (F3)", target.prompt()))
         .clicked()
     {
@@ -201,6 +196,30 @@ pub(crate) fn assist_button(ui: &mut egui::Ui, cx: &EditorCx<'_>, target: assist
             card: cx.card,
             target,
         });
+    }
+}
+
+/// What the ⌖ for `target` says. A function rather than a literal at the call
+/// site because the form has to reserve the button's width *before* the field
+/// in front of it is drawn ([`After::Marker`]), and a reservation measured on
+/// one string while the button is drawn with another is the overflow the form
+/// exists to remove.
+pub(crate) fn assist_label(target: assist::AssistTarget) -> &'static str {
+    match target {
+        assist::AssistTarget::ReplaceFind => "⌖ find",
+        assist::AssistTarget::AddPos => "⌖ position",
+        assist::AssistTarget::RemoveSection => "⌖ section",
+        assist::AssistTarget::MoveCut => "⌖ cut",
+    }
+}
+
+/// What trails a tag field with a history: the `<tags>` picker, and the
+/// chevron — which `tag_field` only draws once there is something to show.
+pub(crate) fn after_tag_field(history: &[String]) -> After<'static> {
+    if history.is_empty() {
+        After::TagPicker
+    } else {
+        After::TagPickerAnd(1)
     }
 }
 
@@ -229,9 +248,15 @@ pub fn ui(ui: &mut egui::Ui, op: &mut OpKind, cx: &EditorCx<'_>) -> bool {
     }
 }
 
-/// A labelled integer box, which every position-based operation needs.
+/// A labelled integer box, for a row laid out by hand — the Batch Replace
+/// table's *Skip:* and *Max:*.
 pub(crate) fn number(ui: &mut egui::Ui, label: &str, value: &mut usize) -> bool {
     ui.label(label);
+    number_box(ui, value).changed()
+}
+
+/// The integer box alone, for a [`Form`](crate::widgets::form::Form) row that
+/// draws its own label — which every position-based operation's editor now is.
+pub(crate) fn number_box(ui: &mut egui::Ui, value: &mut usize) -> egui::Response {
     crate::widgets::number::add(ui, egui::DragValue::new(value).range(0..=99_999).speed(0.2))
-        .changed()
 }

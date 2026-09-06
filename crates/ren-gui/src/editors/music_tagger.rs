@@ -15,7 +15,8 @@ use ren_core::ops::MusicTagger;
 use ren_core::template::TextTemplate;
 
 use super::EditorCx;
-use crate::widgets::tag_field::tag_field;
+use crate::widgets::form::{After, Form};
+use crate::widgets::tag_field;
 
 pub fn ui(ui: &mut egui::Ui, op: &mut MusicTagger, cx: &EditorCx<'_>) -> bool {
     let mut changed = false;
@@ -65,12 +66,73 @@ pub fn ui(ui: &mut egui::Ui, op: &mut MusicTagger, cx: &EditorCx<'_>) -> bool {
 
     ui.add_space(4.0);
 
-    for (field, slot) in op.boxes() {
-        ui.horizontal(|ui| {
+    // The row's own memory is keyed off the card's id, and read through the
+    // context because the form holds the `Ui` while its rows are drawn.
+    let base = ui.id();
+    let ctx = ui.ctx().clone();
+    Form::new("music_tagger").show(ui, |form| {
+        for (field, slot) in op.boxes() {
+            let id = base.with(("tagger", field.label()));
+            let dropdown = field == MusicField::Genre;
+            let after = if dropdown {
+                After::Nothing
+            } else {
+                After::TagPicker
+            };
             let mut on = slot.is_some();
-            let id = ui.id().with(("tagger", field.label()));
-            if ui
-                .checkbox(&mut on, field.label())
+            // Drawn from the state the row started the frame in; the tick is
+            // applied below, once the checkbox that is the row's label has
+            // answered.
+            let line = form.check(&mut on, field.label(), after, |row| {
+                let width = row.field_width();
+                match slot {
+                    None => {
+                        // Greyed rather than removed, so the row does not jump
+                        // around as boxes are ticked — and with the picker the
+                        // live row will have, so the box keeps its width too.
+                        row.ui().add_enabled_ui(false, |ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut String::new()).desired_width(width),
+                            );
+                            if !dropdown {
+                                let _ =
+                                    tag_field::menu(ui, &format!("tagger_{}_off", field.label()));
+                            }
+                        });
+                        false
+                    }
+                    Some(template) if dropdown => {
+                        let mut picked = template.as_str().to_owned();
+                        egui::ComboBox::from_id_salt(id)
+                            .selected_text(if picked.is_empty() { "—" } else { &picked })
+                            .height(320.0)
+                            .show_ui(row.ui(), |ui| {
+                                for genre in GENRES {
+                                    if ui.selectable_label(picked == *genre, *genre).clicked() {
+                                        picked = (*genre).to_owned();
+                                    }
+                                }
+                            });
+                        if picked != template.as_str() {
+                            *template = TextTemplate::new(picked);
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    Some(template) => row.column(|ui| {
+                        tag_field::tag_field(
+                            ui,
+                            &format!("tagger_{}", field.label()),
+                            template,
+                            width,
+                        )
+                    }),
+                }
+            });
+            changed |= line.inner;
+            if line
+                .label
                 .on_hover_text(
                     "Clear this and the field is not written — whatever the file already \
                      says is left intact.",
@@ -80,50 +142,19 @@ pub fn ui(ui: &mut egui::Ui, op: &mut MusicTagger, cx: &EditorCx<'_>) -> bool {
                 *slot = if on {
                     // Whatever was in the box last time, so unticking is not a
                     // punishment for changing your mind.
-                    let remembered: String = ui.data(|d| d.get_temp(id).unwrap_or_default());
+                    let remembered: String = ctx.data(|d| d.get_temp(id).unwrap_or_default());
                     Some(TextTemplate::new(remembered))
                 } else {
                     if let Some(had) = slot.as_ref() {
                         let text = had.as_str().to_owned();
-                        ui.data_mut(|d| d.insert_temp(id, text));
+                        ctx.data_mut(|d| d.insert_temp(id, text));
                     }
                     None
                 };
                 changed = true;
             }
-
-            match slot {
-                None => {
-                    // Greyed rather than removed, so the row does not jump
-                    // around as boxes are ticked.
-                    ui.add_enabled(
-                        false,
-                        egui::TextEdit::singleline(&mut String::new()).desired_width(200.0),
-                    );
-                }
-                Some(template) if field == MusicField::Genre => {
-                    let mut picked = template.as_str().to_owned();
-                    egui::ComboBox::from_id_salt(id)
-                        .selected_text(if picked.is_empty() { "—" } else { &picked })
-                        .height(320.0)
-                        .show_ui(ui, |ui| {
-                            for genre in GENRES {
-                                if ui.selectable_label(picked == *genre, *genre).clicked() {
-                                    picked = (*genre).to_owned();
-                                }
-                            }
-                        });
-                    if picked != template.as_str() {
-                        *template = TextTemplate::new(picked);
-                        changed = true;
-                    }
-                }
-                Some(template) => {
-                    changed |= tag_field(ui, &format!("tagger_{}", field.label()), template, 200.0);
-                }
-            }
-        });
-    }
+        }
+    });
 
     ui.add_space(6.0);
     ui.label(

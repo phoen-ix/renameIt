@@ -6,6 +6,8 @@
 
 use ren_core::ops::{CaseMode, Casing};
 
+use crate::widgets::form::{After, Form};
+
 const MODES: [(CaseMode, &str); 7] = [
     (CaseMode::Upper, "UPPER CASE"),
     (CaseMode::Lower, "lower case"),
@@ -121,12 +123,17 @@ pub fn ui(ui: &mut egui::Ui, op: &mut Casing) -> bool {
     }
 
     if op.mode == CaseMode::Random {
-        ui.horizontal(|ui| {
-            ui.label("Seed:");
-            changed |=
-                crate::widgets::number::add(ui, egui::DragValue::new(&mut op.seed).speed(1.0))
+        Form::new("casing_seed").show(ui, |form| {
+            changed |= form
+                .row("Seed:", After::Nothing, |row| {
+                    crate::widgets::number::add(
+                        row.ui(),
+                        egui::DragValue::new(&mut op.seed).speed(1.0),
+                    )
                     .on_hover_text("Random casing is seeded, so the preview and the rename agree.")
-                    .changed();
+                    .changed()
+                })
+                .inner;
         });
     }
 

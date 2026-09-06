@@ -3,17 +3,24 @@
 
 use ren_core::ops::RemoveTags;
 
+use crate::widgets::form::{After, Form, Row};
+
 pub fn ui(ui: &mut egui::Ui, op: &mut RemoveTags) -> bool {
     let mut changed = false;
 
-    ui.label("Remove these tags, if present:");
-    ui.add_space(2.0);
-    for (kind, on) in op.boxes() {
-        ui.horizontal(|ui| {
-            ui.add_space(12.0);
-            changed |= ui.checkbox(on, kind.label()).changed();
-        });
-    }
+    // One label for the three boxes: the first shares its row, the other two
+    // continue it.
+    Form::new("remove_tags").show(ui, |form| {
+        for (index, (kind, on)) in op.boxes().into_iter().enumerate() {
+            let content = |row: &mut Row<'_>| row.ui().checkbox(on, kind.label()).changed();
+            changed |= if index == 0 {
+                form.row("Remove these tags, if present:", After::Nothing, content)
+            } else {
+                form.unlabelled(After::Nothing, content)
+            }
+            .inner;
+        }
+    });
 
     ui.add_space(6.0);
     if op.id3v1 || op.id3v2 || op.lyrics {

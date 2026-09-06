@@ -2,6 +2,7 @@
 
 use ren_core::ops::{NumberAction, NumberTarget, ReNumber};
 
+use crate::widgets::form::{After, Form, FormUi};
 use crate::widgets::tag_field::tag_field;
 
 pub fn ui(ui: &mut egui::Ui, op: &mut ReNumber) -> bool {
@@ -24,32 +25,48 @@ pub fn ui(ui: &mut egui::Ui, op: &mut ReNumber) -> bool {
     ui.add_space(4.0);
     ui.group(|ui| {
         ui.label(egui::RichText::new("Only numbers").strong());
-        changed |= threshold(ui, "larger or equal to", "renumber_low", &mut op.at_least);
-        changed |= threshold(ui, "less or equal to", "renumber_high", &mut op.at_most);
+        Form::new("renumber_only").show(ui, |form| {
+            changed |= threshold(form, "larger or equal to", &mut op.at_least);
+            changed |= threshold(form, "less or equal to", &mut op.at_most);
+        });
     });
 
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt("renumber_action")
-            .selected_text(op.action.label())
-            .show_ui(ui, |ui| {
-                for action in NumberAction::all() {
-                    changed |= ui
-                        .selectable_value(&mut op.action, action, action.label())
-                        .changed();
+    // The action captions the operand — *[x] Multiply by:* and the box it
+    // multiplies by read as one line — so the combo is the row's label.
+    let needs_operand = op.action.needs_operand();
+    Form::new("renumber_action").show(ui, |form| {
+        let line = form.labelled(
+            |ui| {
+                egui::ComboBox::from_id_salt("renumber_action")
+                    .selected_text(op.action.label())
+                    .show_ui(ui, |ui| {
+                        for action in NumberAction::all() {
+                            changed |= ui
+                                .selectable_value(&mut op.action, action, action.label())
+                                .changed();
+                        }
+                    })
+                    .response
+            },
+            if needs_operand {
+                After::TagPicker
+            } else {
+                After::Nothing
+            },
+            |row| {
+                if !needs_operand {
+                    return false;
                 }
-            });
-    });
-    if op.action.needs_operand() {
-        changed |= tag_field(ui, "renumber_operand", &mut op.operand, 180.0);
-        if op.action.needs_number() {
-            ui.label(
-                egui::RichText::new("This one takes a number.")
-                    .weak()
-                    .small(),
-            );
+                let width = row.field_width();
+                row.column(|ui| tag_field(ui, "renumber_operand", &mut op.operand, width))
+            },
+        );
+        changed |= line.inner;
+        if needs_operand && op.action.needs_number() {
+            form.note("This one takes a number.");
         }
-    }
+    });
 
     ui.add_space(4.0);
     changed |= ui
@@ -78,26 +95,29 @@ pub fn ui(ui: &mut egui::Ui, op: &mut ReNumber) -> bool {
 }
 
 /// One of the two optional range limits: a checkbox that owns an `Option`.
-fn threshold(ui: &mut egui::Ui, label: &str, id: &str, value: &mut Option<i64>) -> bool {
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        let mut on = value.is_some();
-        if ui.checkbox(&mut on, label).changed() {
-            *value = on.then_some(0);
-            changed = true;
+///
+/// The box is drawn from the state the row started the frame in and the
+/// toggle is applied after it — the checkbox is the row's label, so it has
+/// been drawn before the content is.
+fn threshold(form: &mut FormUi<'_>, label: &str, value: &mut Option<i64>) -> bool {
+    let mut on = value.is_some();
+    let line = form.check(&mut on, label, After::Nothing, |row| match value.as_mut() {
+        Some(number) => crate::widgets::number::add(
+            row.ui(),
+            egui::DragValue::new(number)
+                .speed(0.2)
+                .range(-1_000_000..=1_000_000),
+        )
+        .changed(),
+        None => {
+            crate::widgets::number::add_enabled(row.ui(), false, egui::DragValue::new(&mut 0i64));
+            false
         }
-        if let Some(number) = value.as_mut() {
-            changed |= crate::widgets::number::add(
-                ui,
-                egui::DragValue::new(number)
-                    .speed(0.2)
-                    .range(-1_000_000..=1_000_000),
-            )
-            .changed();
-        } else {
-            ui.add_enabled(false, egui::DragValue::new(&mut 0i64));
-        }
-        let _ = id;
     });
+    let mut changed = line.inner;
+    if line.label.changed() {
+        *value = on.then_some(0);
+        changed = true;
+    }
     changed
 }
