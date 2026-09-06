@@ -12,7 +12,8 @@ use std::time::SystemTime;
 use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_NORMAL,
-    FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_SYSTEM, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE,
+    FILE_ATTRIBUTE_NOT_CONTENT_INDEXED, FILE_ATTRIBUTE_OFFLINE, FILE_ATTRIBUTE_READONLY,
+    FILE_ATTRIBUTE_SYSTEM, FILE_ATTRIBUTE_TEMPORARY, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE,
     FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES, GetFileAttributesW,
     INVALID_FILE_ATTRIBUTES, MoveFileExW, OPEN_EXISTING, SetFileAttributesW, SetFileTime,
 };
@@ -33,6 +34,14 @@ const MANAGED_ATTRIBUTES: u32 = FILE_ATTRIBUTE_READONLY
     | FILE_ATTRIBUTE_HIDDEN
     | FILE_ATTRIBUTE_SYSTEM
     | FILE_ATTRIBUTE_ARCHIVE;
+
+/// Everything `SetFileAttributesW` is documented to accept: the four we
+/// manage, plus the three a file may carry that we preserve.
+const SETTABLE_ATTRIBUTES: u32 = MANAGED_ATTRIBUTES
+    | FILE_ATTRIBUTE_NORMAL
+    | FILE_ATTRIBUTE_TEMPORARY
+    | FILE_ATTRIBUTE_OFFLINE
+    | FILE_ATTRIBUTE_NOT_CONTENT_INDEXED;
 
 #[derive(Debug, Default)]
 pub struct WindowsPlatform {
@@ -274,7 +283,12 @@ impl Platform for WindowsPlatform {
         };
         let wanted = change.apply_to(current);
 
-        let mut raw = current_raw & !MANAGED_ATTRIBUTES;
+        // Only what `SetFileAttributesW` can set travels back with the
+        // change. Compressed, encrypted, sparse and reparse bits are
+        // reported by `GetFileAttributesW` and are not settable through this
+        // call — the kernel ignores them in practice, but passing them is
+        // relying on that, and the documented settable set is short.
+        let mut raw = current_raw & !MANAGED_ATTRIBUTES & SETTABLE_ATTRIBUTES;
         if wanted.read_only {
             raw |= FILE_ATTRIBUTE_READONLY;
         }
@@ -351,14 +365,22 @@ impl Platform for WindowsPlatform {
     }
 
     fn reveal_in_file_manager(&self, path: &Path) -> Result<()> {
+        use std::os::windows::process::CommandExt as _;
+
         // A folder opens; a file opens its folder with the file selected.
-        let arg = if path.is_dir() {
-            path.display().to_string()
+        //
+        // `raw_arg`, not `arg`: Explorer parses its own command line rather
+        // than going through `CommandLineToArgvW`, and `arg` would quote the
+        // whole `/select,C:\My Folder\a.txt` as one string the moment the
+        // path has a space in it. The switch stays bare and only the path is
+        // quoted, which is the form Explorer documents.
+        let mut command = Command::new("explorer.exe");
+        if path.is_dir() {
+            command.raw_arg(format!("\"{}\"", path.display()));
         } else {
-            format!("/select,{}", path.display())
-        };
-        Command::new("explorer.exe")
-            .arg(arg)
+            command.raw_arg(format!("/select,\"{}\"", path.display()));
+        }
+        command
             .spawn()
             .map(|_| ())
             .map_err(|e| PlatformError::io(path, e))

@@ -56,16 +56,37 @@ mod mounts {
 
     /// `/proc/mounts` is `device mountpoint fstype options dump pass`, with
     /// octal escapes in the two path-ish fields.
+    ///
+    /// The table holds every DOS-shaped mount, and every *other* mount that
+    /// sits underneath one — an ext4 volume bind-mounted inside an NTFS
+    /// tree, say — so the longest-prefix lookup can fall back to POSIX
+    /// there rather than answering with the parent's rules. Every other
+    /// mount is left out: on a machine with no DOS volume the table is
+    /// empty and the planner's per-row lookup scans nothing, and a table
+    /// that listed `/` would make every path a hit.
     fn parse(text: &str) -> Vec<(PathBuf, &'static NamingRules)> {
-        text.lines()
+        let mounts: Vec<(PathBuf, bool)> = text
+            .lines()
             .filter_map(|line| {
                 let mut fields = line.split_whitespace();
                 let _device = fields.next()?;
                 let mount = unescape(fields.next()?);
                 let fstype = fields.next()?;
-                DOS_LIKE
-                    .contains(&fstype)
-                    .then(|| (PathBuf::from(mount), &naming::WINDOWS))
+                Some((PathBuf::from(mount), DOS_LIKE.contains(&fstype)))
+            })
+            .collect();
+        mounts
+            .iter()
+            .filter_map(|(mount, dos)| {
+                if *dos {
+                    Some((mount.clone(), &naming::WINDOWS))
+                } else if mounts.iter().any(|(other, other_dos)| {
+                    *other_dos && mount != other && mount.starts_with(other)
+                }) {
+                    Some((mount.clone(), &naming::POSIX))
+                } else {
+                    None
+                }
             })
             .collect()
     }
@@ -123,6 +144,7 @@ mod mounts {
 /dev/sdc1 /mnt/backup\\040drive ntfs3 rw 0 0
 host:/export /mnt/net nfs4 rw 0 0
 /dev/sdd1 /mnt/photos/deep exfat rw 0 0
+/dev/sde1 /mnt/photos/linux ext4 rw 0 0
 ";
 
         #[test]
@@ -135,9 +157,22 @@ host:/export /mnt/net nfs4 rw 0 0
                     Path::new("/mnt/photos"),
                     Path::new("/mnt/backup drive"),
                     Path::new("/mnt/photos/deep"),
+                    Path::new("/mnt/photos/linux"),
                 ],
-                "ext4 and nfs4 keep POSIX rules; the escaped space is decoded"
+                "the root and nfs4 are left out; the ext4 volume *under* the stick is kept, \
+                 as POSIX, so it is not answered by its parent; the escaped space is decoded"
             );
+            let (_, linux) = &table[3];
+            assert!(std::ptr::eq(*linux, &naming::POSIX));
+        }
+
+        /// A Linux volume mounted inside a FAT tree keeps its own rules: a
+        /// `?` in a name there is legal, and the parent must not refuse it.
+        #[test]
+        fn a_posix_volume_under_a_dos_one_keeps_posix_rules() {
+            let table: &'static _ = Box::leak(Box::new(parse(SAMPLE)));
+            let inside = longest_match(table, Path::new("/mnt/photos/linux/what?.txt"));
+            assert!(std::ptr::eq(inside.unwrap(), &naming::POSIX));
         }
 
         #[test]

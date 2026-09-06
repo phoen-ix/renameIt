@@ -165,6 +165,7 @@ refused. Folders, drives and backgrounds are unaffected and stay either way.
 | 12 | Extract the release zip to a stick, run it, save a preset, then run it from another machine | The preset is there. `RenameIt-data` sits beside the executable and nothing was written to `%APPDATA%` |
 | 13 | Extract the same zip into `C:\Program Files\` and run it | It starts, and Settings ▸ Problem Solver reports a **normal** install — the portable path is declined when the folder is not writable, rather than taken and then failing |
 | 14 | Delete `renameit-portable.txt` from a portable copy and start it | A normal install: files in `%APPDATA%\RenameIt` |
+| 15 | Right-click a file whose **path contains a space** and choose *Show in file manager*; then the same for a folder with a space in its path | Explorer opens the containing folder with the file selected, and the folder itself. The command line is `explorer.exe /select,"C:\My Folder\a.txt"` — switch bare, path quoted (`raw_arg`). Before the audit the whole argument was quoted as one string, which Explorer is known to mis-parse; this is the check no CI can run |
 
 ## M8 — Full Row Select
 

@@ -135,9 +135,16 @@ impl NamingRules {
 const WINDOWS_ILLEGAL: &[char] = &['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
 
 /// `CON.txt` is just as reserved as `CON`, which is why these are stems.
+///
+/// The full table from *Naming Files, Paths, and Namespaces*: the ports run
+/// from 0, and the three superscript digits `¹ ² ³` are aliases Win32 also
+/// resolves to the device — a name the syscall would refuse after the
+/// preview had promised it, which is the failure P62 exists to move up
+/// front.
 const WINDOWS_RESERVED: &[&str] = &[
-    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
-    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    "CON", "PRN", "AUX", "NUL", "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+    "COM8", "COM9", "COM¹", "COM²", "COM³", "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6",
+    "LPT7", "LPT8", "LPT9", "LPT¹", "LPT²", "LPT³",
 ];
 
 pub static WINDOWS: NamingRules = NamingRules {
@@ -182,7 +189,18 @@ mod tests {
 
     #[test]
     fn windows_rejects_reserved_device_names_with_and_without_extension() {
-        for name in ["CON", "con", "Con.txt", "LPT9.tar.gz", "NUL"] {
+        for name in [
+            "CON",
+            "con",
+            "Con.txt",
+            "LPT9.tar.gz",
+            "NUL",
+            "COM0",
+            "lpt0.txt",
+            "COM¹",
+            "com².log",
+            "LPT³",
+        ] {
             assert!(
                 matches!(
                     WINDOWS.validate_component(name),
