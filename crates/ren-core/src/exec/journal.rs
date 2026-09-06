@@ -353,7 +353,27 @@ impl Journal {
     }
 
     /// Appends one record and makes it durable before returning.
+    ///
+    /// The write-ahead half of the executor's contract: an intent is durable
+    /// before the filesystem is touched. For a record whose durability can
+    /// wait for the next one — a `Completed`, which the next intent's sync
+    /// carries along — see [`Self::append`].
     pub fn write(&mut self, record: Record) -> Result<u64, ExecError> {
+        let n = self.append(record)?;
+        self.sync()?;
+        Ok(n)
+    }
+
+    /// Appends one record without waiting for the disk.
+    ///
+    /// It reaches the disk with the next [`Self::sync`] — or the next
+    /// [`Self::write`], whose sync flushes everything appended before it. A
+    /// crash in between loses only what a crash between a rename and its
+    /// `Completed` always could: a change that happened and was not
+    /// confirmed, which recovery decides from the disk (D84). Every
+    /// `Completed` used to be its own `fdatasync`, which was half the syncs
+    /// of a run and none of its guarantee.
+    pub fn append(&mut self, record: Record) -> Result<u64, ExecError> {
         debug_assert_ne!(
             record,
             Record::Unknown,
@@ -383,10 +403,14 @@ impl Journal {
         self.file
             .write_all(&buf)
             .map_err(|e| ExecError::io(&self.path, e))?;
+        Ok(n)
+    }
+
+    /// Makes everything appended so far durable.
+    pub fn sync(&mut self) -> Result<(), ExecError> {
         self.file
             .sync_data()
-            .map_err(|e| ExecError::io(&self.path, e))?;
-        Ok(n)
+            .map_err(|e| ExecError::io(&self.path, e))
     }
 
     pub fn read(path: &Path) -> Result<Vec<Line>, ExecError> {

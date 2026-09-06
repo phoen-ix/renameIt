@@ -848,3 +848,169 @@ proptest! {
         prop_assert_eq!(filtered, naive, "over {:?}", name);
     }
 }
+
+/// A platform that performs `survives` renames faithfully and then dies —
+/// either instead of the next one (the crash came before the syscall) or
+/// right after it (the syscall landed, its `Completed` line never did). The
+/// two windows a crash can fall into, and recovery has to be right in both.
+struct CrashingPlatform {
+    inner: std::sync::Arc<dyn ren_platform::Platform>,
+    survives: std::sync::atomic::AtomicUsize,
+    after: bool,
+}
+
+impl std::fmt::Debug for CrashingPlatform {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CrashingPlatform").finish_non_exhaustive()
+    }
+}
+
+impl ren_platform::Platform for CrashingPlatform {
+    fn name(&self) -> &'static str {
+        self.inner.name()
+    }
+    fn capabilities(&self) -> &'static [ren_platform::Capability] {
+        self.inner.capabilities()
+    }
+    fn rename(&self, from: &Path, to: &Path) -> ren_platform::Result<()> {
+        use std::sync::atomic::Ordering;
+        if self.survives.load(Ordering::SeqCst) == 0 {
+            if self.after {
+                self.inner.rename(from, to)?;
+            }
+            std::panic::panic_any(CRASH);
+        }
+        self.survives.fetch_sub(1, Ordering::SeqCst);
+        self.inner.rename(from, to)
+    }
+    fn get_attributes(&self, path: &Path) -> ren_platform::Result<ren_platform::FileAttributes> {
+        self.inner.get_attributes(path)
+    }
+    fn set_attributes(
+        &self,
+        path: &Path,
+        change: ren_platform::AttributeChange,
+    ) -> ren_platform::Result<()> {
+        self.inner.set_attributes(path, change)
+    }
+    fn get_times(&self, path: &Path) -> ren_platform::Result<ren_platform::FileTimes> {
+        self.inner.get_times(path)
+    }
+    fn set_times(&self, path: &Path, change: ren_platform::TimeChange) -> ren_platform::Result<()> {
+        self.inner.set_times(path, change)
+    }
+    fn naming_rules(&self, path: &Path) -> &'static ren_platform::NamingRules {
+        self.inner.naming_rules(path)
+    }
+    fn case_sensitivity(&self, dir: &Path) -> ren_platform::CaseSensitivity {
+        self.inner.case_sensitivity(dir)
+    }
+    fn reveal_in_file_manager(&self, path: &Path) -> ren_platform::Result<()> {
+        self.inner.reveal_in_file_manager(path)
+    }
+    fn notify_shell_changed(&self, path: &Path) {
+        self.inner.notify_shell_changed(path);
+    }
+}
+
+/// The payload the crash carries, so a real panic is not mistaken for it.
+const CRASH: &str = "simulated crash";
+
+/// Runs `plan` until the `survives`th rename, "crashes" there, recovers, and
+/// checks the tree is exactly what it was.
+fn crash_and_recover(
+    tree: &Tree,
+    plan: &ren_core::Plan,
+    before: &BTreeMap<String, (Vec<u8>, std::time::SystemTime)>,
+    survives: usize,
+    after: bool,
+) -> Result<(), TestCaseError> {
+    let platform = CrashingPlatform {
+        inner: ren_platform::host(),
+        survives: std::sync::atomic::AtomicUsize::new(survives),
+        after,
+    };
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        apply(plan, &platform, &tree.options())
+    }));
+    match outcome {
+        Err(payload) => {
+            let ours = payload.downcast_ref::<&str>().is_some_and(|p| *p == CRASH);
+            prop_assert!(ours, "a real panic, not the simulated crash");
+        }
+        // Fewer renames than `survives`: the run finished. Undo instead, which
+        // exercises the same replay over a committed journal.
+        Ok(report) => {
+            let report = report.unwrap();
+            prop_assert!(report.is_success(), "{:?}", report.failed);
+            if !report.renamed.is_empty() {
+                undo_last(ren_platform::host().as_ref(), tree.journal.path()).unwrap();
+            }
+            prop_assert_eq!(before, &snapshot(tree.dir.path()));
+            return Ok(());
+        }
+    }
+
+    let unfinished = ren_core::exec::unfinished(tree.journal.path()).unwrap();
+    prop_assert_eq!(unfinished.len(), 1, "one open transaction");
+    let report = ren_core::exec::rollback(&unfinished[0], ren_platform::host().as_ref()).unwrap();
+    prop_assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    prop_assert_eq!(
+        before,
+        &snapshot(tree.dir.path()),
+        "after a crash at rename {} ({} the syscall)",
+        survives,
+        if after { "after" } else { "before" }
+    );
+    Ok(())
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 48, ..ProptestConfig::default() })]
+
+    /// **A crash at any point of a run is recovered exactly** — with chains,
+    /// swaps, subfolder moves and a folder row in the tree.
+    ///
+    /// The gate for the write-ahead window: the executor announces up to
+    /// sixty-four renames per sync, so a crash can leave that many announced
+    /// and unconfirmed, some performed and some not, and recovery has to
+    /// decide each from the disk (D84) in the right order. Every crash point
+    /// of the plan is tried, in both of the windows a crash can fall into:
+    /// before the syscall, and after it but before its journal line.
+    #[test]
+    fn a_crash_at_any_rename_is_recovered_exactly(
+        names in file_names(),
+        folder in file_name(),
+        steps in pipeline_steps(),
+    ) {
+        let Some(tree) = Tree::nested(&names, &folder) else { return Ok(()); };
+        let platform = ren_platform::host();
+        let before = snapshot(tree.dir.path());
+
+        let entries = list(tree.dir.path(), ListOptions {
+            folders: true,
+            subfolders: true,
+            ..Default::default()
+        }).unwrap();
+        let plan = plan(&entries, &build(steps), platform.as_ref());
+        if !plan.is_executable() || plan.ops.is_empty() {
+            return Ok(());
+        }
+        let renames = plan
+            .ops
+            .iter()
+            .filter(|op| matches!(op, ren_core::PlannedOp::Rename { .. }))
+            .count();
+
+        for survives in 0..renames {
+            for after in [false, true] {
+                crash_and_recover(&tree, &plan, &before, survives, after)?;
+                // Each crash leaves a rolled-back journal behind; start the
+                // next one clean so `unfinished` sees exactly one.
+                for entry in std::fs::read_dir(tree.journal.path()).unwrap() {
+                    let _ = std::fs::remove_file(entry.unwrap().path());
+                }
+            }
+        }
+    }
+}

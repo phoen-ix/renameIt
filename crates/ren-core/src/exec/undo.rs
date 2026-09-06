@@ -159,7 +159,17 @@ pub fn undo_transaction(path: &Path, platform: &dyn Platform) -> Result<UndoRepo
         .copied()
         .filter(|seq| !finished.contains(seq))
         .collect();
+    let mut folders_in_flight: Vec<PathBuf> = Vec::new();
     for seq in in_flight.into_iter().rev() {
+        // A folder announced and never confirmed: the planner only announces
+        // folders that did not exist, so one that exists now is ours — and it
+        // is removed after the renames below, once the files that may have
+        // moved into it have moved back out. `remove_dir` refusing a folder
+        // that is not empty is the guard against being wrong about that.
+        if let Some(dir) = created.get(&seq) {
+            folders_in_flight.push(dir.clone());
+            continue;
+        }
         let Some((from, to)) = planned.get(&seq) else {
             continue;
         };
@@ -230,11 +240,18 @@ pub fn undo_transaction(path: &Path, platform: &dyn Platform) -> Result<UndoRepo
     }
 
     // Folders the transaction created come off last and deepest first, once
-    // the files it put in them have moved back out.
+    // the files it put in them have moved back out. The announced-and-never-
+    // confirmed ones go with them: silent when never created, because a
+    // folder that is not there is not a skip.
     let mut folders: Vec<PathBuf> = completed
         .iter()
         .rev()
         .filter_map(|seq| created.get(seq).cloned())
+        .chain(
+            folders_in_flight
+                .into_iter()
+                .filter(|dir| dir.symlink_metadata().is_ok()),
+        )
         .collect();
     folders.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
     for dir in folders {

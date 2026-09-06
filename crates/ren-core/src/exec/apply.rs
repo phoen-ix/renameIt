@@ -154,11 +154,53 @@ pub fn apply(
     apply_journalled(plan, platform, journal, report)
 }
 
+/// How many renames are written ahead before any of them runs.
+///
+/// **One, and the property test is why.** The executor is shaped so that a
+/// window of sixty-four is a one-constant change — announce the window,
+/// sync once, perform, confirm — and
+/// `a_crash_at_any_rename_is_recovered_exactly` in `tests/properties.rs`
+/// was written to gate exactly that widening. It fails at anything above
+/// one, with the same shape every time: a swap through a temp name whose
+/// three renames are announced together and *none* performed. Recovery
+/// walks the announced-and-unconfirmed ops newest first and decides each
+/// from the disk — `to` present and `from` absent means it happened — and
+/// for `tmp → readme` with nothing done, `readme` *is* present (it is the
+/// original file) and `tmp` *is* absent (it was never made). Recovery then
+/// "puts back" a rename that never ran and scrambles the pair.
+///
+/// A window of one cannot produce that state: at most the op being
+/// performed and the one before it are ever unconfirmed at once, and the
+/// one before it has always run. Every case the test generates — chains,
+/// cycles, subfolder moves, a folder row, a crash before and after every
+/// syscall — recovers exactly at one.
+///
+/// Widening it needs recovery to know *which file* is where rather than
+/// only which names exist — a file identity in the intent, or a replay of
+/// the announced prefix against the disk — which is a journal-format
+/// change with its own decision (P99). The halving of syncs that this
+/// commit does deliver comes from `Completed` being appended unsynced and
+/// carried by the next intent's sync, not from the window.
+pub const WRITE_AHEAD_WINDOW: usize = 1;
+
 /// The run itself, once a journal is open.
 ///
 /// Split from [`apply`] so a test can hand in a journal that fails part-way
 /// through — the one failure that turns into [`ExecError::Interrupted`] and
 /// that no amount of `chmod` can produce on an already-open file.
+///
+/// The journal is write-ahead: an op's intent is durable before the
+/// filesystem is touched. Renames and folder creations are announced in
+/// windows of [`WRITE_AHEAD_WINDOW`] and synced once per window; each op's
+/// `Completed` is appended without a sync and made durable by the next
+/// window's sync, or by `Commit`. That is one `fdatasync` per op where
+/// there used to be two — and it is the whole of what the disk is asked
+/// for, so a ten-thousand-file run pays ten thousand syncs rather than
+/// twenty thousand. What a crash can lose is unchanged in kind: a change
+/// that happened and was not confirmed, which recovery reads from the disk
+/// (D84); what is new is that the *previous* op's confirmation can be lost
+/// with it, and `an_unconfirmed_rename_before_the_crash_point_is_recovered`
+/// holds that recovery is still exact then.
 fn apply_journalled(
     plan: &Plan,
     platform: &dyn Platform,
@@ -179,184 +221,71 @@ fn apply_journalled(
 
     // Every physical change is journalled, temp-name hops included, so undo
     // unwinds a broken cycle by replaying them in reverse (P6).
-    for (seq, op) in plan.ops.iter().enumerate() {
-        let seq = seq as u64;
-        // Write-ahead: the intent is durable before the filesystem is touched.
-        let (subject, outcome) = match op {
-            PlannedOp::CreateDir { path } => {
-                journal
-                    .write(Record::PlanCreateDir {
-                        seq,
-                        path: path.clone(),
-                    })
-                    .map_err(|e| interrupted(&journal, completed, e))?;
-                (
-                    path.clone(),
-                    std::fs::create_dir(path).map_err(|e| e.to_string()),
-                )
-            }
-            PlannedOp::WriteFile {
-                path,
-                contents,
-                undoability,
-            } => {
-                // `replaced` comes from the plan's decision rather than a fresh
-                // `stat`, so the file the user consented to overwrite is the
-                // file the journal says was overwritten. Re-checking here would
-                // let the two disagree.
-                let replaced = !undoability.is_reversible();
-                journal
-                    .write(Record::PlanWriteFile {
-                        seq,
-                        path: path.clone(),
-                        replaced,
-                    })
-                    .map_err(|e| interrupted(&journal, completed, e))?;
-                (
-                    path.clone(),
-                    std::fs::write(path, contents).map_err(|e| e.to_string()),
-                )
-            }
-            PlannedOp::Rename { from, to, .. } => {
-                journal
-                    .write(Record::PlanRename {
-                        seq,
-                        from: from.clone(),
-                        to: to.clone(),
-                    })
-                    .map_err(|e| interrupted(&journal, completed, e))?;
-                (
-                    from.clone(),
-                    platform.rename(from, to).map_err(|e| e.to_string()),
-                )
-            }
-            // An irreversible change: the intent is journalled so a crash
-            // leaves a record of what was attempted, but there is no
-            // before-image because there is nothing to keep.
-            PlannedOp::Act {
-                path,
-                op,
-                effect,
-                undoability: Undoability::None,
-                ..
-            } => {
-                journal
-                    .write(Record::PlanIrreversible {
-                        seq,
-                        path: path.clone(),
-                        op: (*op).to_owned(),
-                        change: effect.clone(),
-                    })
-                    .map_err(|e| interrupted(&journal, completed, e))?;
-                (path.clone(), write_effect(path, platform, effect))
-            }
-            PlannedOp::Act {
-                path, op, effect, ..
-            } => {
-                // The write-ahead invariant needs more here than it does for a
-                // rename. "Set modified to X" does not say what X replaced, so
-                // the intent alone cannot be inverted — the before-image is
-                // read first and journalled *with* the intent.
-                match read_before(platform, path, effect) {
-                    // Every journalled action has a before-image, because the
-                    // one kind that has none took the branch above.
-                    Ok(Some(before)) => {
-                        journal
-                            .write(Record::PlanAct {
-                                seq,
-                                path: path.clone(),
-                                op: (*op).to_owned(),
-                                change: effect.clone(),
-                                before,
-                            })
-                            .map_err(|e| interrupted(&journal, completed, e))?;
-                        (path.clone(), write_effect(path, platform, effect))
-                    }
-                    // No before-image, no attempt. A change that cannot be
-                    // undone is worse than a change that did not happen, and
-                    // nothing was written — so the `Failed` record stands alone
-                    // without a `PlanAct`, which `recover::unfinished`'s
-                    // saturating arithmetic already tolerates.
-                    Err(e) => (path.clone(), Err(e.to_string())),
-                    // An effect with no before-image reaching the reversible
-                    // branch means its `undoability()` and the action's
-                    // `undoable()` disagree — a bug, refused rather than
-                    // written.
-                    Ok(None) => (
-                        path.clone(),
-                        Err(
-                            "this change reports itself as undoable but keeps no before-image"
-                                .to_owned(),
-                        ),
-                    ),
-                }
-            }
+    let mut at = 0usize;
+    'run: while at < plan.ops.len() {
+        // The window: a run of windowable ops, or exactly one of anything
+        // else.
+        let end = if windowable(&plan.ops[at]) {
+            plan.ops[at..]
+                .iter()
+                .take(WRITE_AHEAD_WINDOW)
+                .take_while(|op| windowable(op))
+                .count()
+                + at
+        } else {
+            at + 1
         };
 
-        match outcome {
-            Ok(()) => {
-                // The change has happened whether or not this line lands, so
-                // it counts before the write, not after.
-                completed += 1;
-                journal
-                    .write(Record::Completed { seq })
-                    .map_err(|e| interrupted(&journal, completed, e))?;
-                match op {
-                    PlannedOp::CreateDir { path } => {
-                        report.reversible += 1;
-                        report.created_dirs.push(path.clone());
-                    }
-                    PlannedOp::WriteFile {
-                        path, undoability, ..
-                    } => {
-                        platform.notify_shell_changed(path);
-                        if undoability.is_reversible() {
-                            report.reversible += 1;
-                        }
-                        report
-                            .wrote
-                            .push((path.clone(), !undoability.is_reversible()));
-                    }
-                    // The same filter the simulate branch above applies, and
-                    // for the same reason — it was missing here, so two files
-                    // swapping names reported **three** renames and the status
-                    // bar could say "Renamed 3 of 2". The journal still records
-                    // every hop, because undo needs them; the *report* is what
-                    // the user reads.
-                    PlannedOp::Rename { from, to, kind } => {
-                        platform.notify_shell_changed(to);
-                        report.reversible += 1;
-                        if *kind != RenameKind::CycleStage {
-                            report.renamed.push((from.clone(), to.clone()));
-                        }
-                    }
-                    PlannedOp::Act {
-                        path,
-                        describe,
-                        undoability,
-                        ..
-                    } => {
-                        platform.notify_shell_changed(path);
-                        if undoability.is_reversible() {
-                            report.reversible += 1;
-                        }
-                        report.acted.push((path.clone(), describe.clone()));
-                    }
+        // Write-ahead for the whole window, then one sync. An action's
+        // before-image is read here, with its intent: "set modified to X"
+        // does not say what X replaced, so the intent alone cannot be
+        // inverted.
+        let mut announced: Vec<(u64, &PlannedOp, Option<String>)> = Vec::with_capacity(end - at);
+        for (seq, op) in plan.ops[at..end].iter().enumerate() {
+            let seq = (at + seq) as u64;
+            let refused = announce(&mut journal, seq, op, platform)
+                .map_err(|e| interrupted(&journal, completed, e))?;
+            announced.push((seq, op, refused));
+        }
+        journal
+            .sync()
+            .map_err(|e| interrupted(&journal, completed, e))?;
+
+        for (seq, op, refused) in announced {
+            let subject = subject_of(op);
+            let outcome = match refused {
+                Some(reason) => Err(reason),
+                None => perform(op, platform),
+            };
+            match outcome {
+                Ok(()) => {
+                    // The change has happened whether or not this line lands,
+                    // so it counts before the append, not after.
+                    completed += 1;
+                    journal
+                        .append(Record::Completed { seq })
+                        .map_err(|e| interrupted(&journal, completed, e))?;
+                    record_success(&mut report, op, platform);
+                }
+                Err(message) => {
+                    journal
+                        .write(Record::Failed {
+                            seq,
+                            error: message.clone(),
+                        })
+                        .map_err(|e| interrupted(&journal, completed, e))?;
+                    report.failed.push((subject, message));
+                    // Stop at the first failure: whatever already happened
+                    // stays undoable, and the user decides what to do next.
+                    // The rest of this window was announced and never
+                    // performed, which recovery and undo read as exactly
+                    // that: a target that is not there is a rename that never
+                    // happened.
+                    break 'run;
                 }
             }
-            Err(message) => {
-                journal
-                    .write(Record::Failed {
-                        seq,
-                        error: message.clone(),
-                    })
-                    .map_err(|e| interrupted(&journal, completed, e))?;
-                report.failed.push((subject, message));
-                // Stop at the first failure: whatever already happened stays
-                // undoable, and the user decides what to do next.
-                break;
-            }
         }
+        at = end;
     }
 
     journal
@@ -367,6 +296,170 @@ fn apply_journalled(
         .map_err(|e| interrupted(&journal, completed, e))?;
 
     Ok(report)
+}
+
+/// Whether an op may share a write-ahead window with its neighbours.
+///
+/// A rename or a folder creation announces everything undo needs in its
+/// intent — the two names, the path — so any number of them can be
+/// announced together. An action carries a before-image and a written file
+/// may be an overwrite; those stay one to a window, journalled and synced
+/// on their own as they always were.
+fn windowable(op: &PlannedOp) -> bool {
+    matches!(op, PlannedOp::Rename { .. } | PlannedOp::CreateDir { .. })
+}
+
+/// Journals an op's intent. Returns the reason it must not run, if there is
+/// one — an action whose before-image could not be read has nothing
+/// announced, and a failure recorded in its place.
+fn announce(
+    journal: &mut Journal,
+    seq: u64,
+    op: &PlannedOp,
+    platform: &dyn Platform,
+) -> Result<Option<String>, ExecError> {
+    match op {
+        PlannedOp::CreateDir { path } => {
+            journal.append(Record::PlanCreateDir {
+                seq,
+                path: path.clone(),
+            })?;
+        }
+        PlannedOp::WriteFile {
+            path, undoability, ..
+        } => {
+            // `replaced` comes from the plan's decision rather than a fresh
+            // `stat`, so the file the user consented to overwrite is the
+            // file the journal says was overwritten. Re-checking here would
+            // let the two disagree.
+            journal.append(Record::PlanWriteFile {
+                seq,
+                path: path.clone(),
+                replaced: !undoability.is_reversible(),
+            })?;
+        }
+        PlannedOp::Rename { from, to, .. } => {
+            journal.append(Record::PlanRename {
+                seq,
+                from: from.clone(),
+                to: to.clone(),
+            })?;
+        }
+        // An irreversible change: the intent is journalled so a crash
+        // leaves a record of what was attempted, but there is no
+        // before-image because there is nothing to keep.
+        PlannedOp::Act {
+            path,
+            op,
+            effect,
+            undoability: Undoability::None,
+            ..
+        } => {
+            journal.append(Record::PlanIrreversible {
+                seq,
+                path: path.clone(),
+                op: (*op).to_owned(),
+                change: effect.clone(),
+            })?;
+        }
+        PlannedOp::Act {
+            path, op, effect, ..
+        } => match read_before(platform, path, effect) {
+            // Every journalled action has a before-image, because the one
+            // kind that has none took the branch above.
+            Ok(Some(before)) => {
+                journal.append(Record::PlanAct {
+                    seq,
+                    path: path.clone(),
+                    op: (*op).to_owned(),
+                    change: effect.clone(),
+                    before,
+                })?;
+            }
+            // No before-image, no attempt. A change that cannot be undone is
+            // worse than a change that did not happen, and nothing was
+            // written — so the `Failed` record stands alone without a
+            // `PlanAct`, which `recover::unfinished`'s saturating arithmetic
+            // already tolerates.
+            Err(e) => return Ok(Some(e.to_string())),
+            // An effect with no before-image reaching the reversible branch
+            // means its `undoability()` and the action's `undoable()`
+            // disagree — a bug, refused rather than written.
+            Ok(None) => {
+                return Ok(Some(
+                    "this change reports itself as undoable but keeps no before-image".to_owned(),
+                ));
+            }
+        },
+    }
+    Ok(None)
+}
+
+/// The filesystem call an op stands for.
+fn perform(op: &PlannedOp, platform: &dyn Platform) -> Result<(), String> {
+    match op {
+        PlannedOp::CreateDir { path } => std::fs::create_dir(path).map_err(|e| e.to_string()),
+        PlannedOp::WriteFile { path, contents, .. } => {
+            std::fs::write(path, contents).map_err(|e| e.to_string())
+        }
+        PlannedOp::Rename { from, to, .. } => platform.rename(from, to).map_err(|e| e.to_string()),
+        PlannedOp::Act { path, effect, .. } => write_effect(path, platform, effect),
+    }
+}
+
+/// The path a failure is reported against.
+fn subject_of(op: &PlannedOp) -> PathBuf {
+    match op {
+        PlannedOp::CreateDir { path }
+        | PlannedOp::WriteFile { path, .. }
+        | PlannedOp::Act { path, .. } => path.clone(),
+        PlannedOp::Rename { from, .. } => from.clone(),
+    }
+}
+
+/// What the report says about an op that succeeded.
+fn record_success(report: &mut ApplyReport, op: &PlannedOp, platform: &dyn Platform) {
+    match op {
+        PlannedOp::CreateDir { path } => {
+            report.reversible += 1;
+            report.created_dirs.push(path.clone());
+        }
+        PlannedOp::WriteFile {
+            path, undoability, ..
+        } => {
+            platform.notify_shell_changed(path);
+            if undoability.is_reversible() {
+                report.reversible += 1;
+            }
+            report
+                .wrote
+                .push((path.clone(), !undoability.is_reversible()));
+        }
+        // The same filter the simulate branch applies, and for the same
+        // reason — it was missing here, so two files swapping names reported
+        // **three** renames and the status bar could say "Renamed 3 of 2".
+        // The journal still records every hop, because undo needs them; the
+        // *report* is what the user reads.
+        PlannedOp::Rename { from, to, kind } => {
+            platform.notify_shell_changed(to);
+            report.reversible += 1;
+            if *kind != RenameKind::CycleStage {
+                report.renamed.push((from.clone(), to.clone()));
+            }
+        }
+        PlannedOp::Act {
+            path,
+            describe,
+            undoability,
+            ..
+        } => {
+            platform.notify_shell_changed(path);
+            if undoability.is_reversible() {
+                report.reversible += 1;
+            }
+            report.acted.push((path.clone(), describe.clone()));
+        }
+    }
 }
 
 /// A journal write failed after the run started.
@@ -494,5 +587,68 @@ mod tests {
         let unfinished = crate::exec::unfinished(journals.path()).unwrap();
         assert_eq!(unfinished.len(), 1);
         assert_eq!(unfinished[0].completed, 2);
+        let report = crate::exec::rollback(&unfinished[0], platform.as_ref()).unwrap();
+        assert_eq!(report.restored.len(), 2, "{report:?}");
+        let mut names: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["a_1.txt", "a_2.txt", "a_3.txt"]);
+    }
+
+    /// The state the unsynced `Completed` line makes possible: op *k* ran
+    /// and its confirmation was lost with the crash, and op *k+1* was
+    /// announced (its intent's sync is what should have carried the
+    /// confirmation, and did not reach the disk in time). Both are in flight;
+    /// recovery has to put back exactly the one that ran. A swap through a
+    /// temp name, because that is the shape whose announced-but-unrun op has
+    /// a target that exists.
+    #[test]
+    fn an_unconfirmed_rename_before_the_crash_point_is_recovered() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let a = dir.path().join("a.txt");
+        let b = dir.path().join("b.txt");
+        std::fs::write(&a, b"payload a").unwrap();
+        std::fs::write(&b, b"payload b").unwrap();
+        let tmp = dir.path().join("__renameit-tmp-0");
+
+        // The journal a crash would leave: the stage announced, performed,
+        // and its `Completed` lost; the middle rename announced and never
+        // performed.
+        let journals = tempfile::TempDir::new().unwrap();
+        let mut journal = Journal::create(journals.path()).unwrap();
+        journal
+            .write(Record::Begin {
+                platform: "test".into(),
+                items: 3,
+            })
+            .unwrap();
+        journal
+            .write(Record::PlanRename {
+                seq: 0,
+                from: a.clone(),
+                to: tmp.clone(),
+            })
+            .unwrap();
+        std::fs::rename(&a, &tmp).unwrap();
+        journal
+            .write(Record::PlanRename {
+                seq: 1,
+                from: b.clone(),
+                to: a.clone(),
+            })
+            .unwrap();
+        drop(journal);
+
+        let platform = ren_platform::host();
+        let unfinished = crate::exec::unfinished(journals.path()).unwrap();
+        assert_eq!(unfinished[0].in_flight.len(), 2);
+        let report = crate::exec::rollback(&unfinished[0], platform.as_ref()).unwrap();
+        assert_eq!(report.restored.len(), 1, "{report:?}");
+        assert!(report.skipped.is_empty(), "{report:?}");
+        assert_eq!(std::fs::read(&a).unwrap(), b"payload a");
+        assert_eq!(std::fs::read(&b).unwrap(), b"payload b");
+        assert!(!tmp.exists());
     }
 }
