@@ -379,84 +379,20 @@ impl Plan {
 /// Builds a plan. Pure apart from the `exists` probe against the destination.
 pub fn plan(entries: &[FileEntry], pipeline: &Pipeline, platform: &dyn Platform) -> Plan {
     let evaluated = evaluate_all(entries, pipeline);
-    let mut items = Vec::with_capacity(entries.len());
 
-    let mut lossy_names = 0usize;
-    for (index, (entry, result)) in entries.iter().zip(evaluated).enumerate() {
-        let rules = platform.naming_rules(&entry.path);
-        // A name the listing could not read as text is left completely alone.
-        //
-        // `file_name` holds U+FFFD where the disk holds something else, so any
-        // name derived from it would write the replacement character over what
-        // was really there — D50's argument about `from_utf8_lossy`, one layer
-        // earlier than D50 made it. The row is still listed, still counted and
-        // still renameable by hand, because `path` is byte-exact; what it is
-        // not is *transformable*.
-        //
-        // Left alone rather than blocked: **P63** — one unreadable entry costs
-        // its own rows and no others. A single odd file in a folder of ten
-        // thousand must not refuse the other 9 999, and it is said out loud in
-        // `notes` instead.
-        if entry.name_is_lossy {
-            lossy_names += 1;
-            items.push(PlanItem {
-                index,
-                source: entry.path.clone(),
-                target: entry.path.clone(),
-                new_name: entry.file_name.clone(),
-                state: RowState::Unchanged,
-                actions: Vec::new(),
-            });
-            continue;
-        }
-        let (new_name, mut state, actions) = match result {
-            Err(e) => (
-                entry.file_name.clone(),
-                RowState::Error(e.to_string()),
-                Vec::new(),
-            ),
-            Ok(ev) => {
-                let state = match validate_target(&ev.name, rules) {
-                    Err(problem) => RowState::Conflict(ConflictKind::InvalidName(problem)),
-                    Ok(()) if ev.name == entry.file_name => RowState::Unchanged,
-                    Ok(()) => RowState::Changed,
-                };
-                (ev.name, state, ev.actions)
-            }
-        };
-
-        // The capability pre-flight (P4/P5). Costs nothing per file:
-        // `supports` is a lookup in a constant table, and this only runs for a
-        // row that has actions at all.
-        if !state.is_conflict()
-            && let Some(capability) = actions
-                .iter()
-                .flat_map(|a| a.effect.required_capabilities())
-                .find(|c| !platform.supports(*c))
-        {
-            state = RowState::Conflict(ConflictKind::Unsupported {
-                capability,
-                platform: platform.name(),
-            });
-        }
-
-        // A name that does not validate has no target: `..` would otherwise
-        // produce a path pointing at the parent directory, which nothing may
-        // execute but everything downstream would have to keep checking.
-        // Found by the M3 property test, on the name " ..".
-        let target = match &state {
-            RowState::Error(_) | RowState::Conflict(_) => entry.path.clone(),
-            _ => target_path(entry.parent(), &new_name),
-        };
-        items.push(PlanItem {
-            index,
-            source: entry.path.clone(),
-            target,
-            new_name,
-            state,
-            actions,
-        });
-    }
+    // One row per entry, built in parallel: each is a pure function of its
+    // own entry and its own evaluation — a validation, two path allocations
+    // and a capability lookup — and done serially it was a fifth of the whole
+    // plan at ten thousand rows.
+    let mut items: Vec<PlanItem> = entries
+        .par_iter()
+        .zip(evaluated.into_par_iter())
+        .enumerate()
+        .map(|(index, (entry, result))| plan_item(index, entry, result, platform))
+        .collect();
+    // P63: always said out loud, never a silent skip. Counted after the pass
+    // rather than inside it, so the pass has nothing to share.
+    let lossy_names = entries.iter().filter(|e| e.name_is_lossy).count();
 
     let keys = Keys::build(&items, platform);
     detect_blocked_subfolders(&mut items);
@@ -475,16 +411,18 @@ pub fn plan(entries: &[FileEntry], pipeline: &Pipeline, platform: &dyn Platform)
     // plan would be unexecutable either way, but a plan whose ops describe a
     // row it has already refused is a plan that reads wrong.
     detect_targets_needed_as_folders(&keys, platform, &wanted, &mut items);
-    let renames = order_renames(&keys, platform, &mut items);
+    // Whether a folder is in the listing at all — and the common run, Files
+    // without Folders, never has one. Two passes below are only about folders
+    // and cost a hash per row when they run, so they are told rather than
+    // left to find out.
+    let any_dir = entries.iter().any(|e| e.is_dir);
+    let renames = order_renames(&keys, platform, any_dir, &mut items);
 
     // Folders first: a rename into a subfolder needs it to exist (D31). The
     // overwhelmingly common case is that there are none, and then the renames
     // are the plan — no second vector, no copy.
     let mut creations = directory_creations(wanted);
-    // Nothing to resolve unless a folder is in the listing at all, and the
-    // common run — Files, no Folders — never has one. Worth the check: the
-    // resolution walks and hashes a path per row, and this is a bool per row.
-    if entries.iter().any(|e| e.is_dir) {
+    if any_dir {
         resolve_targets_under_renamed_ancestors(&mut items);
     }
     let mut ops = if creations.is_empty() {
@@ -530,6 +468,87 @@ pub fn plan(entries: &[FileEntry], pipeline: &Pipeline, platform: &dyn Platform)
     }
 
     Plan { items, ops, notes }
+}
+
+/// One row of the plan: the produced name validated, the target it implies,
+/// and the capability pre-flight for whatever it acts on.
+fn plan_item(
+    index: usize,
+    entry: &FileEntry,
+    result: Result<crate::pipeline::Evaluation, crate::ops::OpError>,
+    platform: &dyn Platform,
+) -> PlanItem {
+    let rules = platform.naming_rules(&entry.path);
+    // A name the listing could not read as text is left completely alone.
+    //
+    // `file_name` holds U+FFFD where the disk holds something else, so any
+    // name derived from it would write the replacement character over what
+    // was really there — D50's argument about `from_utf8_lossy`, one layer
+    // earlier than D50 made it. The row is still listed, still counted and
+    // still renameable by hand, because `path` is byte-exact; what it is
+    // not is *transformable*.
+    //
+    // Left alone rather than blocked: **P63** — one unreadable entry costs
+    // its own rows and no others. A single odd file in a folder of ten
+    // thousand must not refuse the other 9 999, and it is said out loud in
+    // `notes` instead.
+    if entry.name_is_lossy {
+        return PlanItem {
+            index,
+            source: entry.path.clone(),
+            target: entry.path.clone(),
+            new_name: entry.file_name.clone(),
+            state: RowState::Unchanged,
+            actions: Vec::new(),
+        };
+    }
+    let (new_name, mut state, actions) = match result {
+        Err(e) => (
+            entry.file_name.clone(),
+            RowState::Error(e.to_string()),
+            Vec::new(),
+        ),
+        Ok(ev) => {
+            let state = match validate_target(&ev.name, rules) {
+                Err(problem) => RowState::Conflict(ConflictKind::InvalidName(problem)),
+                Ok(()) if ev.name == entry.file_name => RowState::Unchanged,
+                Ok(()) => RowState::Changed,
+            };
+            (ev.name, state, ev.actions)
+        }
+    };
+
+    // The capability pre-flight (P4/P5). Costs nothing per file:
+    // `supports` is a lookup in a constant table, and this only runs for a
+    // row that has actions at all.
+    if !state.is_conflict()
+        && let Some(capability) = actions
+            .iter()
+            .flat_map(|a| a.effect.required_capabilities())
+            .find(|c| !platform.supports(*c))
+    {
+        state = RowState::Conflict(ConflictKind::Unsupported {
+            capability,
+            platform: platform.name(),
+        });
+    }
+
+    // A name that does not validate has no target: `..` would otherwise
+    // produce a path pointing at the parent directory, which nothing may
+    // execute but everything downstream would have to keep checking.
+    // Found by the M3 property test, on the name " ..".
+    let target = match &state {
+        RowState::Error(_) | RowState::Conflict(_) => entry.path.clone(),
+        _ => target_path(entry.parent(), &new_name),
+    };
+    PlanItem {
+        index,
+        source: entry.path.clone(),
+        target,
+        new_name,
+        state,
+        actions,
+    }
 }
 
 /// Turn a requested write into a planned one, or say why it cannot be.
@@ -591,6 +610,27 @@ fn validate_target(name: &str, rules: &ren_platform::NamingRules) -> Result<(), 
     Ok(())
 }
 
+/// Whether a changed row's target is in a different folder from its source.
+///
+/// [`target_path`] joins the produced name onto the source's own folder, and
+/// every component of that name has passed [`validate_target`] — no empty
+/// component, no `.` or `..` — so the target leaves the folder exactly when
+/// the name carries a separator (D31). One `memchr` over the name, where the
+/// obvious test costs two `Path::parent` walks per row.
+fn moves_folder(item: &PlanItem) -> bool {
+    item.new_name.contains(SUBFOLDER_SEPARATOR)
+}
+
+/// Two paths that are the same folder.
+///
+/// The bytes first: a `Path` compares by component, which walks both paths,
+/// and the parents this file compares are cut from one listing where equal
+/// folders are byte-for-byte equal. The component comparison is kept as the
+/// fallback so a differently spelled path is still equal.
+fn same_path(a: &Path, b: &Path) -> bool {
+    a.as_os_str() == b.as_os_str() || a == b
+}
+
 /// Joins a produced name — subfolders and all — onto the folder it came from.
 fn target_path(parent: &Path, name: &str) -> PathBuf {
     let mut path = parent.to_path_buf();
@@ -607,6 +647,16 @@ fn target_path(parent: &Path, name: &str) -> PathBuf {
 /// through the batch. Checking here turns it into a blocked run with a reason.
 fn detect_blocked_subfolders(items: &mut [PlanItem]) {
     for item in items.iter_mut().filter(|i| i.state.is_changed()) {
+        // A rename that stays in its folder — every row without `<\>`, which
+        // is nearly every row — has no subfolder to check and cannot be moving
+        // into itself. Decided by the produced name rather than by the two
+        // parents: `target_path` joins the name onto the source's folder, so
+        // the target is in another folder exactly when the name has a
+        // separator in it, and `Path::parent` twice per row was the whole
+        // cost of this pass.
+        if !moves_folder(item) {
+            continue;
+        }
         let source_dir = item.source.parent().unwrap_or(Path::new(""));
         let Some(target_dir) = item.target.parent() else {
             continue;
@@ -662,13 +712,13 @@ fn wanted_directories(items: &[PlanItem]) -> Vec<PathBuf> {
     let mut seen: HashSet<PathBuf> = HashSet::new();
 
     for item in items.iter().filter(|i| i.state.is_changed()) {
+        if !moves_folder(item) {
+            continue;
+        }
         let source_dir = item.source.parent().unwrap_or(Path::new(""));
         let Some(target_dir) = item.target.parent() else {
             continue;
         };
-        if target_dir == source_dir {
-            continue;
-        }
         // Walk up to the folder the file started in, then create downwards.
         let mut missing: Vec<PathBuf> = Vec::new();
         let mut at = target_dir;
@@ -820,7 +870,13 @@ fn detect_existing_targets(keys: &Keys, platform: &dyn Platform, items: &mut [Pl
         .map(|i| keys.source[i.index].as_str())
         .collect();
 
+    // One read per destination folder, and — since a listing is sorted by
+    // path, so consecutive rows share one — one *lookup* per folder too: the
+    // last folder's set is kept to hand, and the map is only asked when the
+    // folder changes. Asking it per row meant an owned `PathBuf` and a
+    // component-wise hash of it per row, which was most of this pass.
     let mut occupied: HashMap<PathBuf, HashSet<String>> = HashMap::new();
+    let mut last: Option<(PathBuf, HashSet<String>)> = None;
     for (index, item) in items.iter_mut().enumerate() {
         if !item.state.is_changed() {
             continue;
@@ -834,11 +890,18 @@ fn detect_existing_targets(keys: &Keys, platform: &dyn Platform, items: &mut [Pl
             continue; // Another item in this batch vacates the name first.
         }
 
-        let dir = item.target.parent().unwrap_or(Path::new("")).to_path_buf();
-        let rules = platform.naming_rules(&item.source);
-        let names = occupied
-            .entry(dir.clone())
-            .or_insert_with(|| read_dir_folded(&dir, rules));
+        let dir = item.target.parent().unwrap_or(Path::new(""));
+        if !last.as_ref().is_some_and(|(seen, _)| same_path(seen, dir)) {
+            if let Some((seen, names)) = last.take() {
+                occupied.insert(seen, names);
+            }
+            let names = match occupied.remove(dir) {
+                Some(names) => names,
+                None => read_dir_folded(dir, platform.naming_rules(&item.source)),
+            };
+            last = Some((dir.to_path_buf(), names));
+        }
+        let (_, names) = last.as_ref().expect("set above");
         if names.contains(target_key) {
             item.state = RowState::Conflict(ConflictKind::TargetExists);
         }
@@ -876,7 +939,12 @@ fn read_dir_folded(dir: &Path, rules: &ren_platform::NamingRules) -> HashSet<Str
 /// This is what lets `a`→`b`, `b`→`a` and `File 1`→`2`, `2`→`3`, `3`→`1`
 /// execute in a single run, without a second pass and without leaving undo in
 /// a state it cannot reverse.
-fn order_renames(keys: &Keys, platform: &dyn Platform, items: &mut [PlanItem]) -> Vec<PlannedOp> {
+fn order_renames(
+    keys: &Keys,
+    platform: &dyn Platform,
+    any_dir: bool,
+    items: &mut [PlanItem],
+) -> Vec<PlannedOp> {
     let movers: Vec<usize> = items
         .iter()
         .filter(|i| i.state.is_changed())
@@ -886,20 +954,25 @@ fn order_renames(keys: &Keys, platform: &dyn Platform, items: &mut [PlanItem]) -
         return Vec::new();
     }
 
+    // Indexed by item, not hashed by it. Every structure below used to be a
+    // `HashMap<usize, _>` or `HashSet<usize>` keyed by the item index, and the
+    // hashing was a third of this function's time at ten thousand rows; a
+    // `Vec` the size of the listing answers the same questions by offset.
+    let n = items.len();
     let source_of: HashMap<&str, usize> = movers
         .iter()
         .map(|&i| (keys.source[i].as_str(), i))
         .collect();
 
     // successors[y] = renames that may only run once y has moved away.
-    let mut successors: HashMap<usize, Vec<usize>> = HashMap::new();
-    let mut in_degree: HashMap<usize, usize> = movers.iter().map(|&i| (i, 0)).collect();
+    let mut successors: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut in_degree: Vec<usize> = vec![0; n];
     for &x in &movers {
         if let Some(&y) = source_of.get(keys.target[x].as_str())
             && y != x
         {
-            successors.entry(y).or_default().push(x);
-            *in_degree.get_mut(&x).unwrap() += 1;
+            successors[y].push(x);
+            in_degree[x] += 1;
         }
     }
 
@@ -913,28 +986,36 @@ fn order_renames(keys: &Keys, platform: &dyn Platform, items: &mut [PlanItem]) -
     //
     // Walking up each row's own path rather than comparing every pair: folders
     // are few and paths are shallow, so this is O(rows × depth) rather than the
-    // O(rows²) that would show up in the 10 000-file budget.
-    let mover_at: HashMap<&Path, usize> = movers
-        .iter()
-        .map(|&i| (items[i].source.as_path(), i))
-        .collect();
-    for &x in &movers {
-        let mut above = items[x].source.parent();
-        while let Some(dir) = above {
-            if let Some(&folder) = mover_at.get(dir) {
-                successors.entry(x).or_default().push(folder);
-                *in_degree.get_mut(&folder).unwrap() += 1;
+    // O(rows²) that would show up in the 10 000-file budget. And only when a
+    // folder is listed at all: the walk hashes every ancestor of every mover,
+    // and with no folder in the listing there is nothing for it to find.
+    if any_dir {
+        let mover_at: HashMap<&Path, usize> = movers
+            .iter()
+            .map(|&i| (items[i].source.as_path(), i))
+            .collect();
+        for &x in &movers {
+            let mut above = items[x].source.parent();
+            while let Some(dir) = above {
+                if let Some(&folder) = mover_at.get(dir) {
+                    successors[x].push(folder);
+                    in_degree[folder] += 1;
+                }
+                above = dir.parent();
             }
-            above = dir.parent();
         }
     }
 
     // Every name this batch touches, so a temp name can avoid all of them.
-    let mut reserved: HashSet<String> = HashSet::new();
-    for &i in &movers {
-        reserved.insert(keys.source[i].clone());
-        reserved.insert(keys.target[i].clone());
-    }
+    // Borrowed from `keys` rather than cloned: two owned strings per mover was
+    // twenty thousand allocations per keystroke for a set consulted only when
+    // a cycle turns up.
+    let reserved: HashSet<&str> = movers
+        .iter()
+        .flat_map(|&i| [keys.source[i].as_str(), keys.target[i].as_str()])
+        .collect();
+    // The temp names handed out so far, which `reserved` cannot hold.
+    let mut temps: Vec<String> = Vec::new();
 
     // Deepest first, then by index. Folders + Subfolders puts a folder and the
     // files inside it in one run, and the folder sorts *before* its own
@@ -949,20 +1030,31 @@ fn order_renames(keys: &Keys, platform: &dyn Platform, items: &mut [PlanItem]) -
     // child, which is the only thing depth would have to overrule.
     // Computed once. `sort_unstable_by_key` calls its key function per
     // comparison, and counting a path's components per comparison cost the
-    // 1000-file plan a fifth of its time.
+    // 1000-file plan a fifth of its time. Counted for a files-only listing
+    // too: a recursive one has files at several depths, and the plan's op
+    // order is part of what two runs over one tree have to agree on.
     let depths: Vec<usize> = items.iter().map(|i| depth(&i.source)).collect();
 
     let mut ready: Vec<usize> = movers
         .iter()
         .copied()
-        .filter(|i| in_degree[i] == 0)
+        .filter(|&i| in_degree[i] == 0)
         .collect();
     ready.sort_unstable_by_key(|&i| (depths[i], std::cmp::Reverse(i)));
     // Pop deepest first, and the lowest index among equals, so plans are stable.
 
+    // The order victims are chosen in when a cycle has to be broken: deepest
+    // first, lowest index among equals — the same order `ready` pops in, for
+    // the same reasons. A cursor over it rather than a scan per cycle, so a
+    // listing of thousands of pairwise swaps costs thousands of steps, not
+    // thousands of passes over thousands of movers.
+    let mut by_victim_order: Vec<usize> = movers.clone();
+    by_victim_order.sort_unstable_by_key(|&i| (std::cmp::Reverse(depths[i]), i));
+    let mut next_victim = 0usize;
+
     let mut ops: Vec<PlannedOp> = Vec::with_capacity(movers.len());
     let mut finishes: Vec<PlannedOp> = Vec::new();
-    let mut done: HashSet<usize> = HashSet::new();
+    let mut done: Vec<bool> = vec![false; n];
     let mut stuck: Vec<usize> = Vec::new();
 
     loop {
@@ -972,7 +1064,7 @@ fn order_renames(keys: &Keys, platform: &dyn Platform, items: &mut [PlanItem]) -
                 to: items[y].target.clone(),
                 kind: RenameKind::Direct,
             });
-            done.insert(y);
+            done[y] = true;
             release(&successors, &mut in_degree, &mut ready, &done, y);
         }
 
@@ -980,20 +1072,21 @@ fn order_renames(keys: &Keys, platform: &dyn Platform, items: &mut [PlanItem]) -
         // temp name moves everything inside it, so a pending rename within that
         // folder has to have run already. Lowest index breaks a depth tie, which
         // keeps the choice of victim — and so the whole plan — deterministic.
-        let Some(&victim) = movers
-            .iter()
-            .filter(|i| !done.contains(i) && !stuck.contains(i))
-            .max_by_key(|&&i| (depths[i], std::cmp::Reverse(i)))
-        else {
+        while next_victim < by_victim_order.len() && done[by_victim_order[next_victim]] {
+            next_victim += 1;
+        }
+        let Some(&victim) = by_victim_order.get(next_victim) else {
             break;
         };
+        // Whether stuck or staged, this row is settled either way.
+        next_victim += 1;
 
         // Break the cycle: move the victim out of the way first.
-        let Some(temp) = temp_path(&items[victim].source, platform, &reserved) else {
+        let Some(temp) = temp_path(&items[victim].source, platform, &reserved, &temps) else {
             stuck.push(victim);
             continue;
         };
-        reserved.insert(
+        temps.push(
             platform
                 .naming_rules(&items[victim].source)
                 .fold(&temp.to_string_lossy()),
@@ -1009,7 +1102,7 @@ fn order_renames(keys: &Keys, platform: &dyn Platform, items: &mut [PlanItem]) -
             to: items[victim].target.clone(),
             kind: RenameKind::CycleFinish,
         });
-        done.insert(victim);
+        done[victim] = true;
         release(&successors, &mut in_degree, &mut ready, &done, victim);
     }
 
@@ -1035,6 +1128,15 @@ fn order_renames(keys: &Keys, platform: &dyn Platform, items: &mut [PlanItem]) -
     // Inserting before the *first* ancestor rename is enough, and lands after
     // the direct rename that freed the target: `order_renames` is deepest-first,
     // so every rename inside a folder is already ahead of the folder's own.
+    //
+    // Only a *folder* rename can be an ancestor of a temp name, so with no
+    // folder listed every finish goes on the end — without a scan of `ops`
+    // per finish, which for a listing of pairwise swaps was a scan of
+    // thousands per thousands.
+    if !any_dir {
+        ops.extend(finishes);
+        return ops;
+    }
     for finish in finishes {
         let PlannedOp::Rename { from, .. } = &finish else {
             continue;
@@ -1115,19 +1217,18 @@ fn resolve_targets_under_renamed_ancestors(items: &mut [PlanItem]) {
 /// in `a`↔`b`, staging `a` releases `b`, and then `b` moving would try to
 /// release `a` a second time.
 fn release(
-    successors: &HashMap<usize, Vec<usize>>,
-    in_degree: &mut HashMap<usize, usize>,
+    successors: &[Vec<usize>],
+    in_degree: &mut [usize],
     ready: &mut Vec<usize>,
-    done: &HashSet<usize>,
+    done: &[bool],
     y: usize,
 ) {
-    for &x in successors.get(&y).map(Vec::as_slice).unwrap_or_default() {
-        if done.contains(&x) {
+    for &x in &successors[y] {
+        if done[x] {
             continue;
         }
-        let degree = in_degree.get_mut(&x).expect("every mover has a degree");
-        *degree -= 1;
-        if *degree == 0 {
+        in_degree[x] -= 1;
+        if in_degree[x] == 0 {
             ready.push(x);
         }
     }
@@ -1141,13 +1242,15 @@ fn release(
 fn temp_path(
     source: &Path,
     platform: &dyn Platform,
-    reserved: &HashSet<String>,
+    reserved: &HashSet<&str>,
+    temps: &[String],
 ) -> Option<PathBuf> {
     let dir = source.parent().unwrap_or(Path::new(""));
     let rules = platform.naming_rules(source);
     for n in 0..1_000u32 {
         let candidate = dir.join(format!("__renameit-tmp-{n}"));
-        if reserved.contains(&rules.fold(&candidate.to_string_lossy())) {
+        let folded = rules.fold(&candidate.to_string_lossy());
+        if reserved.contains(folded.as_str()) || temps.contains(&folded) {
             continue;
         }
         if candidate.symlink_metadata().is_ok() {

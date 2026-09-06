@@ -58,5 +58,6 @@ cargo clippy --workspace --lib --bins --target x86_64-pc-windows-msvc -- -D warn
 cargo test --workspace
 TZ=Asia/Kolkata cargo test --workspace   # P61: a UTC agent cannot tell Local from Utc
 cargo deny check
-cargo bench -p ren-core --bench plan     # a 10k-file plan must stay under 50 ms
+cargo run --release -p ren-core --example plan_budget   # a 10k-file preset plan, p95 under 50 ms
+cargo bench -p ren-core --bench plan     # the same numbers with criterion's statistics; keep them in the commit message
 ```

@@ -1,6 +1,8 @@
 //! Find & Replace, and Batch Replace.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -130,28 +132,30 @@ impl Replace {
         }
     }
 
-    /// The pattern this operation matches with, compiled once.
+    /// The regex text this operation matches with, before compilation.
     ///
     /// Swap Mode needs a different pattern (an alternation of both strings), so
     /// it is folded in here rather than compiled separately.
+    fn pattern_source(&self) -> String {
+        if self.swap_applies() {
+            format!(
+                "{}|{}",
+                regex_escape(&self.find),
+                regex_escape(self.literal_replacement().unwrap_or_default())
+            )
+        } else {
+            match self.spec() {
+                MatchSpec::Substring(s) => regex_escape(&s),
+                MatchSpec::Wildcard(s) => wildcard::to_regex(&s),
+                MatchSpec::Regex(s) => s,
+            }
+        }
+    }
+
+    /// The pattern this operation matches with, compiled once.
     fn pattern(&self) -> Result<&Pattern, RegexError> {
         self.compiled
-            .get_or_init(|| {
-                let source = if self.swap_applies() {
-                    format!(
-                        "{}|{}",
-                        regex_escape(&self.find),
-                        regex_escape(self.literal_replacement().unwrap_or_default())
-                    )
-                } else {
-                    match self.spec() {
-                        MatchSpec::Substring(s) => regex_escape(&s),
-                        MatchSpec::Wildcard(s) => wildcard::to_regex(&s),
-                        MatchSpec::Regex(s) => s,
-                    }
-                };
-                Pattern::compile(&source, self.options())
-            })
+            .get_or_init(|| Pattern::compile(&self.pattern_source(), self.options()))
             .as_ref()
             .map_err(Clone::clone)
     }
@@ -289,6 +293,19 @@ impl NameTransform for Replace {
         };
 
         let pattern = self.pattern().map_err(|e| OpError::new("replace", e))?;
+        // Nothing to replace is the common answer, and it is answered before
+        // anything is built: a Batch Replace card runs fifty-one rules over
+        // every file on every keystroke, and almost none of them match almost
+        // any name. `find` is the engine's cheapest question — no capture
+        // groups, no allocation — and `replace_skipping` used to pay for the
+        // output string and the translated replacement on every miss.
+        if pattern
+            .find(subject)
+            .map_err(|e| OpError::new("replace", e))?
+            .is_none()
+        {
+            return Ok(Cow::Borrowed(subject));
+        }
         let out = pattern
             .replace_skipping(subject, &replacement, self.skip, self.max)
             .map_err(|e| OpError::new("replace", e))?;
@@ -313,23 +330,157 @@ fn borrow_if_unchanged(subject: &str, produced: String) -> Cow<'_, str> {
 pub struct BatchReplace {
     /// Executed top-down, each seeing the previous rule's output.
     pub rules: Vec<Replace>,
+    /// Which rules can match a given name, asked of all of them at once.
+    /// Looked up on first use and reset by the clone `to_step` makes per
+    /// preview (D21), like `Replace::compiled` beside it; the set itself is
+    /// shared process-wide (P40), because building one compiles fifty-one
+    /// patterns and the clone happens on every keystroke.
+    #[serde(skip)]
+    prefilter: Cached<Arc<RuleSet>>,
 }
 
 impl Default for BatchReplace {
     fn default() -> Self {
         Self {
             rules: shipped_rules().clone(),
+            prefilter: Cached::new(),
         }
+    }
+}
+
+/// Every rule's pattern in one `RegexSet`, so "which of these fifty-one could
+/// possibly match this name" is one scan rather than fifty-one.
+///
+/// **Why it is exact.** `fancy-regex` hands every pattern without a fancy
+/// feature — lookaround, a backreference — to the `regex` crate verbatim, so
+/// for those patterns the set and the rule are the same matcher. A pattern
+/// the `regex` crate refuses is one with a fancy feature; it is left out of
+/// the set and treated as *always* possibly matching, which costs its full
+/// run per file and never a missed match. The set is asked again after every
+/// rule that changed the name, because the rules are sequential and a later
+/// rule sees the earlier one's output.
+///
+/// **Why it exists.** A Batch Replace card runs its rules over every file on
+/// every keystroke, and the shipped fifty-one are English contractions that
+/// match almost no name. Fifty-one `find`s per file were most of the cost of
+/// the whole preview; one set scan is a fraction of one.
+struct RuleSet {
+    set: Option<regex::RegexSet>,
+    /// `set`'s pattern `i` is rule `members[i]`.
+    members: Vec<usize>,
+    /// Rules the set cannot speak for: always run.
+    unfiltered: Vec<usize>,
+}
+
+impl RuleSet {
+    /// The set for `rules`, shared with every other `BatchReplace` holding
+    /// the same rules.
+    ///
+    /// P40's reasoning, one level up: `to_step` clones the operation on every
+    /// keystroke and a clone resets `prefilter`, so without this the fifty-one
+    /// patterns were compiled — twice, once to probe and once into the set —
+    /// per keystroke, which cost more than the fifty-one finds it replaced.
+    /// Keyed by the pattern texts, so two cards with the same rules share one
+    /// set and an edited rule gets a fresh one.
+    fn shared(rules: &[Replace]) -> Arc<Self> {
+        static SETS: OnceLock<Mutex<HashMap<Vec<String>, Arc<RuleSet>>>> = OnceLock::new();
+        const CAPACITY: usize = 64;
+
+        let key: Vec<String> = rules
+            .iter()
+            .map(|rule| {
+                let mut source = rule.pattern_source();
+                if !rule.case_sensitive {
+                    source.insert_str(0, "(?i)");
+                }
+                source
+            })
+            .collect();
+        let sets = SETS.get_or_init(Default::default);
+        if let Ok(map) = sets.lock()
+            && let Some(set) = map.get(&key)
+        {
+            return set.clone();
+        }
+        let set = Arc::new(Self::build(rules));
+        if let Ok(mut map) = sets.lock() {
+            // A user typing into a rule produces a new key per keystroke;
+            // cleared wholesale when full, as a cost cache may be.
+            if map.len() >= CAPACITY {
+                map.clear();
+            }
+            map.insert(key, set.clone());
+        }
+        set
+    }
+
+    fn build(rules: &[Replace]) -> Self {
+        let mut sources = Vec::new();
+        let mut members = Vec::new();
+        let mut unfiltered = Vec::new();
+        for (index, rule) in rules.iter().enumerate() {
+            if rule.find.is_empty() {
+                continue; // `Replace::apply` answers a borrow at once.
+            }
+            let mut source = rule.pattern_source();
+            if !rule.case_sensitive {
+                source.insert_str(0, "(?i)");
+            }
+            match regex::Regex::new(&source) {
+                Ok(_) => {
+                    sources.push(source);
+                    members.push(index);
+                }
+                Err(_) => unfiltered.push(index),
+            }
+        }
+        // A set that fails to build — a size limit on the union — makes every
+        // member unfiltered rather than a failed operation: the prefilter is
+        // a cost cache, never a correctness one.
+        let set = match regex::RegexSet::new(&sources) {
+            Ok(set) => Some(set),
+            Err(_) => {
+                unfiltered.append(&mut members);
+                unfiltered.sort_unstable();
+                None
+            }
+        };
+        Self {
+            set,
+            members,
+            unfiltered,
+        }
+    }
+
+    /// The rules that may match `name`, in rule order, starting at `from`.
+    fn candidates(&self, name: &str, from: usize, out: &mut Vec<usize>) {
+        out.clear();
+        if let Some(set) = &self.set {
+            out.extend(
+                set.matches(name)
+                    .iter()
+                    .map(|i| self.members[i])
+                    .filter(|&rule| rule >= from),
+            );
+        }
+        out.extend(self.unfiltered.iter().copied().filter(|&rule| rule >= from));
+        out.sort_unstable();
     }
 }
 
 impl BatchReplace {
     pub fn new(rules: Vec<Replace>) -> Self {
-        Self { rules }
+        Self {
+            rules,
+            prefilter: Cached::new(),
+        }
     }
 
     pub fn empty() -> Self {
-        Self { rules: Vec::new() }
+        Self {
+            rules: Vec::new(),
+            prefilter: Cached::new(),
+        }
     }
 }
 
@@ -403,12 +554,24 @@ impl NameTransform for BatchReplace {
     }
 
     fn apply<'a>(&self, subject: &'a str, cx: &EvalCx<'_>) -> Result<Cow<'a, str>, OpError> {
+        let prefilter = self.prefilter.get_or_init(|| RuleSet::shared(&self.rules));
         let mut current = Cow::Borrowed(subject);
-        for rule in &self.rules {
-            match rule.apply(&current, cx)? {
-                Cow::Borrowed(_) => {}
-                Cow::Owned(next) => current = Cow::Owned(next),
+        let mut candidates = Vec::new();
+        let mut from = 0;
+        // Ask the set which rules can match what the name is *now*, run those
+        // in order, and ask again from the next rule whenever one of them
+        // changed the name — the same top-down, each-sees-the-last semantics
+        // as running all of them, minus the ones that could not have fired.
+        'rescan: loop {
+            prefilter.candidates(&current, from, &mut candidates);
+            for &index in &candidates {
+                if let Cow::Owned(next) = self.rules[index].apply(&current, cx)? {
+                    current = Cow::Owned(next);
+                    from = index + 1;
+                    continue 'rescan;
+                }
             }
+            break;
         }
         Ok(current)
     }
@@ -596,6 +759,30 @@ mod tests {
     #[test]
     fn a_batch_with_no_rules_changes_nothing() {
         assert_eq!(run(&BatchReplace::empty(), "untouched"), "untouched");
+    }
+
+    /// A rule the prefilter cannot speak for — a lookahead is a fancy
+    /// feature the `regex` crate refuses — is always run, so it still fires,
+    /// and a later rule still sees what it produced.
+    #[test]
+    fn a_rule_the_prefilter_cannot_index_still_runs_in_order() {
+        let batch = BatchReplace::new(vec![
+            Replace::new(r"a(?=b)", "X").regex(true),
+            Replace::new("Xb", "done"),
+            Replace::new("_", " "),
+        ]);
+        let set = RuleSet::build(&batch.rules);
+        assert_eq!(set.unfiltered, [0], "the lookahead rule is outside the set");
+        assert_eq!(set.members, [1, 2]);
+        assert_eq!(run(&batch, "ab_c"), "done c");
+    }
+
+    /// The set is asked again after a rule changes the name, because a later
+    /// rule may match only what an earlier one produced.
+    #[test]
+    fn a_rule_that_matches_only_an_earlier_rules_output_still_fires() {
+        let batch = BatchReplace::new(vec![Replace::new("_", " "), Replace::new("don t", "don't")]);
+        assert_eq!(run(&batch, "i_don_t_care"), "i don't care");
     }
 
     /// The panel reads "51 items in batch replace list".

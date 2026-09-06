@@ -80,6 +80,12 @@ env_logger = "0.11.11"
 proptest = "1.11.0"
 rust_decimal = { version = "1.42.1", default-features = false, features = ["std", "serde"] }
 fancy-regex = "0.19.0"
+# Batch Replace's prefilter: one `RegexSet` over every rule says which of the
+# fifty-one can match a name before any of them is run. Already in the graph
+# under `fancy-regex`, which delegates every non-fancy pattern to it — so the
+# same pattern text means the same thing to both, which is what makes the
+# prefilter exact. MIT OR Apache-2.0.
+regex = "1.13.1"
 filetime = "0.2.29"
 infer = "0.22.0"
 log = "0.4.33"

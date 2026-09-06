@@ -13,6 +13,14 @@ optimization to defer" and budgets **< 50 ms end to end at 10 000 files**. Does
 the design — rayon parallel pure pass, generation counter, virtualized
 `egui_table` — actually hold?
 
+> **Amended 2026-09-06 (D165).** The numbers below are true for what they
+> measure — `Pipeline::evaluate` per row plus a frame — and that is not the
+> shipped keystroke, which also validates every name, folds the keys, detects
+> conflicts and orders the renames in `ren_core::plan`. That path measured
+> 68 ms on the `preset` listing while this harness reported 4 ms. The
+> planning budget is now enforced by `crates/ren-core/examples/plan_budget.rs`
+> on the real engine; this harness remains the frame and tile-count gate.
+
 ## Verdict
 
 **Yes, with roughly 13× headroom at the target size.** p95 for a full

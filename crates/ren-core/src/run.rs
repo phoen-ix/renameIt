@@ -201,7 +201,15 @@ fn common_parent(entries: &[FileEntry]) -> String {
     let Some(first) = entries.first().and_then(|e| e.path.parent()) else {
         return String::new();
     };
-    if entries.iter().any(|e| e.path.parent() != Some(first)) {
+    // On the bytes, with the component comparison as the fallback: every
+    // parent here is cut from one listing, so equal folders are equal bytes,
+    // and a component walk per entry made this the dearest line of the
+    // pre-pass.
+    if entries.iter().any(|e| {
+        e.path
+            .parent()
+            .is_none_or(|p| p.as_os_str() != first.as_os_str() && p != first)
+    }) {
         return String::new();
     }
     let mut text = first.to_string_lossy().into_owned();

@@ -786,3 +786,65 @@ proptest! {
         prop_assert_eq!(raw_names_in(dir.path()), original);
     }
 }
+
+/// Names shaped to exercise the shipped Batch Replace rules: contractions
+/// with and without their apostrophe, each stand-in the rules know, mixed
+/// case, underscores, and text the rules must leave alone — in random order
+/// and combination, so a rule that fires on a name an earlier rule produced
+/// is generated as often as one that fires on the original.
+fn contraction_soup() -> impl Strategy<Value = String> {
+    let piece = prop_oneof![
+        Just("I ll".to_owned()),
+        Just("dont".to_owned()),
+        Just("DON T".to_owned()),
+        Just("can`t".to_owned()),
+        Just("Isn´t".to_owned()),
+        Just("they re".to_owned()),
+        Just("pedant".to_owned()),
+        Just("wont".to_owned()),
+        Just("here_s".to_owned()),
+        Just("_".to_owned()),
+        Just("  ".to_owned()),
+        Just("Ünïcödé".to_owned()),
+        Just("(final)".to_owned()),
+        "[a-z]{1,4}",
+    ];
+    proptest::collection::vec(piece, 0..8).prop_map(|pieces| pieces.join(" "))
+}
+
+/// The naive reading of a Batch Replace: every rule, top to bottom, each
+/// seeing the last one's output.
+fn batch_naively(rules: &[Replace], name: &str) -> String {
+    use ren_core::ops::NameTransform;
+    let entry = ren_core::model::FileEntry::synthetic("/x/a.txt");
+    let cx = ren_core::ops::EvalCx::simple(&entry, 0, 1);
+    let mut current = name.to_owned();
+    for rule in rules {
+        current = rule.apply(&current, &cx).unwrap().into_owned();
+    }
+    current
+}
+
+proptest! {
+    /// **Batch Replace's prefilter never changes an answer.**
+    ///
+    /// The card asks one `RegexSet` which of its rules can match a name and
+    /// runs only those, re-asking after any rule that changed the name. That
+    /// is exactly "every rule, top to bottom" only if the set and the rules
+    /// agree on what matches — which they do by construction, since the
+    /// engine hands every non-fancy pattern to the same crate the set is
+    /// built from — and this holds the two readings equal over names built
+    /// to make the rules fire, chain, and stay quiet.
+    #[test]
+    fn the_batch_replace_prefilter_agrees_with_running_every_rule(
+        name in contraction_soup(),
+    ) {
+        use ren_core::ops::NameTransform;
+        let batch = BatchReplace::default();
+        let entry = ren_core::model::FileEntry::synthetic("/x/a.txt");
+        let cx = ren_core::ops::EvalCx::simple(&entry, 0, 1);
+        let filtered = batch.apply(&name, &cx).unwrap().into_owned();
+        let naive = batch_naively(&batch.rules, &name);
+        prop_assert_eq!(filtered, naive, "over {:?}", name);
+    }
+}

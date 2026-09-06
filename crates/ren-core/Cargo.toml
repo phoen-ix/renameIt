@@ -20,6 +20,7 @@ koto_bytecode.workspace = true
 lofty.workspace = true
 crc32fast.workspace = true
 fancy-regex.workspace = true
+regex.workspace = true
 infer.workspace = true
 rayon.workspace = true
 rust_decimal.workspace = true
