@@ -102,7 +102,7 @@ impl<'a> FileTable<'a> {
         thumbs: &'a mut Thumbs,
         thumb: tile::Look,
     ) -> Self {
-        let visible = visible_rows(entries.len(), plan, plan_index, row_filter);
+        let visible = visible_rows(entries, plan, plan_index, row_filter);
 
         Self {
             entries,
@@ -263,7 +263,7 @@ impl<'a> FileTable<'a> {
     }
 
     fn item(&self, entry_index: usize) -> Option<&'a PlanItem> {
-        item_of(self.plan, self.plan_index, entry_index)
+        item_of(self.entries, self.plan, self.plan_index, entry_index)
     }
 }
 
@@ -578,9 +578,15 @@ impl FileTable<'_> {
         if response.secondary_clicked() && !self.selection.contains(index) {
             self.selection.set([index]);
         }
-        let selected: Vec<usize> = self.selection.iter().collect();
+        // Collected inside the closure: the menu is open on one row in one
+        // frame in a thousand, and a 10 000-row selection copied for every
+        // visible row of every other frame is the waste this avoids.
+        let selection = &*self.selection;
         let mut asked = None;
-        response.context_menu(|ui| asked = rows::row_menu(ui, index, &selected));
+        response.context_menu(|ui| {
+            let selected: Vec<usize> = selection.iter().collect();
+            asked = rows::row_menu(ui, index, &selected);
+        });
         if asked.is_some() {
             self.row_action = asked;
         }

@@ -43,12 +43,18 @@ struct Request {
     generation: u64,
     entries: Arc<Vec<FileEntry>>,
     pipeline: Arc<Pipeline>,
+    /// Which listing rows `entries` are, in order — the plan's `items[k]`
+    /// is about listing row `scoped[k]`. Carried with the request so the
+    /// answer comes back with the scope it was computed over, not whatever
+    /// the app has selected since (P22 scopes the plan to the selection).
+    scoped: Vec<usize>,
 }
 
 struct Response {
     generation: u64,
     /// The plan, or what the engine panicked with.
     outcome: Result<Plan, String>,
+    scoped: Vec<usize>,
     elapsed: Duration,
 }
 
@@ -57,6 +63,11 @@ struct Response {
 pub struct Ready {
     pub generation: u64,
     pub plan: Plan,
+    /// The listing rows the plan was built over: `plan.items[k]` describes
+    /// row `scoped[k]`. A plan does not know which rows it is about — its
+    /// items index the entries it was handed — so this is what turns it back
+    /// into something the table can address by row.
+    pub scoped: Vec<usize>,
     /// How long the worker took, for the status bar.
     pub elapsed: Duration,
 }
@@ -116,6 +127,7 @@ impl PreviewWorker {
                     let response = Response {
                         generation: request.generation,
                         outcome,
+                        scoped: request.scoped,
                         elapsed: started.elapsed(),
                     };
                     if response_tx.send(response).is_err() {
@@ -136,8 +148,14 @@ impl PreviewWorker {
         }
     }
 
-    /// Asks for a fresh plan. Cheap — the work happens on the worker.
-    pub fn request(&mut self, entries: Arc<Vec<FileEntry>>, pipeline: Arc<Pipeline>) {
+    /// Asks for a fresh plan over `entries`, which are listing rows `scoped`.
+    /// Cheap — the work happens on the worker.
+    pub fn request(
+        &mut self,
+        entries: Arc<Vec<FileEntry>>,
+        pipeline: Arc<Pipeline>,
+        scoped: Vec<usize>,
+    ) {
         self.generation += 1;
         // A closed channel means the worker died; the UI keeps its last plan
         // rather than panicking mid-frame.
@@ -145,6 +163,7 @@ impl PreviewWorker {
             generation: self.generation,
             entries,
             pipeline,
+            scoped,
         });
     }
 
@@ -166,6 +185,7 @@ impl PreviewWorker {
                     self.ready = Some(Ready {
                         generation: response.generation,
                         plan,
+                        scoped: response.scoped,
                         elapsed: response.elapsed,
                     });
                     self.failure = None;
@@ -200,6 +220,24 @@ impl PreviewWorker {
     /// one or more keystrokes behind.
     pub fn is_stale(&self) -> bool {
         self.answered < self.generation
+    }
+
+    /// Installs a plan as if the worker had just delivered it for `scoped`.
+    ///
+    /// Only for tests, which need a plan whose scope disagrees with the
+    /// listing on screen — the shape a race produces and a worker cannot be
+    /// made to produce on cue.
+    #[cfg(test)]
+    pub(crate) fn install_ready(&mut self, plan: Plan, scoped: Vec<usize>) {
+        self.generation += 1;
+        self.answered = self.generation;
+        self.ready = Some(Ready {
+            generation: self.generation,
+            plan,
+            scoped,
+            elapsed: Duration::ZERO,
+        });
+        self.failure = None;
     }
 
     /// Blocks until the plan for the latest request has arrived.
@@ -257,6 +295,7 @@ mod tests {
         worker.request(
             entries(&["a_b.txt"]),
             Arc::new(Pipeline::new().then(Replace::new("_", "-"))),
+            vec![0],
         );
         let plan = worker
             .wait(Duration::from_secs(5))
@@ -267,7 +306,7 @@ mod tests {
     #[test]
     fn the_preview_is_stale_until_the_worker_answers() {
         let mut worker = worker();
-        worker.request(entries(&["a.txt"]), Arc::new(Pipeline::new()));
+        worker.request(entries(&["a.txt"]), Arc::new(Pipeline::new()), vec![0]);
         assert!(worker.is_stale(), "nothing has come back yet");
         worker.wait(Duration::from_secs(5));
         assert!(!worker.is_stale());
@@ -282,6 +321,7 @@ mod tests {
             worker.request(
                 files.clone(),
                 Arc::new(Pipeline::new().then(Casing::new(mode))),
+                vec![0],
             );
         }
         let plan = worker.wait(Duration::from_secs(5)).unwrap();
@@ -295,7 +335,7 @@ mod tests {
         let mut worker = worker();
         assert!(!worker.poll(), "nothing requested yet");
 
-        worker.request(entries(&["a.txt"]), Arc::new(Pipeline::new()));
+        worker.request(entries(&["a.txt"]), Arc::new(Pipeline::new()), vec![0]);
         worker.wait(Duration::from_secs(5));
         assert!(!worker.poll(), "already delivered");
     }
@@ -309,7 +349,7 @@ mod tests {
             counter.fetch_add(1, Ordering::SeqCst);
         });
 
-        worker.request(entries(&["a.txt"]), Arc::new(Pipeline::new()));
+        worker.request(entries(&["a.txt"]), Arc::new(Pipeline::new()), vec![0]);
         worker.wait(Duration::from_secs(5));
         assert!(
             repaints.load(Ordering::SeqCst) >= 1,
@@ -352,7 +392,11 @@ mod tests {
         let mut worker = worker();
         let files = entries(&["boom.txt"]);
 
-        worker.request(files.clone(), Arc::new(Pipeline::new().then(Explodes)));
+        worker.request(
+            files.clone(),
+            Arc::new(Pipeline::new().then(Explodes)),
+            vec![0],
+        );
         assert!(worker.wait(Duration::from_secs(5)).is_none(), "no plan");
         assert!(
             !worker.is_stale(),
@@ -367,6 +411,7 @@ mod tests {
         worker.request(
             files,
             Arc::new(Pipeline::new().then(Replace::new("boom", "ok"))),
+            vec![0],
         );
         let plan = worker
             .wait(Duration::from_secs(5))

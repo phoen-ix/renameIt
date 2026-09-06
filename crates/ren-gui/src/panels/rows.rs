@@ -23,11 +23,18 @@ use crate::widgets::diff_text::{self, DiffStyle};
 
 /// The plan item for one entry, if this run covers it.
 pub(crate) fn item_of<'a>(
+    entries: &[FileEntry],
     plan: Option<&'a Plan>,
     plan_index: &[Option<usize>],
     entry_index: usize,
 ) -> Option<&'a PlanItem> {
-    plan?.items.get((*plan_index.get(entry_index)?)?)
+    let item = plan?.items.get((*plan_index.get(entry_index)?)?)?;
+    // Self-verifying, the way D139 keys the thumbnails: the index is rebuilt
+    // when a plan lands, and between a relist or a sort and the next plan it
+    // points at rows that have moved. A plan item is about one file, and if
+    // that is not the file in this row there is no preview for this row —
+    // rather than the previous occupant's, which is what used to be shown.
+    (item.source == entries.get(entry_index)?.path).then_some(item)
 }
 
 /// Which entries a view shows, in listing order.
@@ -36,13 +43,13 @@ pub(crate) fn item_of<'a>(
 /// *tile* as well. A view that iterated `entries` directly would quietly ignore
 /// the Changed chip.
 pub(crate) fn visible_rows(
-    count: usize,
+    entries: &[FileEntry],
     plan: Option<&Plan>,
     plan_index: &[Option<usize>],
     row_filter: RowFilter,
 ) -> Vec<usize> {
-    (0..count)
-        .filter(|&i| match item_of(plan, plan_index, i) {
+    (0..entries.len())
+        .filter(|&i| match item_of(entries, plan, plan_index, i) {
             Some(item) => row_filter.accepts(item),
             // A row with no plan yet is only hidden by a filter that is
             // explicitly asking for something.
@@ -165,6 +172,13 @@ pub enum CopyWhat {
     Paths,
     /// Both columns, tab separated, which is what a spreadsheet wants.
     Both,
+}
+
+impl CopyWhat {
+    /// Whether the text depends on the preview, so a stale one is a wrong one.
+    pub fn needs_plan(self) -> bool {
+        matches!(self, Self::NewNames | Self::Both)
+    }
 }
 
 /// The right-click menu, drawn wherever a row is.
@@ -644,14 +658,45 @@ mod tests {
             notes: Vec::new(),
         };
         let index = [Some(0), Some(1)];
+        // Both items say they are about `/tmp/a.txt`, so both rows must be.
+        let entries = [
+            FileEntry::synthetic("/tmp/a.txt"),
+            FileEntry::synthetic("/tmp/a.txt"),
+        ];
 
-        assert_eq!(visible_rows(2, Some(&plan), &index, RowFilter::All), [0, 1]);
         assert_eq!(
-            visible_rows(2, Some(&plan), &index, RowFilter::Changed),
+            visible_rows(&entries, Some(&plan), &index, RowFilter::All),
+            [0, 1]
+        );
+        assert_eq!(
+            visible_rows(&entries, Some(&plan), &index, RowFilter::Changed),
             [0]
         );
         // No plan yet: only the unfiltered view shows anything at all.
-        assert_eq!(visible_rows(2, None, &[], RowFilter::All), [0, 1]);
-        assert!(visible_rows(2, None, &[], RowFilter::Changed).is_empty());
+        assert_eq!(visible_rows(&entries, None, &[], RowFilter::All), [0, 1]);
+        assert!(visible_rows(&entries, None, &[], RowFilter::Changed).is_empty());
+    }
+
+    /// The index is rebuilt when a plan lands; between a sort or a relist and
+    /// the next plan it points at rows that have moved. A row whose file is
+    /// not the one the plan item is about has no preview — not somebody
+    /// else's.
+    #[test]
+    fn a_plan_item_is_only_shown_on_the_row_holding_its_file() {
+        let plan = Plan {
+            items: vec![item(RowState::Changed, "z.txt", vec![])],
+            ops: Vec::new(),
+            notes: Vec::new(),
+        };
+        let index = [Some(0)];
+        let right = [FileEntry::synthetic("/tmp/a.txt")];
+        let moved = [FileEntry::synthetic("/tmp/b.txt")];
+        assert!(item_of(&right, Some(&plan), &index, 0).is_some());
+        assert!(item_of(&moved, Some(&plan), &index, 0).is_none());
+        assert_eq!(
+            visible_rows(&moved, Some(&plan), &index, RowFilter::Changed),
+            Vec::<usize>::new(),
+            "and a filter that asks for a preview hides a row that has none"
+        );
     }
 }

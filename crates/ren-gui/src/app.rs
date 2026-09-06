@@ -263,9 +263,15 @@ pub struct RenameItApp {
     /// preview has caught up with them.
     run_when_ready: bool,
 
-    /// Entry indices the current plan was computed over, in plan order.
+    /// Entry indices the *latest request* was computed over, in plan order.
+    /// The plan on screen carries its own copy (`Ready::scoped`), which is
+    /// the one the table is addressed through; this one serves the things
+    /// that run at request time — the assist subject, the running counter.
     scoped: Vec<usize>,
-    /// Entry index → index into `plan.items`.
+    /// Entry index → index into `plan.items`, rebuilt from `Ready::scoped`
+    /// whenever a plan lands. Between a relist or a sort and the next plan it
+    /// can point at rows that have moved, which is why `rows::item_of`
+    /// checks the file before trusting it.
     plan_index: Vec<Option<usize>>,
     inline_rename: Option<crate::panels::rows::InlineRename>,
     show_log: bool,
@@ -943,6 +949,17 @@ impl RenameItApp {
         self.drawer.as_ref()
     }
 
+    /// The plan item the table shows on row `index`, if the current plan has
+    /// one for the file that is there — the same lookup every cell makes.
+    pub fn item_for_row(&self, index: usize) -> Option<&ren_core::PlanItem> {
+        crate::panels::rows::item_of(
+            self.session.entries(),
+            self.preview.plan(),
+            &self.plan_index,
+            index,
+        )
+    }
+
     fn apply_drawer(&mut self, out: presets::DrawerOutput) {
         let asked = out.asked_for_something();
         if let Some(name) = out.save_as {
@@ -1342,7 +1359,8 @@ impl RenameItApp {
         // `RunContext`, which is D28's serial pre-pass, so computing it per
         // frame would be that mistake a third time.
         self.recompute_assist_subject(&pipeline, &entries);
-        self.preview.request(entries, Arc::new(pipeline));
+        self.preview
+            .request(entries, Arc::new(pipeline), self.scoped.clone());
     }
 
     /// Works out the text the strip shows, once per preview generation.
@@ -1618,11 +1636,48 @@ impl RenameItApp {
         }
     }
 
+    /// Entry index → plan item, from the plan's own record of what it covers.
+    ///
+    /// From `Ready::scoped`, never from `self.scoped`: a plan can land after
+    /// the selection changed underneath it, and indexing a whole-listing plan
+    /// through a one-row scope showed another file's preview on that row
+    /// until the next plan arrived. The plan says which rows it is about.
+    ///
+    /// If the listing has moved since the plan was requested — a sort, a
+    /// relist — the positional record no longer applies, and the plan is
+    /// mapped by file instead. That costs a hash per row, so it is only paid
+    /// when the cheap check says the rows moved.
     fn rebuild_plan_index(&mut self) {
-        self.plan_index = vec![None; self.session.entries().len()];
-        for (position, &entry_index) in self.scoped.iter().enumerate() {
-            if let Some(slot) = self.plan_index.get_mut(entry_index) {
-                *slot = Some(position);
+        let entries = self.session.entries();
+        self.plan_index = vec![None; entries.len()];
+        let Some(ready) = self.preview.ready() else {
+            return;
+        };
+        let by_position = ready
+            .scoped
+            .iter()
+            .zip(&ready.plan.items)
+            .all(|(&entry_index, item)| {
+                entries
+                    .get(entry_index)
+                    .is_some_and(|entry| entry.path == item.source)
+            });
+        if by_position {
+            for (position, &entry_index) in ready.scoped.iter().enumerate() {
+                if let Some(slot) = self.plan_index.get_mut(entry_index) {
+                    *slot = Some(position);
+                }
+            }
+        } else {
+            let by_source: std::collections::HashMap<&Path, usize> = ready
+                .plan
+                .items
+                .iter()
+                .enumerate()
+                .map(|(position, item)| (item.source.as_path(), position))
+                .collect();
+            for (slot, entry) in self.plan_index.iter_mut().zip(entries.iter()) {
+                *slot = by_source.get(entry.path.as_path()).copied();
             }
         }
     }
@@ -1924,10 +1979,9 @@ impl RenameItApp {
             self.walk_the_folder_tree(ctx);
         }
 
-        let shown = self.shown_rows();
-        if shown.is_empty() {
-            return;
-        }
+        // The keys first, the row list second: the list is a walk over the
+        // whole listing, and on the frames with no key down — almost all of
+        // them — there is nothing to walk it for.
         let (up, down, home, end, ctrl, shift) = ctx.input(|i| {
             (
                 i.key_pressed(egui::Key::ArrowUp),
@@ -1938,6 +1992,13 @@ impl RenameItApp {
                 i.modifiers.shift,
             )
         });
+        if !(up || down || home || end) {
+            return;
+        }
+        let shown = self.shown_rows();
+        if shown.is_empty() {
+            return;
+        }
 
         // Left and Right are deliberately not taken. In the table they would
         // have to mean "next column", which is nothing; in the grid they would
@@ -2033,7 +2094,7 @@ impl RenameItApp {
     /// row the filter is hiding is hidden from the keyboard too.
     fn shown_rows(&self) -> Vec<usize> {
         crate::panels::rows::visible_rows(
-            self.session.entries().len(),
+            self.session.entries(),
             self.preview.plan(),
             &self.plan_index,
             self.session.settings.row_filter,
@@ -2193,6 +2254,15 @@ impl RenameItApp {
                 self.needs_preview = true;
             }
             RowAction::Copy { what, rows } => {
+                // The same rule `run()` keeps (P35): a plan older than the
+                // pipeline on screen is not what the user is looking at, and
+                // copying its names would paste a previous keystroke's
+                // preview somewhere it will be believed.
+                if what.needs_plan() && (self.needs_preview || self.preview.is_stale()) {
+                    self.status =
+                        Some("The preview is still updating — copy again in a moment".to_owned());
+                    return;
+                }
                 let text = self.rows_as_text(what, &rows);
                 if let Ok(mut clipboard) = arboard::Clipboard::new() {
                     let _ = clipboard.set_text(text);
@@ -2230,13 +2300,13 @@ impl RenameItApp {
             };
             // A row outside the run has no new name; it keeps the one it has,
             // which is what the table shows for it too.
-            let new_name = self
-                .plan_index
-                .get(index)
-                .copied()
-                .flatten()
-                .and_then(|i| self.preview.plan().and_then(|p| p.items.get(i)))
-                .map_or(entry.file_name.as_str(), |item| item.new_name.as_str());
+            let new_name = crate::panels::rows::item_of(
+                self.session.entries(),
+                self.preview.plan(),
+                &self.plan_index,
+                index,
+            )
+            .map_or(entry.file_name.as_str(), |item| item.new_name.as_str());
 
             match what {
                 CopyWhat::Names => out.push_str(&entry.file_name),
@@ -2853,18 +2923,20 @@ impl RenameItApp {
 
                 ui.add_space(8.0);
                 ui.separator();
+                // Borrowed, not cloned: `settings` and `session` are disjoint
+                // fields, and the popup this feeds is closed on almost every
+                // frame.
                 let sample = self
                     .session
                     .selection
                     .iter()
                     .next()
                     .and_then(|i| self.session.entries().get(i))
-                    .or_else(|| self.session.entries().first())
-                    .cloned();
-                if run_settings::ui(ui, &mut self.settings, sample.as_ref()) {
+                    .or_else(|| self.session.entries().first());
+                if run_settings::ui(ui, &mut self.settings, sample) {
                     self.needs_preview = true;
                 }
-                if self.unanswered().is_some() {
+                if self.pending_ask.is_some() {
                     ui.label(
                         egui::RichText::new(
                             "The preview leaves <Ask> empty — you are asked for it when you \
@@ -3028,6 +3100,73 @@ fn seed_selection(
 mod tests {
     use super::*;
     use ren_core::ops::{CaseMode, Casing};
+
+    fn listing(names: &[&str]) -> (tempfile::TempDir, RenameItApp) {
+        let dir = tempfile::TempDir::new().unwrap();
+        for name in names {
+            std::fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        let journal = tempfile::TempDir::new().unwrap();
+        let mut app = RenameItApp::headless(dir.path().to_path_buf(), journal.path().to_path_buf());
+        *app.operation_mut() = OpKind::Replace(ren_core::ops::Replace::new("_", " "));
+        app.settle();
+        (dir, app)
+    }
+
+    /// A plan says which rows it is about; the app used to remember that
+    /// separately and could disagree with it. Here a whole-listing plan lands
+    /// *after* the selection narrowed to one row — the race — and every row
+    /// still shows its own file's preview, because the index is rebuilt from
+    /// the plan's own scope.
+    #[test]
+    fn a_plan_is_addressed_through_the_scope_it_was_built_over() {
+        let (_dir, mut app) = listing(&["a_1.txt", "b_2.txt", "c_3.txt"]);
+        let whole = app.plan().cloned().unwrap();
+        assert_eq!(whole.items.len(), 3);
+
+        // The selection narrows, the request goes out for one row…
+        app.session.selection.set([1]);
+        app.request_preview();
+        assert_eq!(app.scoped, [1]);
+        // …and the *previous* whole-listing answer arrives.
+        app.preview.install_ready(whole, vec![0, 1, 2]);
+        app.rebuild_plan_index();
+
+        for (row, expected) in [(0, "a 1.txt"), (1, "b 2.txt"), (2, "c 3.txt")] {
+            assert_eq!(
+                app.item_for_row(row).map(|item| item.new_name.as_str()),
+                Some(expected),
+                "row {row}"
+            );
+        }
+    }
+
+    /// Between a sort and the next plan the positional index points at rows
+    /// that have moved. A row whose file is not the plan item's file shows no
+    /// preview rather than the previous occupant's; and when a plan built over
+    /// the old order lands, it is mapped back by file.
+    #[test]
+    fn a_moved_listing_never_shows_another_rows_preview() {
+        let (_dir, mut app) = listing(&["a_1.txt", "b_2.txt"]);
+        let old_order = app.plan().cloned().unwrap();
+        assert_eq!(app.item_for_row(0).unwrap().new_name, "a 1.txt");
+
+        // Reverse the listing under the plan, and do not let a new one land.
+        app.session.set_sort(crate::viewmodel::SortColumn::Name);
+        assert_eq!(app.session.entries()[0].file_name, "b_2.txt");
+        assert_eq!(
+            app.item_for_row(0),
+            None,
+            "row 0 now holds b_2.txt, and the index still says a_1's item"
+        );
+
+        // The plan for the old order arrives anyway (it was in flight): the
+        // positional record no longer applies, so it is mapped by file.
+        app.preview.install_ready(old_order, vec![0, 1]);
+        app.rebuild_plan_index();
+        assert_eq!(app.item_for_row(0).unwrap().new_name, "b 2.txt");
+        assert_eq!(app.item_for_row(1).unwrap().new_name, "a 1.txt");
+    }
 
     /// A stand-in for eframe's real storage, so the round trip goes through
     /// the codec the app actually uses.
