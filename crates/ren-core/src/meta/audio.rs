@@ -498,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn the_extended_id3_names_are_read_by_the_manuals_spelling() {
+    fn the_extended_id3_names_are_read_by_their_canonical_spelling() {
         let dir = TempDir::new().unwrap();
         let mp3 = Mp3::tagged("A", "B")
             .frame("TPE2", "Various Artists")

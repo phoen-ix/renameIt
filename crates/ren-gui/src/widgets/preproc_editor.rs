@@ -378,7 +378,7 @@ mod tests {
 
     /// The five stages in the documented order, with the qualifier last.
     #[test]
-    fn the_summary_reads_the_stages_in_the_manuals_order() {
+    fn the_summary_reads_the_stages_in_the_order_they_run() {
         let mut pp = PreProcessor::new().skipping_first(14).limited_to(3);
         pp.cut_at = Some(MatchSpec::Substring(" - ".into()));
         pp.case_sensitive = true;

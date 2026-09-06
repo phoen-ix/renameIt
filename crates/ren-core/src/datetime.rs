@@ -411,7 +411,7 @@ mod tests {
     /// The documented second worked example: a second pass that sets only the
     /// year, after the Exif date has supplied the rest.
     #[test]
-    fn the_manuals_second_pass_sets_only_the_year() {
+    fn the_second_pass_sets_only_the_year() {
         assert_eq!(
             merge(
                 at(1999, 5, 9, 10, 18, 5),

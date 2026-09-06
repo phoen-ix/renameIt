@@ -111,7 +111,7 @@ mod tests {
     /// Forty-nine names exist. We read 43 and name the other six rather than
     /// letting them render as nothing.
     #[test]
-    fn every_name_the_manual_lists_is_accounted_for() {
+    fn every_documented_name_is_accounted_for() {
         assert_eq!(ID3.len(), 43);
         assert_eq!(ID3.len() + ID3_UNSUPPORTED.len(), 49);
     }
@@ -146,7 +146,7 @@ mod tests {
     /// the historical misspelling is part of the contract: a user who copied
     /// `<ID3-FilOowner>` out of the tag list has to get what they copied.
     #[test]
-    fn the_manuals_typo_is_reproduced_exactly() {
+    fn the_historical_misspelling_is_accepted_exactly() {
         assert_eq!(id3_key("FilOowner"), Some(ItemKey::FileOwner));
         assert_eq!(
             id3_key("FileOwner"),

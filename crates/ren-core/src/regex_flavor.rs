@@ -164,9 +164,9 @@ impl Pattern {
     /// Replace, honouring the **Skip** and **Max** boxes.
     ///
     /// Skip skips replacing the first *n* occurrences found (0 = from the
-    /// beginning), and Max — the
-    /// manual calls it Count — *"limit the number of replaces to perform within
-    /// each filename"* (0 = unlimited). Skipped occurrences still count as
+    /// beginning), and Max — the Count box — limits the number of replacements
+    /// performed within each filename (0 = unlimited). Skipped occurrences
+    /// still count as
     /// occurrences; the limit applies to replacements actually made.
     pub fn replace_skipping(
         &self,

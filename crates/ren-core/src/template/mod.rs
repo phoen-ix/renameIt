@@ -959,7 +959,7 @@ mod tests {
 
     /// the Free Format worked example: "<PARENT>_<FULLNAME>".
     #[test]
-    fn the_manuals_free_format_example_renders() {
+    fn the_free_format_example_renders() {
         assert_eq!(text("<PARENT>_<FULLNAME>", "0001.jpg"), "rock_0001.jpg");
     }
 
@@ -1113,7 +1113,7 @@ mod tests {
 
     /// the worked Parts example, end to end through the template.
     #[test]
-    fn the_parts_example_from_the_manual_rearranges_the_name() {
+    fn the_parts_example_rearranges_the_name() {
         let e = FileEntry::synthetic("/music/01. Metallica (S&M) Nothing Else Matters.mp3");
         let settings = RunSettings {
             parts: PartsSpec::new("<%1>. <%2> (<%3>) <%4>"),

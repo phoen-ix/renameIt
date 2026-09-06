@@ -2,6 +2,7 @@
 
 pub mod diff_text;
 pub mod filter_editor;
+pub mod form;
 pub mod icons;
 pub mod number;
 pub mod preproc_editor;

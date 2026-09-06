@@ -284,7 +284,7 @@ mod tests {
 
     /// "Click on the magic wand button to automatically detect the parts"
     #[test]
-    fn auto_detect_reproduces_the_manuals_pattern_shape() {
+    fn auto_detect_produces_the_documented_pattern_shape() {
         let sample = "01. Metallica (S&M) Nothing Else Matters";
         let spec = PartsSpec::detect(sample);
         // Detected against the recovered separator list.

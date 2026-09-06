@@ -692,7 +692,7 @@ mod tests {
 
     /// The worked example for `Get from filename`.
     #[test]
-    fn get_from_filename_reads_the_manuals_example() {
+    fn get_from_filename_reads_the_worked_example() {
         let op = SetDate {
             source: DateSource::FromFilename,
             ..Default::default()

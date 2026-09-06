@@ -156,7 +156,7 @@ mod tests {
     /// The worked example, with separator `--`:
     /// "001--firstfile.ext, 002--secondfile.ext, 003--thirdfile.ext".
     #[test]
-    fn the_manuals_example_numbers_three_files() {
+    fn the_worked_example_numbers_three_files() {
         let op = AddCounter::new(CounterPlacement::First, "--");
         let setup = CounterSetup {
             auto_pad: false,

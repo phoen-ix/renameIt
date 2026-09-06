@@ -144,8 +144,8 @@ impl Session {
         koto.run(compiled.chunk().clone())
             .map_err(|e| ScriptError::from_run(&e, deadline))?;
 
-        // A missing `rename` is an error rather than a silent no-op. The
-        // original leaves it undefined-and-skip, but there the function name is
+        // A missing `rename` is an error rather than a silent no-op. Leaving
+        // it undefined-and-skip would be defensible where the function name is
         // a VBScript declaration the engine looks up — here a typo would make
         // every row silently unchanged with nothing to see.
         if koto.exports().get("rename").is_none() {
@@ -405,7 +405,7 @@ const MAX_CONTENTS: u64 = 5_000_000;
 /// the size cap above.
 ///
 /// Empty for a file that is too large, unreadable, or has no current row. The
-/// original conflates those too: each one is an `exit function`, which returns
+/// three are deliberately not distinguished: each one is a bare return, giving
 /// the empty string.
 fn contents_of(shared: &Arc<Shared>) -> KValue {
     let empty = KValue::Str("".into());

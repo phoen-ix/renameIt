@@ -245,8 +245,8 @@ Three defects the last pass turned up, none of which any test had caught:
 
 - **Six presets on a first run** — *Add prefix to filename*, *Add suffix to end
   of filename*, *Basic filename cleanup*, *Create numbered sequence*, *Rename
-  Mp3s as Artist - Title* and *Sync file date with image Exif date*. The six the
-  original shipped, recreated as our own data rather than copied. They are seeded only into a
+  Mp3s as Artist - Title* and *Sync file date with image Exif date*. Six presets,
+  shipped as our own data. They are seeded only into a
   preset folder that does not exist yet: a preset you deleted is an item you
   took out of your own right-click menu, and putting it back every start would
   be the app arguing with you about your shell.

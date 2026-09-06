@@ -368,7 +368,7 @@ mod tests {
     }
 
     #[test]
-    fn the_four_groups_are_the_originals_function_tabs() {
+    fn the_catalogue_has_exactly_four_groups_in_a_fixed_order() {
         let names: Vec<&str> = CATALOGUE.iter().map(|g| g.name).collect();
         assert_eq!(names, ["General", "Numbers", "Music", "Advanced"]);
     }

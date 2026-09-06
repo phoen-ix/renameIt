@@ -270,8 +270,8 @@ impl Resolved {
 
 /// Read the `/l` file: full paths, one per line.
 ///
-/// Blank lines are skipped, and so are `#` comments — neither is in the
-/// original, which would treat both as filenames and fail. A list file is
+/// Blank lines are skipped, and so are `#` comments — an extension, since a
+/// strict reading would treat both as filenames and fail. A list file is
 /// usually generated, but it is also the thing a person hand-edits when
 /// something went wrong, and a format with no way to leave a note is a worse
 /// format for no gain.

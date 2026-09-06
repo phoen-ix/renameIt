@@ -447,7 +447,7 @@ mod tests {
     /// "Dates & times are by default returned in the format yyyy-mm-dd Hh:Mm:Ss,
     /// for example 1977-05-09 10:18:00."
     #[test]
-    fn the_default_format_is_the_manuals_example() {
+    fn the_default_format_is_the_documented_one() {
         assert_eq!(render(DEFAULT_DATE), "1977-05-09");
         assert_eq!(render(DEFAULT_TIME), "10.18.05");
     }
@@ -533,7 +533,7 @@ mod tests {
 
     /// The two worked examples.
     #[test]
-    fn the_manuals_examples_render() {
+    fn the_worked_examples_render() {
         assert_eq!(render("Short Date"), "1977-05-09");
         assert_eq!(render("dddd m mmmm"), "Monday 5 May");
     }

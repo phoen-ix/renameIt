@@ -279,7 +279,7 @@ mod tests {
 
     /// The dropdown, verbatim.
     #[test]
-    fn every_target_has_the_label_the_original_shows() {
+    fn every_target_has_its_documented_label() {
         let all = NumberTarget::all();
         assert_eq!(all.len(), NumberTarget::LABELS.len());
         for (target, label) in all.iter().zip(NumberTarget::LABELS) {

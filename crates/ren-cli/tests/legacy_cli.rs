@@ -163,8 +163,8 @@ fn the_list_file_is_deleted_once_the_run_has_happened() {
 /// translates to `preview --delete-list`.
 ///
 /// Deleting only on `apply` would leak that temp file on every invocation,
-/// forever. A successful preview has read the list, which is exactly what the
-/// manual conditions the deletion on.
+/// forever. `/k` is conditioned on the list having been *read*, and a
+/// successful preview has read it.
 #[test]
 fn a_successful_preview_consumes_the_list_too() {
     let fixture = Fixture::new(&["a.txt"]);

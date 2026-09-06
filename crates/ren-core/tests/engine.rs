@@ -965,7 +965,7 @@ fn a_subfolder_blocked_by_a_file_of_the_same_name_is_a_conflict() {
 /// against the stem so `.txt` survives, and an unmatched row (`amet`) and an
 /// unmatched file (`not in list.txt`) are both silently left alone.
 #[test]
-fn the_csv_example_from_the_manual_renames_verbatim() {
+fn the_csv_worked_example_renames_verbatim() {
     let fixture = Fixture::new(&[
         "dolor.txt",
         "ipsum.txt",

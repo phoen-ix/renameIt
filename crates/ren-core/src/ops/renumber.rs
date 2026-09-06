@@ -564,7 +564,7 @@ mod tests {
     }
 
     #[test]
-    fn every_action_has_the_label_the_original_shows() {
+    fn every_action_has_its_documented_label() {
         for (action, label) in NumberAction::all().iter().zip(NumberAction::LABELS) {
             assert_eq!(action.label(), label);
         }

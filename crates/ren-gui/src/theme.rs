@@ -48,6 +48,26 @@ pub mod space {
     pub const SECTION: f32 = 20.0;
 }
 
+/// Widths, in points. The horizontal counterpart of [`space`].
+///
+/// Deliberately short, and deliberately not one entry per field. A field that
+/// wants "the rest of the row" is not a width, it is the absence of one, and
+/// [`crate::widgets::form`] is what supplies it. What is left here is the
+/// handful of boxes that are short on purpose.
+pub mod width {
+    /// The narrowest a full-width field degrades to before the panel's own
+    /// minimum takes over.
+    pub const FIELD_MIN: f32 = 120.0;
+    /// A box that holds one character — a CSV separator.
+    pub const FIELD_CHAR: f32 = 56.0;
+    /// A box that holds a token: a counter separator, a time.
+    pub const FIELD_TOKEN: f32 = 80.0;
+    /// A box that holds an ISO date.
+    pub const FIELD_DATE: f32 = 96.0;
+    /// Room kept between a field and the card's stroke.
+    pub const GUTTER: f32 = 2.0;
+}
+
 /// Per-theme colours that egui has no slot for, so widgets read them from here.
 #[derive(Debug, Clone, Copy)]
 pub struct Accents {

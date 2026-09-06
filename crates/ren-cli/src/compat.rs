@@ -336,7 +336,7 @@ mod tests {
     /// on Linux and, on Windows, a root plus the mask `tmp` — so hard-coding
     /// one tested the split rather than the switches, and only on one OS.
     #[test]
-    fn the_include_switches_combine_the_way_the_original_means_them() {
+    fn the_include_switches_combine_into_two_modern_flags() {
         let dir = tempfile::TempDir::new().unwrap();
         let real = dir.path().to_string_lossy().into_owned();
         assert_eq!(argv(&["/p", &real, "/f"]), ["preview", &real]);

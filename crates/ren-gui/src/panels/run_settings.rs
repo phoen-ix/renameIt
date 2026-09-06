@@ -9,11 +9,10 @@ use ren_core::{CounterSetup, PartsSpec, RunSettings};
 /// Draws the two pinned chips and the tag policy. Returns true if anything
 /// changed.
 ///
-/// `docs/DESIGN.md` S1: *"Counter and Parts setups (global objects in the
-/// original) appear as two pinned chips at the panel top — "Counter: 1, step 1,
-/// pad auto" and "Parts: `<%1> - <%2>`" — each opening its dialog."* They are
-/// run-wide, not per-card, which is why they sit above the stack rather than
-/// inside any of it.
+/// Counter and Parts appear as two pinned chips at the top of the panel —
+/// "Counter: 1, step 1, pad auto" and "Parts: `<%1> - <%2>`" — each opening its
+/// own dialog. They are run-wide, not per-card, which is why they sit above the
+/// stack rather than inside any of it.
 pub fn ui(ui: &mut egui::Ui, settings: &mut RunSettings, sample: Option<&FileEntry>) -> bool {
     let mut changed = false;
 

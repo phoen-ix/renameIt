@@ -260,7 +260,7 @@ mod tests {
 
     /// The worked example, as a preview.
     #[test]
-    fn the_manuals_parts_example_maps_a_filename_onto_fields() {
+    fn the_parts_example_maps_a_filename_onto_fields() {
         let effect = effect_for(&tagger(), "Metallica - One.mp3", "<%1> - <%2>")
             .expect("something to write");
         let Effect::WriteTags { fields, .. } = &effect else {

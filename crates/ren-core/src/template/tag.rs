@@ -25,9 +25,8 @@ pub enum TimeSource {
     /// The date the photograph was taken.
     ///
     /// A fifth source rather than a sixth `Tag` variant, so `<ExifDate-yyyy>`
-    /// gets the whole VB6 date mini-language for nothing — which is what the
-    /// manual promises: *"`<ExifDate-fmt>`"* sits in the same list as
-    /// `<Date-fmt>` and `<CDate-fmt>`.
+    /// gets the whole VB6 date mini-language for nothing — `<ExifDate-fmt>`
+    /// belongs in the same list as `<Date-fmt>` and `<CDate-fmt>`.
     Exif,
 }
 

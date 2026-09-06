@@ -255,7 +255,7 @@ mod tests {
     /// "tell the pre-processor to skip the first 14 characters in the filename
     /// so that only `is fantastic!` is sent to the rename function"
     #[test]
-    fn skipping_the_first_n_characters_reproduces_the_manuals_example() {
+    fn skipping_the_first_n_characters_matches_the_worked_example() {
         let pp = PreProcessor::new().skipping_first(14);
         assert_eq!(
             narrow(&pp, "Batch Renamer is fantastic!"),

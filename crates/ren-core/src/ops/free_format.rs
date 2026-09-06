@@ -104,7 +104,7 @@ mod tests {
     ///
     /// > *"The format string could be `<PARENT>_<FULLNAME>`."*
     #[test]
-    fn the_manuals_webcam_example_prefixes_each_file_with_its_folder() {
+    fn the_webcam_example_prefixes_each_file_with_its_folder() {
         assert_eq!(
             rename("<PARENT>_<FULLNAME>", "/photos/May09/0001.jpg"),
             "May09_0001.jpg"

@@ -201,7 +201,7 @@ mod tests {
     /// > subfolders named after different properties of the file. […] enter
     /// > this format string: `<ARTIST><\><ALBUM><\><TITLE>`"*
     #[test]
-    fn the_manuals_subfolder_example_sorts_a_collection() {
+    fn the_subfolder_example_sorts_a_collection() {
         let mp3 = Mp3::tagged("Metallica", "One").frame("TALB", "And Justice For All");
         assert_eq!(
             rename("<ARTIST><\\><ALBUM><\\><TITLE>", &[("t.mp3", mp3)]),

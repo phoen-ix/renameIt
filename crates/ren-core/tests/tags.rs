@@ -339,7 +339,7 @@ fn local(format: &str) -> String {
 /// A sanity check on the fixture itself: if the stamp ever stops resolving,
 /// half the table above would silently compare two empty strings.
 #[test]
-fn the_fixture_timestamp_is_the_manuals_example() {
+fn the_fixture_timestamp_is_the_documented_example() {
     let stamp: SystemTime = UNIX_EPOCH + Duration::from_secs(STAMP);
     let utc = ren_core::template::dates::DateFormat::parse("yyyy-mm-dd").render(stamp);
     assert!(utc.starts_with("1977-05-0"), "{utc}");

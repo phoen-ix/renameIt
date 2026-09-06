@@ -471,8 +471,8 @@ pub fn tag_field_hinted_with_history(
     edit(ui, id, field, width, hint, true, history)
 }
 
-/// A plain text box with the same history menu — for **Find**, which the
-/// original also draws as a combo and which takes no tags.
+/// A plain text box with the same history menu — for **Find**, which is drawn
+/// as a combo and which takes no tags.
 pub fn text_with_history(
     ui: &mut egui::Ui,
     id: &str,

@@ -127,7 +127,7 @@ fn the_shipped_set_is_the_expected_nine() {
 
 /// > *"For example 'AA - BB' can be swapped around ' - ' to give 'BB - AA'."*
 #[test]
-fn swap_around_swaps_the_manuals_own_example() {
+fn swap_around_swaps_the_worked_example() {
     let fixture = Fixture::new(&["AA - BB.txt"]);
     assert_eq!(fixture.names("Swap Around", " - "), ["BB - AA.txt"]);
 }
