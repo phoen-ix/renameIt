@@ -68,6 +68,23 @@ pub struct EditorRequests {
     pub assist: RefCell<Option<AssistRequest>>,
 }
 
+impl EditorRequests {
+    /// Files a Visual Assist request for the app's drain.
+    ///
+    /// The first request of a frame wins. Two writers draw into this slot —
+    /// the ⌖ buttons and the strip below them — and a bare assignment from
+    /// the second would silently drop the first. One pointer cannot click
+    /// both in one frame, so this is a guard rather than a queue, but a
+    /// dropped request is exactly the shape of bug that is invisible until
+    /// it is not.
+    pub fn ask_assist(&self, request: AssistRequest) {
+        let mut slot = self.assist.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(request);
+        }
+    }
+}
+
 /// What a card, or the strip inside it, asked Visual Assist to do.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AssistRequest {
@@ -184,7 +201,7 @@ pub(crate) fn assist_button(ui: &mut egui::Ui, cx: &EditorCx<'_>, target: assist
         .on_hover_text(format!("{} (F3)", target.prompt()))
         .clicked()
     {
-        *cx.requests.assist.borrow_mut() = Some(AssistRequest::Point {
+        cx.requests.ask_assist(AssistRequest::Point {
             card: cx.card,
             target,
         });

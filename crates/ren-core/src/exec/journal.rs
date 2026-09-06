@@ -310,6 +310,11 @@ pub struct Journal {
     path: PathBuf,
     file: File,
     n: u64,
+    /// Test seam: the record index at which `write` starts failing, so the
+    /// executor's mid-run journal failure can be exercised without a full
+    /// disk. Nothing outside a test can set it.
+    #[cfg(test)]
+    fail_from: Option<u64>,
 }
 
 impl Journal {
@@ -327,7 +332,16 @@ impl Journal {
             path,
             file,
             n: 0,
+            #[cfg(test)]
+            fail_from: None,
         })
+    }
+
+    /// Makes every write from record `n` onwards fail as if the disk had gone
+    /// away. Test-only; see the field.
+    #[cfg(test)]
+    pub(crate) fn fail_writes_from(&mut self, n: u64) {
+        self.fail_from = Some(n);
     }
 
     pub fn txn(&self) -> &str {
@@ -347,6 +361,13 @@ impl Journal {
         );
         let n = self.n;
         self.n += 1;
+        #[cfg(test)]
+        if self.fail_from.is_some_and(|from| n >= from) {
+            return Err(ExecError::io(
+                &self.path,
+                std::io::Error::new(std::io::ErrorKind::StorageFull, "test: the disk is full"),
+            ));
+        }
         let line = Line {
             txn: self.txn.clone(),
             n,

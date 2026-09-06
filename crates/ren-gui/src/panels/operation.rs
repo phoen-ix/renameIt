@@ -212,7 +212,7 @@ fn card_ui(
                     ui.add_space(6.0);
                     let outcome = crate::panels::visual_assist::ui(ui, state);
                     if let Some(request) = request_for(outcome) {
-                        *cx.requests.assist.borrow_mut() = Some(request);
+                        cx.requests.ask_assist(request);
                     }
                 }
             }

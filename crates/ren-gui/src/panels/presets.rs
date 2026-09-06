@@ -19,11 +19,27 @@ use crate::dialogs::FileDialogs;
 #[derive(Debug, Default)]
 pub struct DrawerState {
     /// The name typed into *Save as preset*.
+    ///
+    /// Seeded from the pipeline's name **once**, by [`DrawerState::opened`].
+    /// It used to be re-seeded on every frame the box was empty, which made
+    /// the box impossible to clear: backspace to nothing, and the next frame
+    /// put the name back.
     pub new_name: String,
     /// `(path, new name)` while a rename is being typed.
     pub renaming: Option<(PathBuf, String)>,
     /// The preset a delete is waiting to be confirmed for.
     pub confirming_delete: Option<PathBuf>,
+}
+
+impl DrawerState {
+    /// A drawer just opened over a pipeline called `pipeline_name`, which is
+    /// the obvious thing to save it as.
+    pub fn opened(pipeline_name: &str) -> Self {
+        Self {
+            new_name: pipeline_name.to_owned(),
+            ..Self::default()
+        }
+    }
 }
 
 /// What the drawer asked the app to do.
@@ -87,7 +103,6 @@ pub fn ui(
     state: &mut DrawerState,
     entries: &[PresetEntry],
     problems: &[PresetProblem],
-    pipeline_name: &str,
     dialogs: &dyn FileDialogs,
 ) -> DrawerOutput {
     let mut out = DrawerOutput::default();
@@ -110,9 +125,6 @@ pub fn ui(
 
     ui.add_space(6.0);
     ui.horizontal(|ui| {
-        if state.new_name.is_empty() && !pipeline_name.is_empty() {
-            state.new_name = pipeline_name.to_owned();
-        }
         ui.add(
             egui::TextEdit::singleline(&mut state.new_name)
                 .desired_width(150.0)

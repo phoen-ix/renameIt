@@ -2389,6 +2389,44 @@ fn a_preset_round_trips_through_the_drawer() {
     );
 }
 
+/// The name box is seeded from the pipeline's name when the drawer opens, and
+/// then it is the user's. It used to be re-seeded on every frame it was
+/// empty, so clearing it was impossible: backspace to nothing, and the next
+/// frame put the name back.
+#[test]
+fn the_preset_name_box_can_be_cleared() {
+    let fixture = Fixture::new(&["a_b.txt"]);
+    let mut harness = harness(fixture.app());
+    *harness.state_mut().operation_mut() = OpKind::Replace(Replace::new("_", " "));
+    harness.state_mut().save_preset("Tidy up");
+    settle(&mut harness);
+
+    harness.state_mut().open_presets();
+    settle(&mut harness);
+    assert_eq!(
+        harness.state().drawer().map(|d| d.new_name.as_str()),
+        Some("Tidy up"),
+        "seeded from the pipeline's name on open"
+    );
+
+    // The hint is only the label while the box is empty; find it by value.
+    harness
+        .get_all_by_role(egui::accesskit::Role::TextInput)
+        .find(|node| node.value().as_deref() == Some("Tidy up"))
+        .expect("the name box")
+        .focus();
+    harness.run();
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    harness.key_press(egui::Key::Backspace);
+    harness.run();
+    harness.run();
+    assert_eq!(
+        harness.state().drawer().map(|d| d.new_name.as_str()),
+        Some(""),
+        "and stays empty once cleared"
+    );
+}
+
 /// The acceptance criterion's second half: *"presets persist and reload across
 /// restarts"*. A second app over the same folder, sharing nothing else.
 #[test]

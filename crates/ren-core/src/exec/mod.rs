@@ -67,6 +67,26 @@ pub enum ExecError {
     Blocked { conflicts: usize, errors: usize },
     #[error("no transaction to undo in {0}")]
     NothingToUndo(PathBuf),
+    /// The run stopped part-way because the *journal* could not be written.
+    ///
+    /// Distinct from every other error because of *when* it happens: after
+    /// `Begin` is durable, some of the plan may already have been performed,
+    /// and a caller that treats this like a refused command line — exit code
+    /// 1, "nothing was touched" — is lying to whoever automates against it
+    /// (D103 reserves 3 for a run that started). The journal carries what did
+    /// happen, so the next step is `recover`, not a retry.
+    #[error(
+        "the run stopped after {completed} change(s) because the journal could not be \
+         written: {source}. The journal {journal} records what happened; recover or undo \
+         transaction {txn} before running again"
+    )]
+    Interrupted {
+        journal: PathBuf,
+        txn: String,
+        completed: usize,
+        #[source]
+        source: Box<ExecError>,
+    },
 }
 
 impl ExecError {

@@ -25,6 +25,19 @@ pub fn ui(ui: &mut egui::Ui, rules: &mut Vec<Replace>) -> bool {
     let mut bulk: String = ui.data_mut(|d| d.get_temp(bulk_id).unwrap_or_default());
     let bulk = &mut bulk;
 
+    // A key per row, kept in the same temp store and permuted alongside the
+    // rules. Widget state — the cursor in a Find box — is keyed by id, and an
+    // id that is the row's *position* hands row 4's cursor to whatever lands
+    // in slot 4 after row 3 is deleted (P37's hazard, one level down from the
+    // cards). A list whose length no longer matches was changed by somebody
+    // else — a preset load, Restore — and is simply re-keyed.
+    let keys_id = ui.id().with("rule_keys");
+    let mut keys: Vec<u64> = ui.data_mut(|d| d.get_temp(keys_id).unwrap_or_default());
+    if keys.len() != rules.len() {
+        let from = keys.iter().max().map_or(0, |k| k + 1);
+        keys = (from..from + rules.len() as u64).collect();
+    }
+
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new(match rules.len() {
@@ -104,7 +117,7 @@ pub fn ui(ui: &mut egui::Ui, rules: &mut Vec<Replace>) -> bool {
         .auto_shrink([false, false])
         .show(ui, |ui| {
             for index in 0..rules.len() {
-                ui.push_id(index, |ui| {
+                ui.push_id(keys[index], |ui| {
                     ui.horizontal(|ui| {
                         let rule = &mut rules[index];
                         changed |= ui
@@ -232,26 +245,34 @@ pub fn ui(ui: &mut egui::Ui, rules: &mut Vec<Replace>) -> bool {
             } else {
                 rules.push(Replace::default());
             }
+            // New rows, new keys, after every key that exists.
+            let from = keys.iter().max().map_or(0, |k| k + 1);
+            keys.extend(from..from + (rules.len() - keys.len()) as u64);
             changed = true;
         }
         Some(Command::Delete(index)) => {
             rules.remove(index);
+            keys.remove(index);
             changed = true;
         }
         Some(Command::Up(index)) => {
             rules.swap(index - 1, index);
+            keys.swap(index - 1, index);
             changed = true;
         }
         Some(Command::Down(index)) => {
             rules.swap(index, index + 1);
+            keys.swap(index, index + 1);
             changed = true;
         }
         Some(Command::Restore) => {
             *rules = BatchReplace::default().rules;
+            keys.clear(); // Re-keyed on the next frame: none of these rows is one the user had.
             changed = true;
         }
         None => {}
     }
+    ui.data_mut(|d| d.insert_temp(keys_id, keys));
 
     changed
 }

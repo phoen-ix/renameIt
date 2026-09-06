@@ -109,11 +109,18 @@ fn bare_paths(program: String, rest: &[String]) -> Translated {
     let mut argv = vec![program, "preview".to_owned()];
     let mut notes = Vec::new();
 
-    // Anything beginning with `-` is one of ours and travels through untouched.
-    let (paths, flags): (Vec<&String>, Vec<&String>) =
-        rest.iter().partition(|a| !a.starts_with('-'));
+    // Anything from the first `-` onwards is ours and travels through
+    // untouched — *including* what follows a flag. Partitioning every argument
+    // by its first character put a flag's value in with the paths, so
+    // `dir --journal-dir /j` turned `/j` into a file to rename and left the
+    // flag dangling for clap to reject.
+    let first_flag = rest
+        .iter()
+        .position(|a| a.starts_with('-'))
+        .unwrap_or(rest.len());
+    let (paths, flags) = rest.split_at(first_flag);
 
-    if paths.len() == 1 && std::path::Path::new(paths[0]).is_dir() {
+    if paths.len() == 1 && std::path::Path::new(&paths[0]).is_dir() {
         notes.push(format!(
             "a single folder, {}, is the folder to list",
             paths[0]
@@ -129,7 +136,7 @@ fn bare_paths(program: String, rest: &[String]) -> Translated {
             argv.push(path.clone());
         }
     }
-    argv.extend(flags.into_iter().cloned());
+    argv.extend(flags.iter().cloned());
     Translated { argv, notes }
 }
 
@@ -490,6 +497,26 @@ mod tests {
         let line = vec!["ren-cli".to_owned(), path.clone(), "--verbose".to_owned()];
         assert!(looks_legacy(&line));
         assert_eq!(translate(&line).argv[1..], ["preview", &path, "--verbose"]);
+    }
+
+    /// A flag's *value* is not a path. Partitioning by first character used
+    /// to file `/j` under `--file` and leave `--journal-dir` with nothing.
+    #[test]
+    fn a_flag_keeps_its_value_in_the_switchless_form() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().to_string_lossy().into_owned();
+        let line = vec![
+            "ren-cli".to_owned(),
+            path.clone(),
+            "--journal-dir".to_owned(),
+            "/j".to_owned(),
+            "--verbose".to_owned(),
+        ];
+        assert!(looks_legacy(&line));
+        assert_eq!(
+            translate(&line).argv[1..],
+            ["preview", &path, "--journal-dir", "/j", "--verbose"]
+        );
     }
 
     /// The guard on that: a mistyped modern command must reach clap and get a

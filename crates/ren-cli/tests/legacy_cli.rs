@@ -259,6 +259,36 @@ fn a_list_file_tolerates_blank_lines_and_comments() {
     assert_eq!(fixture.names(), ["a.txt-done"]);
 }
 
+/// PowerShell's `Out-File` writes a byte-order mark, and a list file is what a
+/// script feeds `/l`. The mark is not whitespace, so `trim` alone left the
+/// first path as `\u{feff}C:\…` — missing, and printed indistinguishably from
+/// the real one.
+#[test]
+fn a_list_file_with_a_byte_order_mark_still_names_its_first_file() {
+    let fixture = Fixture::new(&["a.txt", "b.txt"]);
+    let list = fixture.presets.path().join("files.txt");
+    std::fs::write(
+        &list,
+        format!(
+            "\u{feff}{}\r\n{}\r\n",
+            fixture.path().join("a.txt").display(),
+            fixture.path().join("b.txt").display()
+        ),
+    )
+    .unwrap();
+    let preset = fixture.preset("suffix.toml", SUFFIXED);
+
+    let out = fixture.run(&[
+        "apply",
+        "--list",
+        list.to_str().unwrap(),
+        "--preset",
+        preset.to_str().unwrap(),
+    ]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(fixture.names(), ["a.txt-done", "b.txt-done"]);
+}
+
 // --- The legacy command line, end to end ---------------------------------
 
 /// The canonical scheduled-task line, run for real:

@@ -935,7 +935,12 @@ impl RenameItApp {
 
     /// Opens the preset drawer.
     pub fn open_presets(&mut self) {
-        self.drawer = Some(presets::DrawerState::default());
+        self.drawer = Some(presets::DrawerState::opened(&self.stack.name));
+    }
+
+    /// The drawer's state while it is open, for tests.
+    pub fn drawer(&self) -> Option<&presets::DrawerState> {
+        self.drawer.as_ref()
     }
 
     fn apply_drawer(&mut self, out: presets::DrawerOutput) {
@@ -945,6 +950,11 @@ impl RenameItApp {
         }
         if let Some(path) = out.load {
             self.load_preset(&path);
+            // The name box follows the pipeline it would save: after a load
+            // that is the loaded preset's name, whatever was typed before.
+            if let Some(drawer) = &mut self.drawer {
+                drawer.new_name = self.stack.name.clone();
+            }
         }
         if let Some(path) = out.append {
             self.append_preset(&path);
@@ -1718,6 +1728,17 @@ impl RenameItApp {
                     self.session.refresh_after_run(&report.renamed);
                     self.needs_preview = true;
                 }
+            }
+            // The journal died with files already moved. The listing on
+            // screen is wrong now, and the strip and the pictures are keyed
+            // to names that may be gone — everything a completed run does
+            // afterwards, this has to do too, minus the counter.
+            Err(e @ ren_core::exec::ExecError::Interrupted { .. }) => {
+                self.status = Some(e.to_string());
+                self.show_log = true;
+                self.close_visual_assist();
+                self.session.refresh();
+                self.needs_preview = true;
             }
             Err(e) => self.status = Some(e.to_string()),
         }
@@ -2858,20 +2879,12 @@ impl RenameItApp {
         if self.drawer.is_some() {
             let (entries, problems) = self.presets.list();
             let mut state = self.drawer.take().unwrap_or_default();
-            let name = self.stack.name.clone();
             let mut out = presets::DrawerOutput::default();
             egui::Panel::right(egui::Id::new("presets"))
                 .resizable(true)
                 .default_size(300.0)
                 .show(ui, |ui| {
-                    out = presets::ui(
-                        ui,
-                        &mut state,
-                        &entries,
-                        &problems,
-                        &name,
-                        self.dialogs.as_ref(),
-                    );
+                    out = presets::ui(ui, &mut state, &entries, &problems, self.dialogs.as_ref());
                 });
             self.drawer = (!out.close).then_some(state);
             self.apply_drawer(out);

@@ -118,11 +118,16 @@ pub fn unfinished(journal_dir: &Path) -> Result<Vec<Unfinished>, ExecError> {
         out.push(Unfinished {
             txn: lines.first().map(|l| l.txn.clone()).unwrap_or_default(),
             journal: path,
-            completed: settled.len()
-                - lines
+            // Saturating, because this reads a file from disk at GUI startup
+            // and `apply.rs` already relies on it being so: two `Failed`
+            // lines sharing a `seq` — a truncated or hand-edited journal —
+            // must be a wrong count, never a panic before the window opens.
+            completed: settled.len().saturating_sub(
+                lines
                     .iter()
                     .filter(|l| matches!(l.record, Record::Failed { .. }))
                     .count(),
+            ),
             in_flight,
         });
     }
@@ -232,6 +237,41 @@ mod tests {
         assert!(from.exists(), "the original name is back");
         assert!(!to.exists());
         assert_eq!(std::fs::read(&from).unwrap(), b"payload");
+    }
+
+    /// Two `Failed` lines for one `seq` — a journal that was concatenated or
+    /// hand-edited — used to underflow the completed count, which is a panic
+    /// in debug and nonsense in release, and this runs before the window
+    /// opens. Now it is a count of zero and a transaction still offered.
+    #[test]
+    fn a_journal_with_duplicate_failures_still_reads() {
+        let journals = TempDir::new().unwrap();
+        let mut journal = Journal::create(journals.path()).unwrap();
+        journal
+            .write(Record::Begin {
+                platform: "test".into(),
+                items: 1,
+            })
+            .unwrap();
+        journal
+            .write(Record::PlanRename {
+                seq: 0,
+                from: PathBuf::from("/x/a"),
+                to: PathBuf::from("/x/b"),
+            })
+            .unwrap();
+        for _ in 0..2 {
+            journal
+                .write(Record::Failed {
+                    seq: 0,
+                    error: "twice".into(),
+                })
+                .unwrap();
+        }
+
+        let found = unfinished(journals.path()).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].completed, 0);
     }
 
     #[test]

@@ -337,8 +337,15 @@ impl PresetStore {
         preset.name = new_name.to_owned();
         let target = self.path_for(&preset)?;
         self.save_as(&preset, &target)?;
-        if target != path {
-            let _ = std::fs::remove_file(path);
+        // Reported, not ignored: a locked or read-only old file would
+        // otherwise leave *two* presets in the drawer under "rename
+        // succeeded". The new file is already written by this point, and the
+        // message says so, because "rename failed" alone would send the user
+        // looking for a preset that is in fact there.
+        if target != path
+            && let Err(source) = std::fs::remove_file(path)
+        {
+            return Err(removal_failed(path, &target, source));
         }
         Ok(target)
     }
@@ -427,6 +434,20 @@ impl PresetStore {
         } else {
             Err(PresetError::Outside(path.to_path_buf()))
         }
+    }
+}
+
+/// The old file of a rename could not be removed after the new one was written.
+fn removal_failed(old: &Path, new: &Path, source: std::io::Error) -> PresetError {
+    PresetError::Io {
+        path: old.to_path_buf(),
+        source: std::io::Error::new(
+            source.kind(),
+            format!(
+                "the preset was saved as {}, but the old file could not be removed: {source}",
+                new.display()
+            ),
+        ),
     }
 }
 
@@ -696,6 +717,29 @@ mod tests {
         assert!(!path.exists(), "the old file should be gone");
         assert_eq!(store.load(&moved).unwrap().0.name, "Holiday photos");
         assert_eq!(store.list().0.len(), 1);
+    }
+
+    /// A rename whose old file cannot be removed is a reported error, not a
+    /// silent second preset — and the report names the file that *was*
+    /// written, or the user goes looking for a preset that is in fact there.
+    ///
+    /// The construction is tested rather than the syscall: an `unlink` that
+    /// fails after a `save_as` in the same directory succeeded needs a
+    /// filesystem trick that no user account has on either platform.
+    #[test]
+    fn a_rename_that_cannot_remove_the_old_file_names_both_files() {
+        let old = Path::new("/presets/Old name.toml");
+        let new = Path::new("/presets/New name.toml");
+        let error = removal_failed(
+            old,
+            new,
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "locked"),
+        );
+        assert!(matches!(error, PresetError::Io { .. }));
+        let message = error.to_string();
+        assert!(message.contains("Old name.toml"), "{message}");
+        assert!(message.contains("New name.toml"), "{message}");
+        assert!(message.contains("locked"), "{message}");
     }
 
     #[test]

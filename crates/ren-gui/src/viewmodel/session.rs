@@ -320,15 +320,18 @@ impl Selection {
         shift: bool,
         order: &[usize],
     ) -> Option<usize> {
+        // Nothing on screen, nothing to land on. Said here rather than left to
+        // the arithmetic: `clamp(0, -1)` panics and `len - 1` underflows.
+        let last = order.len().checked_sub(1)?;
         let at = self
             .lead
             .and_then(|lead| order.iter().position(|&i| i == lead));
         let next = match at {
-            Some(at) => (at as isize + delta).clamp(0, order.len() as isize - 1) as usize,
+            Some(at) => (at as isize + delta).clamp(0, last as isize) as usize,
             // Nothing has the keyboard yet: the first press lands on the end
             // the user is heading away from, so Down starts at the top.
             None if delta > 0 => 0,
-            None => order.len() - 1,
+            None => last,
         };
         self.jump_to(next, ctrl, shift, order)
     }
@@ -1127,6 +1130,19 @@ mod tests {
         assert_eq!(down.arrow(1, false, false, &order), Some(0));
         let mut up = Selection::default();
         assert_eq!(up.arrow(-1, false, false, &order), Some(2));
+    }
+
+    /// An empty screen — every row filtered out — has nothing to land on.
+    /// The doc says "clamped at both ends", and `clamp(0, -1)` is not a
+    /// clamp, it is a panic.
+    #[test]
+    fn an_arrow_over_an_empty_screen_lands_nowhere() {
+        let mut selection = Selection::default();
+        assert_eq!(selection.arrow(1, false, false, &[]), None);
+        assert_eq!(selection.arrow(-1, false, false, &[]), None);
+        selection.set([4]);
+        assert_eq!(selection.arrow(1, false, true, &[]), None);
+        assert!(selection.contains(4), "and the selection is left alone");
     }
 
     #[test]

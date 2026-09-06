@@ -150,13 +150,32 @@ pub fn apply(
         return Ok(report);
     }
 
-    let mut journal = Journal::create(&options.journal_dir)?;
+    let journal = Journal::create(&options.journal_dir)?;
+    apply_journalled(plan, platform, journal, report)
+}
+
+/// The run itself, once a journal is open.
+///
+/// Split from [`apply`] so a test can hand in a journal that fails part-way
+/// through — the one failure that turns into [`ExecError::Interrupted`] and
+/// that no amount of `chmod` can produce on an already-open file.
+fn apply_journalled(
+    plan: &Plan,
+    platform: &dyn Platform,
+    mut journal: Journal,
+    mut report: ApplyReport,
+) -> Result<ApplyReport, ExecError> {
     report.txn = Some(journal.txn().to_owned());
     report.journal = Some(journal.path().to_path_buf());
     journal.write(Record::Begin {
         platform: platform.name().to_owned(),
         items: plan.ops.len(),
     })?;
+
+    // From here on a journal write that fails is `ExecError::Interrupted`: the
+    // run has started, files may have moved, and the caller has to be told
+    // which — see the variant. `completed` is what the message says.
+    let mut completed = 0usize;
 
     // Every physical change is journalled, temp-name hops included, so undo
     // unwinds a broken cycle by replaying them in reverse (P6).
@@ -165,10 +184,12 @@ pub fn apply(
         // Write-ahead: the intent is durable before the filesystem is touched.
         let (subject, outcome) = match op {
             PlannedOp::CreateDir { path } => {
-                journal.write(Record::PlanCreateDir {
-                    seq,
-                    path: path.clone(),
-                })?;
+                journal
+                    .write(Record::PlanCreateDir {
+                        seq,
+                        path: path.clone(),
+                    })
+                    .map_err(|e| interrupted(&journal, completed, e))?;
                 (
                     path.clone(),
                     std::fs::create_dir(path).map_err(|e| e.to_string()),
@@ -184,22 +205,26 @@ pub fn apply(
                 // file the journal says was overwritten. Re-checking here would
                 // let the two disagree.
                 let replaced = !undoability.is_reversible();
-                journal.write(Record::PlanWriteFile {
-                    seq,
-                    path: path.clone(),
-                    replaced,
-                })?;
+                journal
+                    .write(Record::PlanWriteFile {
+                        seq,
+                        path: path.clone(),
+                        replaced,
+                    })
+                    .map_err(|e| interrupted(&journal, completed, e))?;
                 (
                     path.clone(),
                     std::fs::write(path, contents).map_err(|e| e.to_string()),
                 )
             }
             PlannedOp::Rename { from, to, .. } => {
-                journal.write(Record::PlanRename {
-                    seq,
-                    from: from.clone(),
-                    to: to.clone(),
-                })?;
+                journal
+                    .write(Record::PlanRename {
+                        seq,
+                        from: from.clone(),
+                        to: to.clone(),
+                    })
+                    .map_err(|e| interrupted(&journal, completed, e))?;
                 (
                     from.clone(),
                     platform.rename(from, to).map_err(|e| e.to_string()),
@@ -215,12 +240,14 @@ pub fn apply(
                 undoability: Undoability::None,
                 ..
             } => {
-                journal.write(Record::PlanIrreversible {
-                    seq,
-                    path: path.clone(),
-                    op: (*op).to_owned(),
-                    change: effect.clone(),
-                })?;
+                journal
+                    .write(Record::PlanIrreversible {
+                        seq,
+                        path: path.clone(),
+                        op: (*op).to_owned(),
+                        change: effect.clone(),
+                    })
+                    .map_err(|e| interrupted(&journal, completed, e))?;
                 (path.clone(), write_effect(path, platform, effect))
             }
             PlannedOp::Act {
@@ -234,13 +261,15 @@ pub fn apply(
                     // Every journalled action has a before-image, because the
                     // one kind that has none took the branch above.
                     Ok(Some(before)) => {
-                        journal.write(Record::PlanAct {
-                            seq,
-                            path: path.clone(),
-                            op: (*op).to_owned(),
-                            change: effect.clone(),
-                            before,
-                        })?;
+                        journal
+                            .write(Record::PlanAct {
+                                seq,
+                                path: path.clone(),
+                                op: (*op).to_owned(),
+                                change: effect.clone(),
+                                before,
+                            })
+                            .map_err(|e| interrupted(&journal, completed, e))?;
                         (path.clone(), write_effect(path, platform, effect))
                     }
                     // No before-image, no attempt. A change that cannot be
@@ -266,7 +295,12 @@ pub fn apply(
 
         match outcome {
             Ok(()) => {
-                journal.write(Record::Completed { seq })?;
+                // The change has happened whether or not this line lands, so
+                // it counts before the write, not after.
+                completed += 1;
+                journal
+                    .write(Record::Completed { seq })
+                    .map_err(|e| interrupted(&journal, completed, e))?;
                 match op {
                     PlannedOp::CreateDir { path } => {
                         report.reversible += 1;
@@ -311,10 +345,12 @@ pub fn apply(
                 }
             }
             Err(message) => {
-                journal.write(Record::Failed {
-                    seq,
-                    error: message.clone(),
-                })?;
+                journal
+                    .write(Record::Failed {
+                        seq,
+                        error: message.clone(),
+                    })
+                    .map_err(|e| interrupted(&journal, completed, e))?;
                 report.failed.push((subject, message));
                 // Stop at the first failure: whatever already happened stays
                 // undoable, and the user decides what to do next.
@@ -323,12 +359,24 @@ pub fn apply(
         }
     }
 
-    journal.write(Record::Commit {
-        renamed: report.renamed.len(),
-        failed: report.failed.len(),
-    })?;
+    journal
+        .write(Record::Commit {
+            renamed: report.renamed.len(),
+            failed: report.failed.len(),
+        })
+        .map_err(|e| interrupted(&journal, completed, e))?;
 
     Ok(report)
+}
+
+/// A journal write failed after the run started.
+fn interrupted(journal: &Journal, completed: usize, source: ExecError) -> ExecError {
+    ExecError::Interrupted {
+        journal: journal.path().to_path_buf(),
+        txn: journal.txn().to_owned(),
+        completed,
+        source: Box::new(source),
+    }
 }
 
 /// Reads exactly the state `effect` is about to replace.
@@ -383,5 +431,68 @@ pub(crate) fn write_effect(
         Effect::Unknown => {
             Err("this change was written by a newer version and cannot be performed".to_owned())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ops::Replace;
+    use crate::{Pipeline, plan};
+
+    /// A journal that dies after the second rename has happened is the one
+    /// failure with files already moved behind it, and it has to say so:
+    /// `Interrupted`, with the count and the transaction, never the generic
+    /// I/O error a refused command line gets.
+    #[test]
+    fn a_journal_that_fails_mid_run_reports_an_interrupted_run() {
+        let dir = tempfile::TempDir::new().unwrap();
+        for name in ["a_1.txt", "a_2.txt", "a_3.txt"] {
+            std::fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        let entries = crate::list(dir.path(), Default::default()).unwrap();
+        let pipeline = Pipeline::new().then(Replace::new("_", "-"));
+        let platform = ren_platform::host();
+        let plan = plan(&entries, &pipeline, platform.as_ref());
+        assert_eq!(plan.ops.len(), 3);
+
+        // Records: 0 Begin, 1 Plan, 2 Completed, 3 Plan, 4 Completed, 5 Plan…
+        // Failing from record 5 means two renames landed and were confirmed,
+        // and the third was never announced.
+        let journals = tempfile::TempDir::new().unwrap();
+        let mut journal = Journal::create(journals.path()).unwrap();
+        journal.fail_writes_from(5);
+        let report = ApplyReport::default();
+
+        let error = apply_journalled(&plan, platform.as_ref(), journal, report)
+            .expect_err("the journal failure must surface");
+        match &error {
+            ExecError::Interrupted {
+                completed, source, ..
+            } => {
+                assert_eq!(*completed, 2);
+                assert!(
+                    matches!(**source, ExecError::Io { .. }),
+                    "the cause travels: {source}"
+                );
+            }
+            other => panic!("expected Interrupted, got {other}"),
+        }
+        assert!(error.to_string().contains("stopped after 2 change(s)"));
+
+        // And the files really did move — which is the whole point of the
+        // distinct variant.
+        let mut names: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["a-1.txt", "a-2.txt", "a_3.txt"]);
+
+        // The open journal is left behind for recovery, with both renames
+        // confirmed, so `unfinished` can offer to take them back.
+        let unfinished = crate::exec::unfinished(journals.path()).unwrap();
+        assert_eq!(unfinished.len(), 1);
+        assert_eq!(unfinished[0].completed, 2);
     }
 }

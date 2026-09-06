@@ -275,10 +275,18 @@ impl Resolved {
 /// usually generated, but it is also the thing a person hand-edits when
 /// something went wrong, and a format with no way to leave a note is a worse
 /// format for no gain.
+///
+/// A UTF-8 byte-order mark is stripped, for the reason D50 strips it from a
+/// CSV: PowerShell's `Out-File` and `Set-Content` write one by default, and
+/// `/l` is exactly the switch a script feeds. Left in, the first path is
+/// `\u{feff}C:\…`, which fails as missing with an error that prints
+/// identically to the real path.
 fn read_list(path: &Path) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| format!("could not read the list file {}: {e}", path.display()))?;
     let paths: Vec<PathBuf> = text
+        .strip_prefix('\u{feff}')
+        .unwrap_or(&text)
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
@@ -623,6 +631,14 @@ fn run() -> Result<Exit, Box<dyn std::error::Error>> {
                     eprintln!("error: {e}");
                     eprintln!("pass --allow-irreversible to go ahead anyway");
                     Ok(Exit::Blocked)
+                }
+                // D103: the run started and stopped part-way, so this is 3 —
+                // "the next step is `recover`, not a retry" — never the 1 a
+                // wrong command line gets, which would tell a script that
+                // nothing was touched.
+                Err(e @ ExecError::Interrupted { .. }) => {
+                    eprintln!("error: {e}");
+                    Ok(Exit::Failed)
                 }
                 Err(e) => Err(e.into()),
             }
