@@ -13,8 +13,13 @@ on:
   # So the packaging can be exercised without inventing a version.
   workflow_dispatch:
 
+# `contents: write` is for the release itself. Naming one scope sets every
+# other to `none`, and the gate job below reads CI's run history through the
+# API — which on a private repository needs `actions: read`, or it is a 403
+# and every release fails at the gate.
 permissions:
   contents: write
+  actions: read
 
 jobs:
   # Both build jobs used to run `cargo test --workspace` first, with the note
@@ -66,7 +71,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --release --bin renameit --bin ren-cli
+        run: cargo build --locked --release --bin renameit --bin ren-cli
 
       # The archive is built from an explicit list rather than by sweeping a
       # directory, so nothing reaches a release artifact by accident.
@@ -142,7 +147,7 @@ jobs:
             libxcb-xfixes0-dev libxkbcommon-dev libssl-dev
 
       - name: Build
-        run: cargo build --release --bin renameit --bin ren-cli
+        run: cargo build --locked --release --bin renameit --bin ren-cli
 
       # D3 says `ren-core` builds and tests green on Linux at all times, and M9
       # promotes that build from "CI artifact" to an alpha. This is the artifact

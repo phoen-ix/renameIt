@@ -8,6 +8,11 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Every build step passes `--locked`: `Cargo.lock` is committed, and without
+  # the flag a runner may resolve a newer semver-compatible dependency than
+  # the one the tests were written against — which would also make P98's
+  # release gate certify a build CI never saw. (`cargo fmt` does not take the
+  # flag; it resolves nothing.)
   # Deliberately no `RUSTFLAGS: -D warnings` here: RUSTFLAGS applies to
   # dependencies too, so one deprecation warning in a transitive crate would
   # fail the build for reasons nobody here can fix. Our own code is held to
@@ -39,7 +44,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       # Deliberately **not** UTC. GitHub's runners are, and so is the machine
       # this is usually developed on — which means a test written against
@@ -50,7 +55,7 @@ jobs:
       # could see it. A zone with a half-hour offset also catches anything that
       # assumes offsets are whole hours.
       - name: Tests
-        run: cargo test --workspace
+        run: cargo test --locked --workspace
         env:
           TZ: Asia/Kolkata
 
@@ -68,19 +73,19 @@ jobs:
       # which a Linux runner does not have. The windows job below builds and
       # runs the tests for real.
       - name: Type-check the Windows target
-        run: cargo clippy --workspace --lib --bins --target x86_64-pc-windows-msvc -- -D warnings
+        run: cargo clippy --locked --workspace --lib --bins --target x86_64-pc-windows-msvc -- -D warnings
 
       # Spike B's harness needs no display, so it doubles as a preview
       # performance regression gate. It exits non-zero above 50 ms p95.
       - name: Preview performance budget (Spike B)
-        run: cargo run --release -p ren-gui --example spike_preview_headless -- 10000 100
+        run: cargo run --locked --release -p ren-gui --example spike_preview_headless -- 10000 100
 
       # The same budget over the same listing, drawn as tiles. Its real
       # assertion is the tile count, not the timing: it exits non-zero if the
       # grid lays out more than four screenfuls, which is what a lost
       # virtualization looks like long before it looks slow.
       - name: Thumbnail grid budget (Spike B, grid)
-        run: cargo run --release -p ren-gui --example spike_preview_headless -- 10000 100 grid
+        run: cargo run --locked --release -p ren-gui --example spike_preview_headless -- 10000 100 grid
 
   windows:
     name: Windows — tests, GUI build
@@ -97,10 +102,10 @@ jobs:
       # so a Windows-only problem costs one push per binary to find. One run
       # naming every failure is the difference between a fix and a bisect.
       - name: Tests
-        run: cargo test --workspace --no-fail-fast
+        run: cargo test --locked --workspace --no-fail-fast
 
       - name: Build the GUI
-        run: cargo build --release --bin renameit --bin ren-cli
+        run: cargo build --locked --release --bin renameit --bin ren-cli
 
       # So a binary does not require cutting a tag.
       #
@@ -119,10 +124,10 @@ jobs:
           retention-days: 14
 
       - name: Preview performance budget (Spike B)
-        run: cargo run --release -p ren-gui --example spike_preview_headless -- 10000 100
+        run: cargo run --locked --release -p ren-gui --example spike_preview_headless -- 10000 100
 
       - name: Thumbnail grid budget (Spike B, grid)
-        run: cargo run --release -p ren-gui --example spike_preview_headless -- 10000 100 grid
+        run: cargo run --locked --release -p ren-gui --example spike_preview_headless -- 10000 100 grid
 
   deny:
     name: Dependency licences and advisories
