@@ -19,6 +19,7 @@ use ren_core::ops::MusicRename;
 use ren_core::template::TextTemplate;
 
 use super::EditorCx;
+use crate::widgets::form::{After, Form};
 use crate::widgets::tag_field::tag_field;
 
 pub fn ui(ui: &mut egui::Ui, op: &mut MusicRename, cx: &EditorCx<'_>) -> bool {
@@ -66,16 +67,20 @@ pub fn ui(ui: &mut egui::Ui, op: &mut MusicRename, cx: &EditorCx<'_>) -> bool {
         );
     }
 
-    ui.horizontal(|ui| {
-        if ui
-            .radio(custom, "Custom:")
+    Form::new("music_custom").show(ui, |form| {
+        let line = form.radio(custom, "Custom:", After::TagPicker, |row| {
+            let width = row.field_width();
+            // Deliberately outside an `add_enabled_ui`: the box stays live.
+            row.column(|ui| tag_field(ui, "music_style", &mut op.style, width))
+        });
+        if line
+            .label
             .on_hover_text("Anything you like, in the box beside it")
             .clicked()
         {
             sticky_custom = true;
         }
-        // Deliberately outside an `add_enabled_ui`: the box stays live.
-        if tag_field(ui, "music_style", &mut op.style, 240.0) {
+        if line.inner {
             // Typing is what makes it custom, and it stays custom even if the
             // text lands on a style exactly — otherwise a radio would light up
             // under the cursor mid-word.

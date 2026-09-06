@@ -7,76 +7,100 @@
 use ren_core::ops::{CsvList, CsvSeparator};
 
 use crate::dialogs::FileDialogs;
+use crate::theme::width::FIELD_CHAR;
+use crate::widgets::form::{After, Form};
+use crate::widgets::icons::{Icon, icon_button};
 
 pub fn ui(ui: &mut egui::Ui, op: &mut CsvList, dialogs: &dyn FileDialogs) -> bool {
     let mut changed = false;
 
-    ui.horizontal(|ui| {
-        ui.label("CSV File:");
-        // A real text box as well as a button: a path can be pasted, and a
-        // headless test can type one without a desktop to click.
-        let mut text = op.file.display().to_string();
-        if ui
-            .add(
-                egui::TextEdit::singleline(&mut text)
-                    .desired_width(220.0)
-                    .hint_text("path to the list")
-                    .id_salt("csv_path"),
-            )
-            .changed()
-        {
-            op.file = text.into();
-            changed = true;
-        }
-        if ui.button("📂").on_hover_text("Choose a CSV file").clicked()
-            && let Some(path) = dialogs.open_csv()
-        {
-            op.file = path;
-            changed = true;
-        }
-    });
-
-    ui.horizontal(|ui| {
-        ui.label("Separator:");
-        egui::ComboBox::from_id_salt("csv_separator")
-            .selected_text(op.separator.label())
-            .show_ui(ui, |ui| {
-                for candidate in CsvSeparator::ALL {
-                    changed |= ui
-                        .selectable_value(&mut op.separator, candidate, candidate.label())
-                        .changed();
+    Form::new("csv_list").show(ui, |form| {
+        changed |= form
+            .row("CSV File:", After::Buttons(1), |row| {
+                let width = row.field_width();
+                let ui = row.ui();
+                let mut changed = false;
+                // A real text box as well as a button: a path can be pasted, and a
+                // headless test can type one without a desktop to click.
+                let mut text = op.file.display().to_string();
+                if ui
+                    .add(
+                        egui::TextEdit::singleline(&mut text)
+                            .desired_width(width)
+                            .hint_text("path to the list")
+                            .id_salt("csv_path"),
+                    )
+                    .changed()
+                {
+                    op.file = text.into();
+                    changed = true;
                 }
-            });
-        // Dead unless "Other:" is chosen.
-        let custom = op.separator == CsvSeparator::Other;
-        ui.add_enabled_ui(custom, |ui| {
-            changed |= ui
-                .add(
-                    egui::TextEdit::singleline(&mut op.separator_char)
-                        .desired_width(56.0)
-                        .hint_text("char")
-                        .id_salt("csv_separator_char"),
-                )
-                .on_hover_text("One character. {TAB} and {ENTER} also work.")
-                .changed();
-        });
-    });
+                // A painted mark rather than a glyph, so the room `After::Buttons`
+                // reserves for it is the room it takes.
+                if icon_button(ui, Icon::Folder, "Choose a CSV file")
+                    .on_hover_text("Choose a CSV file")
+                    .clicked()
+                    && let Some(path) = dialogs.open_csv()
+                {
+                    op.file = path;
+                    changed = true;
+                }
+                changed
+            })
+            .inner;
 
-    // Columns, not string positions — so these are 1-based and P15's zero-based
-    // rule does not reach them.
-    ui.horizontal(|ui| {
-        ui.label("Column with current filename:");
-        changed |=
-            crate::widgets::number::add(ui, egui::DragValue::new(&mut op.old_column).range(1..=99))
+        changed |= form
+            .row("Separator:", After::Nothing, |row| {
+                let ui = row.ui();
+                let mut changed = false;
+                egui::ComboBox::from_id_salt("csv_separator")
+                    .selected_text(op.separator.label())
+                    .show_ui(ui, |ui| {
+                        for candidate in CsvSeparator::ALL {
+                            changed |= ui
+                                .selectable_value(&mut op.separator, candidate, candidate.label())
+                                .changed();
+                        }
+                    });
+                // Dead unless "Other:" is chosen.
+                let custom = op.separator == CsvSeparator::Other;
+                ui.add_enabled_ui(custom, |ui| {
+                    changed |= ui
+                        .add(
+                            egui::TextEdit::singleline(&mut op.separator_char)
+                                .desired_width(FIELD_CHAR)
+                                .hint_text("char")
+                                .id_salt("csv_separator_char"),
+                        )
+                        .on_hover_text("One character. {TAB} and {ENTER} also work.")
+                        .changed();
+                });
+                changed
+            })
+            .inner;
+
+        // Columns, not string positions — so these are 1-based and P15's zero-based
+        // rule does not reach them.
+        changed |= form
+            .row("Column with current filename:", After::Nothing, |row| {
+                crate::widgets::number::add(
+                    row.ui(),
+                    egui::DragValue::new(&mut op.old_column).range(1..=99),
+                )
                 .on_hover_text("The first column is 1.")
-                .changed();
-    });
-    ui.horizontal(|ui| {
-        ui.label("Column with new filename:");
-        changed |=
-            crate::widgets::number::add(ui, egui::DragValue::new(&mut op.new_column).range(1..=99))
+                .changed()
+            })
+            .inner;
+        changed |= form
+            .row("Column with new filename:", After::Nothing, |row| {
+                crate::widgets::number::add(
+                    row.ui(),
+                    egui::DragValue::new(&mut op.new_column).range(1..=99),
+                )
                 .on_hover_text("The first column is 1.")
-                .changed();
+                .changed()
+            })
+            .inner;
     });
 
     changed |= ui

@@ -8,116 +8,136 @@ use ren_core::datetime::{self, DateComponents, IntervalUnit};
 use ren_core::ops::{DateSource, DateTargets, SetDate, WallClock};
 use ren_platform::{Capability, Platform};
 
+use crate::theme::width::{FIELD_DATE, FIELD_TOKEN};
+use crate::widgets::form::{After, Form};
+
 pub fn ui(ui: &mut egui::Ui, op: &mut SetDate, platform: &dyn Platform) -> bool {
     let mut changed = false;
+    let error = ui.visuals().error_fg_color;
 
-    // --- Source ---
-    ui.horizontal(|ui| {
-        ui.label("Source:");
-        egui::ComboBox::from_id_salt("set_date_source")
-            .width(240.0)
-            .selected_text(op.source.label())
-            .show_ui(ui, |ui| {
-                for candidate in DateSource::ALL {
-                    changed |= ui
-                        .selectable_value(&mut op.source, candidate, candidate.label())
+    Form::new("set_date").show(ui, |form| {
+        // --- Source ---
+        changed |= form
+            .row("Source:", After::Nothing, |row| {
+                let width = row.field_width();
+                let mut changed = false;
+                egui::ComboBox::from_id_salt("set_date_source")
+                    .width(width)
+                    .selected_text(op.source.label())
+                    .show_ui(row.ui(), |ui| {
+                        for candidate in DateSource::ALL {
+                            changed |= ui
+                                .selectable_value(&mut op.source, candidate, candidate.label())
+                                .changed();
+                        }
+                    });
+                changed
+            })
+            .inner;
+
+        // --- The date and time boxes ---
+        //
+        // Text fields with a fixed ISO format rather than a calendar popup:
+        // `egui_extras`' date picker is behind a feature that pulls in a second
+        // date library beside chrono, and D30 already rejects locale-dependent
+        // formats — the same preset has to mean the same thing on every machine.
+        // The crate itself is no longer a dependency: this comment was the only
+        // thing in the tree that mentioned it.
+        //
+        // Under the Source they feed rather than beside a label of their own,
+        // which is what the form's unlabelled row is for.
+        changed |= form
+            .unlabelled(After::Nothing, |row| {
+                let live = op.source.uses_wall_clock();
+                row.ui()
+                    .add_enabled_ui(live, |ui| {
+                        let mut changed = false;
+                        let mut date = format!(
+                            "{:04}-{:02}-{:02}",
+                            op.date.year, op.date.month, op.date.day
+                        );
+                        let mut time = format!(
+                            "{:02}:{:02}:{:02}",
+                            op.date.hour, op.date.minute, op.date.second
+                        );
+                        if ui
+                            .add(
+                                egui::TextEdit::singleline(&mut date)
+                                    .desired_width(FIELD_DATE)
+                                    .hint_text("yyyy-mm-dd")
+                                    .id_salt("set_date_date"),
+                            )
+                            .changed()
+                            && let Some(parsed) = parse_date(&date)
+                        {
+                            op.date.year = parsed.0;
+                            op.date.month = parsed.1;
+                            op.date.day = parsed.2;
+                            changed = true;
+                        }
+                        if ui
+                            .add(
+                                egui::TextEdit::singleline(&mut time)
+                                    .desired_width(FIELD_TOKEN)
+                                    .hint_text("hh:mm:ss")
+                                    .id_salt("set_date_time"),
+                            )
+                            .changed()
+                            && let Some(parsed) = parse_time(&time)
+                        {
+                            op.date.hour = parsed.0;
+                            op.date.minute = parsed.1;
+                            op.date.second = parsed.2;
+                            changed = true;
+                        }
+                        if ui
+                            .button("Now")
+                            .on_hover_text("Fill in this moment")
+                            .clicked()
+                        {
+                            op.date = WallClock::from_naive(chrono::Local::now().naive_local());
+                            changed = true;
+                        }
+                        changed
+                    })
+                    .inner
+            })
+            .inner;
+        if op.date.to_naive().is_none() {
+            form.note(egui::RichText::new("That is not a real date.").color(error));
+        } else if !op.source.uses_wall_clock() {
+            form.note("These boxes are only used by 'Enter new date (set below)'.");
+        }
+
+        // --- The interval, dead unless the source is one ---
+        changed |= form
+            .unlabelled(After::Nothing, |row| {
+                row.ui()
+                    .add_enabled_ui(op.source.uses_interval(), |ui| {
+                        let mut changed = crate::widgets::number::add(
+                            ui,
+                            egui::DragValue::new(&mut op.interval).range(0..=9_999),
+                        )
                         .changed();
-                }
-            });
-    });
-
-    // --- The date and time boxes ---
-    //
-    // Text fields with a fixed ISO format rather than a calendar popup:
-    // `egui_extras`' date picker is behind a feature that pulls in a second
-    // date library beside chrono, and D30 already rejects locale-dependent
-    // formats — the same preset has to mean the same thing on every machine.
-    // The crate itself is no longer a dependency: this comment was the only
-    // thing in the tree that mentioned it.
-    ui.horizontal(|ui| {
-        let live = op.source.uses_wall_clock();
-        ui.add_enabled_ui(live, |ui| {
-            let mut date = format!(
-                "{:04}-{:02}-{:02}",
-                op.date.year, op.date.month, op.date.day
-            );
-            let mut time = format!(
-                "{:02}:{:02}:{:02}",
-                op.date.hour, op.date.minute, op.date.second
-            );
-            if ui
-                .add(
-                    egui::TextEdit::singleline(&mut date)
-                        .desired_width(96.0)
-                        .hint_text("yyyy-mm-dd")
-                        .id_salt("set_date_date"),
-                )
-                .changed()
-                && let Some(parsed) = parse_date(&date)
-            {
-                op.date.year = parsed.0;
-                op.date.month = parsed.1;
-                op.date.day = parsed.2;
-                changed = true;
-            }
-            if ui
-                .add(
-                    egui::TextEdit::singleline(&mut time)
-                        .desired_width(80.0)
-                        .hint_text("hh:mm:ss")
-                        .id_salt("set_date_time"),
-                )
-                .changed()
-                && let Some(parsed) = parse_time(&time)
-            {
-                op.date.hour = parsed.0;
-                op.date.minute = parsed.1;
-                op.date.second = parsed.2;
-                changed = true;
-            }
-            if ui
-                .button("Now")
-                .on_hover_text("Fill in this moment")
-                .clicked()
-            {
-                op.date = WallClock::from_naive(chrono::Local::now().naive_local());
-                changed = true;
-            }
-        });
-    });
-    if op.date.to_naive().is_none() {
-        ui.label(
-            egui::RichText::new("That is not a real date.")
-                .color(ui.visuals().error_fg_color)
-                .small(),
-        );
-    } else if !op.source.uses_wall_clock() {
-        ui.label(
-            egui::RichText::new("These boxes are only used by 'Enter new date (set below)'.")
-                .weak()
-                .small(),
-        );
-    }
-
-    // --- The interval, dead unless the source is one ---
-    ui.horizontal(|ui| {
-        ui.add_enabled_ui(op.source.uses_interval(), |ui| {
-            changed |= crate::widgets::number::add(
-                ui,
-                egui::DragValue::new(&mut op.interval).range(0..=9_999),
-            )
-            .changed();
-            egui::ComboBox::from_id_salt("set_date_unit")
-                .width(110.0)
-                .selected_text(op.unit.label())
-                .show_ui(ui, |ui| {
-                    for candidate in IntervalUnit::ALL {
-                        changed |= ui
-                            .selectable_value(&mut op.unit, candidate, candidate.label())
-                            .changed();
-                    }
-                });
-        });
+                        egui::ComboBox::from_id_salt("set_date_unit")
+                            .width(110.0)
+                            .selected_text(op.unit.label())
+                            .show_ui(ui, |ui| {
+                                for candidate in IntervalUnit::ALL {
+                                    changed |= ui
+                                        .selectable_value(
+                                            &mut op.unit,
+                                            candidate,
+                                            candidate.label(),
+                                        )
+                                        .changed();
+                                }
+                            });
+                        changed
+                    })
+                    .inner
+            })
+            .inner;
     });
 
     ui.add_space(6.0);

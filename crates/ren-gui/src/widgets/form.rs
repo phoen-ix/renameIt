@@ -62,6 +62,8 @@ pub enum After<'a> {
     Check(&'a str),
     /// A `selectable_label` trailing the field — a Visual Assist marker.
     Marker(&'a str),
+    /// N icon buttons, then a marker — Find's history chevron and its ⌖.
+    ButtonsAndMarker(usize, &'a str),
 }
 
 impl After<'_> {
@@ -85,6 +87,9 @@ impl After<'_> {
                     + text_width(ui, text, egui::TextStyle::Body)
             }
             Self::Marker(text) => gap + button_width(ui, text),
+            Self::ButtonsAndMarker(n, text) => {
+                (gap + icon_width(ui)) * *n as f32 + gap + button_width(ui, text)
+            }
         }
     }
 }
@@ -176,11 +181,29 @@ impl FormUi<'_> {
         self.build(after, content, |ui| ui.label(""))
     }
 
+    /// A row whose label is a control the caller draws — Re-Number's action
+    /// combo, whose selected text is the operand's caption. [`Self::row`],
+    /// [`Self::check`] and [`Self::radio`] are the three common shapes of this.
+    pub fn labelled<R>(
+        &mut self,
+        label: impl FnOnce(&mut egui::Ui) -> egui::Response,
+        after: After<'_>,
+        content: impl FnOnce(&mut Row<'_>) -> R,
+    ) -> Line<R> {
+        self.build(after, content, label)
+    }
+
     /// A weak line under the fields, in the control column so it lines up with
     /// them rather than with the labels.
+    ///
+    /// Wrapped at the cell, explicitly: a grid extends text unless
+    /// `max_col_width` is set, which is the one thing [`Form::show`] must never
+    /// do, and a note is the only prose in the form. A colour the text already
+    /// carries wins over `weak`, so an error can be reported on the same line.
     pub fn note(&mut self, text: impl Into<egui::RichText>) {
         self.ui.label("");
-        self.ui.label(text.into().weak().small());
+        self.ui
+            .add(egui::Label::new(text.into().weak().small()).wrap());
         self.ui.end_row();
     }
 
@@ -240,6 +263,18 @@ impl Row<'_> {
     pub fn ui(&mut self) -> &mut egui::Ui {
         self.ui
     }
+
+    /// The cell as a column, for a control that reports *under* itself — a tag
+    /// field and its D29 message.
+    ///
+    /// Drawn straight into the cell, that message lands to the right of the
+    /// field, past the card's edge. egui widens the card to include it, the
+    /// panel grows to fit the card, and a wider panel is a wider field with the
+    /// message still past its edge: the panel grows every frame for as long as
+    /// the tag is misspelt. A column wraps the message at the cell instead.
+    pub fn column<R>(&mut self, content: impl FnOnce(&mut egui::Ui) -> R) -> R {
+        self.ui.vertical(content).inner
+    }
 }
 
 #[cfg(test)]
@@ -271,6 +306,7 @@ mod tests {
                 After::TagPickerAnd(1),
                 After::Check("counting backwards"),
                 After::Marker("\u{2316} find"),
+                After::ButtonsAndMarker(1, "\u{2316} find"),
             ] {
                 assert!(
                     after.width(ui) > 0.0,
@@ -288,6 +324,10 @@ mod tests {
         with_ui(|ui| {
             assert!(After::TagPickerAnd(1).width(ui) > After::TagPicker.width(ui));
             assert!(After::Buttons(2).width(ui) > After::Buttons(1).width(ui));
+            assert!(
+                After::ButtonsAndMarker(1, "\u{2316} find").width(ui)
+                    > After::Marker("\u{2316} find").width(ui)
+            );
             assert!(
                 After::Note("a much longer note than the other one").width(ui)
                     > After::Note("x").width(ui)
