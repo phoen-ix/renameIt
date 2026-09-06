@@ -3,7 +3,7 @@
 A batch file renamer written in Rust. Modern UI, cross-platform core, Windows
 ships first. MIT licensed.
 
-> **Status: 1.3.0.** Browse or drag in files, stack up as many operations as you
+> **Status: 1.4.0.** Browse or drag in files, stack up as many operations as you
 > like, watch the composed result preview as you type, save the stack as a
 > preset and run it again later — or from the command line. One rename is one
 > undo, however many operations produced it.
@@ -238,7 +238,7 @@ Problem Solver says which mode you are in and where the files actually are.
 ## Releases
 
 Push `main` first and **let CI go green**, then tag:
-`git tag -a v1.3.0 -m "1.3.0" && git push origin v1.3.0` runs
+`git tag -a v1.4.0 -m "1.4.0" && git push origin v1.4.0` runs
 [`.github/workflows/release.yml`](.github/workflows/release.yml), which builds, packages
 `RenameIt-windows-x64.zip` **and** `RenameIt-linux-x64.tar.gz`, and drafts a
 GitHub release from [`CHANGELOG.md`](CHANGELOG.md). Draft, not published: the tag is the act of

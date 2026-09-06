@@ -6,9 +6,9 @@ Two things this file does **not** track. Engine and UI decisions live in
 `docs/DECISIONS.md`, which is the authority on why anything behaves as it does;
 and the reasoning behind each default lives beside the code it governs.
 
-## [Unreleased] — the audit
+## [1.4.0] - 2026-09-06
 
-A read of the whole workspace for defects, dead code and cost, with the fixes.
+The audit: a read of the whole workspace for defects, dead code and cost, with the fixes.
 Every finding is recorded with its decision number in `docs/DECISIONS.md`
 (**D165**–**D170**, **P99**).
 
