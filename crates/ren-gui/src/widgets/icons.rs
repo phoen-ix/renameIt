@@ -251,8 +251,8 @@ impl Widget for IconButton<'_> {
         }
 
         let enabled = ui.is_enabled();
-        let name = self.name.to_owned();
-        response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, enabled, name.clone()));
+        let name = self.name;
+        response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, enabled, name.to_owned()));
         response
     }
 }

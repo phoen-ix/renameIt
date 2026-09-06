@@ -381,10 +381,15 @@ pub(crate) fn new_name_cell(ui: &mut egui::Ui, entry: &FileEntry, cell: Cell<'_>
         }
         Cell::Conflict { kind, new } => {
             ui.horizontal(|ui| {
+                // `on_hover_ui`, not `on_hover_text`: the text is built only
+                // while the badge is hovered, rather than for every visible
+                // conflict row on every frame.
                 ui.label(
                     egui::RichText::new("⛔").color(egui::Color32::from_rgb(0xe5, 0x73, 0x73)),
                 )
-                .on_hover_text(conflict_help(kind));
+                .on_hover_ui(|ui| {
+                    ui.label(conflict_help(kind));
+                });
                 ui.label(egui::RichText::new(new).strikethrough());
             });
         }
@@ -392,7 +397,9 @@ pub(crate) fn new_name_cell(ui: &mut egui::Ui, entry: &FileEntry, cell: Cell<'_>
             ui.label(
                 egui::RichText::new("✖ error").color(egui::Color32::from_rgb(0xe5, 0x73, 0x73)),
             )
-            .on_hover_text(message.to_owned());
+            .on_hover_ui(|ui| {
+                ui.label(message);
+            });
         }
     }
 }

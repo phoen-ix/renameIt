@@ -142,12 +142,8 @@ pub struct EditorCx<'a> {
 
 impl<'a> EditorCx<'a> {
     /// The entries the preview will hand to an operation, in order.
-    pub(crate) fn listed(&self) -> Vec<FileEntry> {
-        self.scoped
-            .iter()
-            .filter_map(|&i| self.entries.get(i))
-            .cloned()
-            .collect()
+    pub(crate) fn listed(&self) -> impl Iterator<Item = &'a FileEntry> + '_ {
+        self.scoped.iter().filter_map(|&i| self.entries.get(i))
     }
 
     /// The same context, for a card with its own identity, scope and strip.

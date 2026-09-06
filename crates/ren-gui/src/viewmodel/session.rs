@@ -779,8 +779,21 @@ impl Session {
         for (position, &old) in order.iter().enumerate() {
             moved_to[old] = position;
         }
+        // Moved, not cloned. `make_mut` already copies the whole listing
+        // whenever the preview worker still holds the old `Arc` (it usually
+        // does), and cloning every entry a second time on top of that made a
+        // sort of ten thousand rows two full copies of the listing.
         let entries = Arc::make_mut(&mut self.entries);
-        *entries = order.iter().map(|&old| entries[old].clone()).collect();
+        let mut slots: Vec<Option<FileEntry>> =
+            std::mem::take(entries).into_iter().map(Some).collect();
+        *entries = order
+            .iter()
+            .map(|&old| {
+                slots[old]
+                    .take()
+                    .expect("a permutation names each row once")
+            })
+            .collect();
         // The whole `Selection`, in one call — the scope, the keyboard and the
         // anchor a Shift-extend measures from. Remapping the rows and forgetting
         // the other two is the exact failure this type exists to prevent.

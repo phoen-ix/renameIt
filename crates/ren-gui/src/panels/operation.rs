@@ -307,9 +307,10 @@ fn summary_toggle(
         );
     }
 
-    let name = summary.to_owned();
+    // Inside the closure: it runs only when the accessibility tree is being
+    // built, and a copy made outside it was paid on every frame.
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Button, true, expanded, name.clone())
+        egui::WidgetInfo::selected(egui::WidgetType::Button, true, expanded, summary.to_owned())
     });
     response
 }

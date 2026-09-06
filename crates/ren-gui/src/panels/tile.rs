@@ -80,7 +80,7 @@ pub fn picture(
     };
 
     let ctx = ui.ctx().clone();
-    let name = entry.file_name.clone();
+    let name = entry.file_name.as_str();
     match thumbs.tile(&ctx, &key) {
         Some(Tile::Ready { texture, size }) => {
             let (width, height) = (size[0] as f32, size[1] as f32);

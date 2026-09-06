@@ -22,7 +22,7 @@ pub fn ui(ui: &mut egui::Ui, op: &mut FilenameEditor, cx: &EditorCx<'_>) -> bool
         .on_hover_text("Fills the box with the names showing now, in order")
         .clicked()
     {
-        op.text = FilenameEditor::text_for(&cx.listed(), cx.scope);
+        op.text = FilenameEditor::text_for(cx.listed(), cx.scope);
         changed = true;
     }
 
@@ -30,7 +30,7 @@ pub fn ui(ui: &mut egui::Ui, op: &mut FilenameEditor, cx: &EditorCx<'_>) -> bool
     // has to flatten it to keep one line per file, and running that back would
     // rename the file to a name the user never typed. Named here, before the
     // click, rather than surfacing as a row error afterwards.
-    let unrepresentable = FilenameEditor::unrepresentable(&cx.listed(), cx.scope);
+    let unrepresentable = FilenameEditor::unrepresentable(cx.listed(), cx.scope);
     if !unrepresentable.is_empty() {
         let names: Vec<String> = unrepresentable
             .iter()

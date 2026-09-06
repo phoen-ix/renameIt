@@ -75,9 +75,9 @@ impl FilenameEditor {
     /// across two lines, shifting the pairing for every file after it. The break
     /// is written as a space so the count stays true; [`Self::unrepresentable`]
     /// is what stops the lossy copy being run blindly afterwards.
-    pub fn text_for(entries: &[FileEntry], scope: Scope) -> String {
+    pub fn text_for<'a>(entries: impl IntoIterator<Item = &'a FileEntry>, scope: Scope) -> String {
         entries
-            .iter()
+            .into_iter()
             .map(|e| {
                 scope
                     .slice(&e.file_name)
@@ -91,9 +91,15 @@ impl FilenameEditor {
     ///
     /// Shown by the card beside the copy link, so the user is told *which* file
     /// before they press it rather than after the run is blocked.
-    pub fn unrepresentable(entries: &[FileEntry], scope: Scope) -> Vec<String> {
+    ///
+    /// Borrowed, because the card draws this every frame it is expanded and
+    /// used to be handed a clone of the whole scoped listing to do it.
+    pub fn unrepresentable<'a>(
+        entries: impl IntoIterator<Item = &'a FileEntry>,
+        scope: Scope,
+    ) -> Vec<String> {
         entries
-            .iter()
+            .into_iter()
             .filter(|e| {
                 scope
                     .slice(&e.file_name)

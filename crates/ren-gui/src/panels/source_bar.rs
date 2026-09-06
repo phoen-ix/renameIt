@@ -103,7 +103,9 @@ pub fn ui(
         // The include filter, as a chip that opens a popover.
         let chip = ui
             .selectable_label(filter.is_active(), "Include filter…")
-            .on_hover_text(filter.summary());
+            .on_hover_ui(|ui| {
+                ui.label(filter.summary());
+            });
         egui::Popup::from_toggle_button_response(&chip).show(|ui| {
             if filter.ui(ui) {
                 out.refilter = true;
@@ -130,15 +132,17 @@ pub fn ui(
                 ui.visuals().warn_fg_color,
                 format!("⚠ {count} item(s) could not be read"),
             )
-            .on_hover_text(
-                session
-                    .problems
-                    .iter()
-                    .take(8)
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            );
+            .on_hover_ui(|ui| {
+                ui.label(
+                    session
+                        .problems
+                        .iter()
+                        .take(8)
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                );
+            });
         }
 
         // List | Grid, at this row's far end and in the same shape as Browser |

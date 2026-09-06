@@ -150,10 +150,12 @@ pub struct PresetEntry {
 ///
 /// Surfaced rather than hidden: a preset that stopped loading is exactly what
 /// the user needs told, and a folder with one bad file in it must still open.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PresetProblem {
     pub path: PathBuf,
-    pub error: PresetError,
+    /// The error as text: both front ends only ever show it, and text is
+    /// what lets a listing be cloned out of the cache.
+    pub error: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -185,14 +187,44 @@ pub enum PresetError {
 }
 
 /// A directory of `*.toml` presets.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PresetStore {
     dir: PathBuf,
+    /// The last listing, with the folder's mtime it was read at and when.
+    ///
+    /// The drawer and the Settings window asked for the listing on every
+    /// frame — a `read_dir` and a TOML parse per preset, sixty times a
+    /// second, for a list that changes when a file does. The folder's mtime
+    /// moves on every create, rename and delete inside it; the store's own
+    /// writes also drop the cache outright, because a kernel stamps mtimes
+    /// from a coarse clock and two changes inside one tick read the same. An
+    /// edit in place by another program moves only the file's mtime, so the
+    /// cache also expires on its own after a second.
+    cached: std::sync::Mutex<Option<CachedListing>>,
+    /// How many times the folder has actually been read and parsed — the
+    /// instrument the metadata caches carry too, because a timing cannot
+    /// tell a cache hit from a fast disk. Per store, so parallel tests do
+    /// not count each other's folders.
+    listings: std::sync::atomic::AtomicUsize,
 }
+
+#[derive(Debug)]
+struct CachedListing {
+    dir_modified: Option<std::time::SystemTime>,
+    read_at: std::time::Instant,
+    listing: (Vec<PresetEntry>, Vec<PresetProblem>),
+}
+
+/// How long a listing is trusted without the folder's mtime moving.
+const LISTING_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(1);
 
 impl PresetStore {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
-        Self { dir: dir.into() }
+        Self {
+            dir: dir.into(),
+            cached: std::sync::Mutex::new(None),
+            listings: std::sync::atomic::AtomicUsize::new(0),
+        }
     }
 
     /// The per-user folder.
@@ -204,11 +236,38 @@ impl PresetStore {
         &self.dir
     }
 
+    #[doc(hidden)]
+    pub fn listings_so_far(&self) -> usize {
+        self.listings.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Every readable preset, by display name, plus whatever would not load.
     ///
     /// A folder that does not exist yet is an empty list, not an error — the
     /// same rule `Journal::list` follows, and a first run has no folder.
     pub fn list(&self) -> (Vec<PresetEntry>, Vec<PresetProblem>) {
+        let dir_modified = std::fs::metadata(&self.dir).and_then(|m| m.modified()).ok();
+        if let Ok(cached) = self.cached.lock()
+            && let Some(cached) = cached.as_ref()
+            && cached.dir_modified == dir_modified
+            && cached.read_at.elapsed() < LISTING_MAX_AGE
+        {
+            return cached.listing.clone();
+        }
+        let listing = self.list_uncached();
+        if let Ok(mut cached) = self.cached.lock() {
+            *cached = Some(CachedListing {
+                dir_modified,
+                read_at: std::time::Instant::now(),
+                listing: listing.clone(),
+            });
+        }
+        listing
+    }
+
+    fn list_uncached(&self) -> (Vec<PresetEntry>, Vec<PresetProblem>) {
+        self.listings
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let Ok(read) = std::fs::read_dir(&self.dir) else {
             return (Vec::new(), Vec::new());
         };
@@ -226,7 +285,10 @@ impl PresetStore {
                     steps: preset.steps.len(),
                     path,
                 }),
-                Err(error) => problems.push(PresetProblem { path, error }),
+                Err(error) => problems.push(PresetProblem {
+                    path,
+                    error: error.to_string(),
+                }),
             }
         }
         entries.sort_by(|a, b| {
@@ -310,6 +372,7 @@ impl PresetStore {
     }
 
     pub fn save_as(&self, preset: &Preset, path: &Path) -> Result<(), PresetError> {
+        self.forget_listing();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|source| PresetError::Io {
                 path: parent.to_path_buf(),
@@ -321,10 +384,21 @@ impl PresetStore {
 
     pub fn delete(&self, path: &Path) -> Result<(), PresetError> {
         self.must_be_ours(path)?;
+        self.forget_listing();
         std::fs::remove_file(path).map_err(|source| PresetError::Io {
             path: path.to_path_buf(),
             source,
         })
+    }
+
+    /// Drops the cached listing. Called by everything here that changes the
+    /// folder, so the store's own writes are never read back stale — even on
+    /// a filesystem whose mtime is too coarse to notice them. External
+    /// changes are caught by the mtime, or by the cache's own age.
+    fn forget_listing(&self) {
+        if let Ok(mut cached) = self.cached.lock() {
+            *cached = None;
+        }
     }
 
     /// Renames both the file and the name inside it, so the two cannot drift.
@@ -390,6 +464,7 @@ impl PresetStore {
         if self.dir.exists() {
             return Ok(0);
         }
+        self.forget_listing();
         std::fs::create_dir_all(&self.dir).map_err(|source| PresetError::Io {
             path: self.dir.clone(),
             source,
@@ -742,6 +817,31 @@ mod tests {
         assert!(message.contains("locked"), "{message}");
     }
 
+    /// The drawer asks for the listing every frame; the folder is read once
+    /// until something in it changes, and the store's own writes are never
+    /// read back stale.
+    #[test]
+    fn the_listing_is_read_once_until_the_folder_changes() {
+        let dir = TempDir::new().unwrap();
+        let store = PresetStore::new(dir.path());
+        store.save(&sample()).unwrap();
+
+        let before = store.listings_so_far();
+        assert_eq!(store.list().0.len(), 1);
+        assert_eq!(store.list().0.len(), 1);
+        assert_eq!(store.list().0.len(), 1);
+        assert_eq!(store.listings_so_far(), before + 1, "three asks, one read");
+
+        store
+            .save(&Preset {
+                name: "Second".into(),
+                ..sample()
+            })
+            .unwrap();
+        assert_eq!(store.list().0.len(), 2, "a save is seen at once");
+        assert_eq!(store.listings_so_far(), before + 2);
+    }
+
     #[test]
     fn duplicating_appends_copy_and_keeps_both() {
         let dir = TempDir::new().unwrap();
@@ -961,7 +1061,7 @@ mod default_tests {
 
         let (entries, _) = store.list();
         let doomed = entries.first().expect("six of them").path.clone();
-        std::fs::remove_file(&doomed).unwrap();
+        store.delete(&doomed).unwrap();
 
         assert_eq!(store.seed_defaults().unwrap(), 0, "the folder is there now");
         assert_eq!(store.list().0.len(), 5, "and it stays gone");
