@@ -1,13 +1,9 @@
 //! The Batch Replace list: find → replace pairs, run top to bottom.
 //!
-//! *"From the settings window you can manage the list of
-//! replace commands, by adding, deleting or editing the commands. You can also
-//! move them up of down in the list, which can be useful if you want certain
-//! commands to be executed before others. The batch replace is executed from
-//! the first item and them stepping down in the list."*
-//!
-//! So the verb set is add / delete / edit / move up / move down, plus a way
-//! back to the fifty-one rules we ship (D27).
+//! The rules run in list order, so one rule can tidy up what an earlier one
+//! produced — which makes the order part of the configuration. The verb set is
+//! therefore add / delete / edit / move up / move down, plus a way back to the
+//! fifty-one rules we ship (D27).
 
 use ren_core::ops::{BatchReplace, Replace};
 
@@ -25,18 +21,10 @@ pub fn ui(ui: &mut egui::Ui, rules: &mut Vec<Replace>) -> bool {
     let mut bulk: String = ui.data_mut(|d| d.get_temp(bulk_id).unwrap_or_default());
     let bulk = &mut bulk;
 
-    // A key per row, kept in the same temp store and permuted alongside the
-    // rules. Widget state — the cursor in a Find box — is keyed by id, and an
-    // id that is the row's *position* hands row 4's cursor to whatever lands
-    // in slot 4 after row 3 is deleted (P37's hazard, one level down from the
-    // cards). A list whose length no longer matches was changed by somebody
-    // else — a preset load, Restore — and is simply re-keyed.
+    // A key per row that travels with it, so a row that moves keeps its own
+    // cursor and undo history (`widgets::row_keys`).
     let keys_id = ui.id().with("rule_keys");
-    let mut keys: Vec<u64> = ui.data_mut(|d| d.get_temp(keys_id).unwrap_or_default());
-    if keys.len() != rules.len() {
-        let from = keys.iter().max().map_or(0, |k| k + 1);
-        keys = (from..from + rules.len() as u64).collect();
-    }
+    let mut keys = crate::widgets::row_keys::RowKeys::load(ui, keys_id, rules.len());
 
     ui.horizontal(|ui| {
         ui.label(
@@ -52,8 +40,8 @@ pub fn ui(ui: &mut egui::Ui, rules: &mut Vec<Replace>) -> bool {
             if ui.button("Add rule").clicked() {
                 command = Some(Command::Add);
             }
-            // *"Tip: If want to add multiple items in one go, use the add
-            // button here and separate each item with a colon (:)."*
+            // Several rules in one go: text in the box beside the button splits
+            // on `:`, one rule per item.
             //
             // One control rather than two: empty adds a blank row, which is
             // what the button always did, and text splits on `:`. A second
@@ -117,7 +105,7 @@ pub fn ui(ui: &mut egui::Ui, rules: &mut Vec<Replace>) -> bool {
         .auto_shrink([false, false])
         .show(ui, |ui| {
             for index in 0..rules.len() {
-                ui.push_id(keys[index], |ui| {
+                ui.push_id(keys.get(index), |ui| {
                     ui.horizontal(|ui| {
                         let rule = &mut rules[index];
                         changed |= ui
@@ -141,12 +129,9 @@ pub fn ui(ui: &mut egui::Ui, rules: &mut Vec<Replace>) -> bool {
                             .on_hover_text("Read the find text as a regular expression")
                             .changed();
 
-                        // > *"You can also add the current Replace function
-                        // > settings to the list."*
-                        //
-                        // The **settings**, plural: a batch entry is a whole
-                        // `Replace`, and a rule carries seven settings for the
-                        // same reason. Four of them live here
+                        // A batch entry is a whole `Replace` — a Find &
+                        // Replace card's *Add to Batch Replace* copies all of
+                        // it — so a rule carries all seven settings. Four of them live here
                         // rather than on the row, because at fifty-one rules
                         // four more inline controls do not fit — but the label
                         // carries a summary whenever any of them is off its
@@ -245,9 +230,7 @@ pub fn ui(ui: &mut egui::Ui, rules: &mut Vec<Replace>) -> bool {
             } else {
                 rules.push(Replace::default());
             }
-            // New rows, new keys, after every key that exists.
-            let from = keys.iter().max().map_or(0, |k| k + 1);
-            keys.extend(from..from + (rules.len() - keys.len()) as u64);
+            keys.grow_to(rules.len());
             changed = true;
         }
         Some(Command::Delete(index)) => {
@@ -272,7 +255,7 @@ pub fn ui(ui: &mut egui::Ui, rules: &mut Vec<Replace>) -> bool {
         }
         None => {}
     }
-    ui.data_mut(|d| d.insert_temp(keys_id, keys));
+    keys.store(ui, keys_id);
 
     changed
 }
@@ -285,8 +268,8 @@ enum Command {
     Restore,
 }
 
-/// The four settings that are not on the row, in the dialog's own order —
-/// `None` when every one of them is at its default.
+/// The four settings that are not on the row, in the order the popover lays
+/// them out — `None` when every one of them is at its default.
 ///
 /// **This is what stops a rule with `skip = 3` looking identical to one with
 /// `skip = 0`.** It goes in the toggle's *label*, not its tooltip: egui only
@@ -312,10 +295,8 @@ fn extras(rule: &Replace) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(", "))
 }
 
-/// What *Add rule* adds, given whatever is in the box beside it.
-///
-/// > *"Tip: If want to add multiple items in one go, use the add button here
-/// > and separate each item with a colon (:)."*
+/// What *Add rule* adds, given whatever is in the box beside it: one rule per
+/// colon-separated item, so a handful of words go in with one click.
 ///
 /// Empty gives none, and the caller then adds one blank row — which is what
 /// the button always did. A separate function because the widget above it is
@@ -362,10 +343,10 @@ mod tests {
         );
     }
 
-    /// The dialog's own order — case, swap, skip, max — so the summary reads
-    /// the way the popover below it is laid out.
+    /// Case, swap, skip, max — so the summary reads the way the popover below
+    /// it is laid out.
     #[test]
-    fn the_four_hidden_settings_are_named_in_the_dialogs_own_order() {
+    fn the_four_hidden_settings_are_named_in_the_popovers_order() {
         let rule = Replace::new("a", "b")
             .case_sensitive(true)
             .swap(true)
@@ -403,7 +384,7 @@ mod tests {
         );
     }
 
-    /// The tip's own example shape, plus the spacing a person actually types.
+    /// Three items, with the spacing a person actually types.
     #[test]
     fn a_colon_separated_list_is_one_rule_each() {
         let finds: Vec<_> = added_by("aa: bb :cc").into_iter().map(|r| r.find).collect();

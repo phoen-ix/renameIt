@@ -18,7 +18,8 @@ use crate::thumbs::{ThumbKey, Thumbs, Tile, bucket};
 pub struct Look {
     /// The longest edge, in points.
     pub size: u32,
-    /// > *"Draw a black border around thumbnails"*
+    /// A thin black border round each picture, so a pale photograph does not
+    /// dissolve into a light panel.
     pub border: bool,
 }
 
@@ -71,12 +72,17 @@ pub fn picture(
         // blank space, so the column still reads as a column — and it names
         // nothing, because a row the filter hid must not be findable through
         // its tile (P72 works the other way round too).
+        //
+        // It still **senses clicks**: this is the click target the doc above
+        // promises, and in the grid there is no other one. A hover-only glyph
+        // left every folder and non-picture file in grid view impossible to
+        // select, right-click or double-click.
         let icon = if entry.is_dir {
             crate::widgets::icons::Icon::Folder
         } else {
             crate::widgets::icons::Icon::File
         };
-        return crate::widgets::icons::sized_icon(ui, icon, side, egui::Sense::hover());
+        return crate::widgets::icons::sized_icon(ui, icon, side, egui::Sense::click());
     };
 
     let ctx = ui.ctx().clone();

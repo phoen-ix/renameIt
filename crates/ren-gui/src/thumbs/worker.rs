@@ -291,6 +291,21 @@ impl ThumbWorker {
         self.generation
     }
 
+    /// Abandons the current request without making another.
+    ///
+    /// For a view whose visible set is all held already — scrolled back onto
+    /// tiles it has — while the decodes it asked for a moment ago are still
+    /// queued. [`Self::request`] ignores an empty set by design, so without
+    /// this those jobs decoded on, for pictures nobody was looking at, and
+    /// were staged and thrown away a frame later. The threads skip a job older
+    /// than `newest`, so bumping it is the whole cancellation.
+    pub fn cancel(&mut self) {
+        self.generation += 1;
+        self.newest.store(self.generation, Ordering::Release);
+        self.pending = 0;
+    }
+
+    #[cfg(test)]
     pub fn threads(&self) -> usize {
         self.threads
     }

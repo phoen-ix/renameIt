@@ -24,20 +24,20 @@ pub enum Page {
     #[default]
     BatchReplace,
     MusicStyles,
-    /// *"Here you can create a list of such words"* — the exception lists a
-    /// **new** Set Casing card copies. Not run-wide: each card keeps its own.
+    /// The exception lists a **new** Set Casing card copies. Not run-wide:
+    /// each card keeps its own.
     CasingExceptions,
     /// Which columns the file table shows, in what order.
     Display,
     /// What a fresh start deliberately forgets.
     Startup,
-    /// The file manager's *"Open with RenameIt"* entry.
+    /// The file manager's RenameIt menu.
     ShellIntegration,
     /// The three visibility switches and the system-folder guard.
     FileSystem,
     Appearance,
-    /// *"Here I have collected various problems and their solutions"* — plus
-    /// the shortcuts to where the app keeps its files.
+    /// Answers to the questions a confused user actually has, plus the
+    /// shortcuts to where the app keeps its files and the reset.
     ProblemSolver,
 }
 
@@ -110,16 +110,21 @@ pub struct Output {
     /// Travels out rather than being stored, for the same reason `theme` does:
     /// it has to be pushed into the `egui::Context`, not merely remembered.
     pub zoom: Option<f32>,
-    /// Whether the default rule list changed.
-    pub changed: bool,
     /// Set when something changed that only a fresh listing can show — the
     /// visibility switches, the pattern scope, the guard.
+    ///
+    /// The only thing a page asks the app to *do*. No page here feeds a plan:
+    /// the rule, style and casing lists are copied by a card when it is made
+    /// (D35), and Display and Startup decide how things look and what the next
+    /// start forgets. There used to be a `changed` beside this that re-planned
+    /// the whole listing on every edit — once per frame while the thumbnail
+    /// slider was dragged — for a result that could not differ.
     pub relist: bool,
     /// The Problem Solver page's reset button was pressed.
     ///
-    /// Not the reset itself: this window can reach six of the fourteen things a
-    /// reset puts back, and the confirmation belongs **on top of** this modal
-    /// rather than inside it.
+    /// Not the reset itself: a reset puts back more than this window can
+    /// reach (see `confirm::reset_ui` for the list), and the confirmation
+    /// belongs **on top of** this modal rather than inside it.
     pub reset: bool,
     pub close: bool,
 }
@@ -255,13 +260,11 @@ fn page_ui(
     out: &mut Output,
 ) {
     match *page {
-        Page::BatchReplace => out.changed |= batch_replace_ui(ui, defaults.batch_replace),
-        Page::MusicStyles => out.changed |= music_styles_ui(ui, defaults.music_styles),
-        Page::CasingExceptions => out.changed |= casing_ui(ui, defaults.casing),
-        Page::Display => {
-            out.changed |= display_ui(ui, defaults.columns, defaults.table_style, defaults.session);
-        }
-        Page::Startup => out.changed |= startup_ui(ui, defaults.startup),
+        Page::BatchReplace => batch_replace_ui(ui, defaults.batch_replace),
+        Page::MusicStyles => music_styles_ui(ui, defaults.music_styles),
+        Page::CasingExceptions => casing_ui(ui, defaults.casing),
+        Page::Display => display_ui(ui, defaults.columns, defaults.table_style, defaults.session),
+        Page::Startup => startup_ui(ui, defaults.startup),
         Page::ShellIntegration => shell_ui(ui, defaults.platform, defaults.presets),
         Page::ProblemSolver => {
             out.reset = problem_solver_ui(
@@ -271,11 +274,7 @@ fn page_ui(
                 defaults.preset_dir,
             )
         }
-        Page::FileSystem => {
-            let relist = file_system_ui(ui, defaults.session);
-            out.relist |= relist;
-            out.changed |= relist;
-        }
+        Page::FileSystem => out.relist |= file_system_ui(ui, defaults.session),
         Page::Appearance => {
             let (picked, zoom) = appearance_ui(ui, theme, current_zoom);
             out.theme = picked;
@@ -284,7 +283,7 @@ fn page_ui(
     }
 }
 
-fn batch_replace_ui(ui: &mut egui::Ui, rules: &mut Vec<Replace>) -> bool {
+fn batch_replace_ui(ui: &mut egui::Ui, rules: &mut Vec<Replace>) {
     ui.label(
         egui::RichText::new(
             "The list a new Batch Replace operation starts from. A card keeps its own \
@@ -295,14 +294,14 @@ fn batch_replace_ui(ui: &mut egui::Ui, rules: &mut Vec<Replace>) -> bool {
         .small(),
     );
     ui.add_space(6.0);
-    rule_table::ui(ui, rules)
+    rule_table::ui(ui, rules);
 }
 
 /// The list Music Rename's radios offer.
 ///
 /// A plain editable list, not `rule_table`: a style is one string, and the
 /// order is what the radios are read in.
-fn music_styles_ui(ui: &mut egui::Ui, styles: &mut Vec<String>) -> bool {
+fn music_styles_ui(ui: &mut egui::Ui, styles: &mut Vec<String>) {
     ui.label(
         egui::RichText::new(
             "The styles Music Rename offers. A card stores the pattern it ended up with, \
@@ -321,7 +320,7 @@ fn music_styles_ui(ui: &mut egui::Ui, styles: &mut Vec<String>) -> bool {
             "The three shipped styles",
             SHIPPED_STYLES.iter().map(|s| (*s).to_owned()).collect(),
         )
-        .show(ui, styles)
+        .show(ui, styles);
 }
 
 /// The sizes offered, as egui zoom factors.
@@ -401,16 +400,12 @@ fn appearance_ui(ui: &mut egui::Ui, theme: Theme, zoom: f32) -> (Option<Theme>, 
 
 /// Set Casing's two exception lists.
 ///
-/// > *"Here you can create a list of such words."*
-///
 /// Both live on `CasingRules`, which is **per card**: this page edits the copy
 /// a *new* card starts from, and a card that already exists never looks at it
 /// again (D35). Editing here therefore cannot change a pipeline you have built
 /// or a preset you have saved — which is the whole point, and the opposite of
 /// what this comment claimed until M8.
-fn casing_ui(ui: &mut egui::Ui, rules: &mut CasingRules) -> bool {
-    let mut changed = false;
-
+fn casing_ui(ui: &mut egui::Ui, rules: &mut CasingRules) {
     ui.label(egui::RichText::new("Exception words").strong());
     ui.label(
         egui::RichText::new(
@@ -421,7 +416,7 @@ fn casing_ui(ui: &mut egui::Ui, rules: &mut CasingRules) -> bool {
         .small(),
     );
     ui.add_space(4.0);
-    changed |= StringList::new("casing_exception_row")
+    StringList::new("casing_exception_row")
         .hint("CD")
         .add_label("+ Add word")
         .width(200.0)
@@ -438,14 +433,14 @@ fn casing_ui(ui: &mut egui::Ui, rules: &mut CasingRules) -> bool {
     ui.label(egui::RichText::new("Title Case lowercase exceptions").strong());
     ui.label(
         egui::RichText::new(
-            "Words Title Case leaves lowercase unless they start the name — \
-             \"typically prepositions and similar short words\".",
+            "Words Title Case leaves lowercase unless they start the name — short \
+             prepositions, articles and conjunctions, typically.",
         )
         .weak()
         .small(),
     );
     ui.add_space(4.0);
-    changed |= StringList::new("casing_lowercase_row")
+    StringList::new("casing_lowercase_row")
         .hint("the")
         .add_label("+ Add word")
         .width(200.0)
@@ -454,20 +449,16 @@ fn casing_ui(ui: &mut egui::Ui, rules: &mut CasingRules) -> bool {
             CasingRules::default().title_case.lowercase_exceptions,
         )
         .show(ui, &mut rules.title_case.lowercase_exceptions);
-
-    changed
 }
 
-/// Which columns the file table shows, in what order — the Display page's
-/// Display page.
+/// The Display page: which columns the file table shows and in what order,
+/// the two row switches, and the thumbnails.
 fn display_ui(
     ui: &mut egui::Ui,
     columns: &mut Columns,
     style: &mut crate::viewmodel::TableStyle,
     session: &mut SessionSettings,
-) -> bool {
-    let mut changed = false;
-
+) {
     ui.label(
         egui::RichText::new(
             "Columns in the file list. Drag a column edge in the table itself to resize it.",
@@ -485,13 +476,11 @@ fn display_ui(
             // Name is the row's identity; a table without it is a list of
             // sizes, so the box that would remove it is disabled rather than
             // silently put back.
-            changed |= ui
-                .add_enabled(
-                    !is_name,
-                    egui::Checkbox::new(&mut column.visible, column.kind.label()),
-                )
-                .on_disabled_hover_text("The name is what identifies a row")
-                .changed();
+            ui.add_enabled(
+                !is_name,
+                egui::Checkbox::new(&mut column.visible, column.kind.label()),
+            )
+            .on_disabled_hover_text("The name is what identifies a row");
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
@@ -528,43 +517,35 @@ fn display_ui(
         } else {
             columns.move_down(index);
         }
-        changed = true;
     }
 
     ui.add_space(8.0);
     if ui
         .button("Restore defaults")
-        .on_hover_text("The four the app starts with, in their original order")
+        .on_hover_text("The four the app starts with, in the order they start in")
         .clicked()
     {
         *columns = Columns::default();
-        changed = true;
     }
 
     ui.add_space(10.0);
     ui.separator();
     ui.add_space(6.0);
 
-    changed |= ui
-        .checkbox(&mut style.stripes, "Shade every other row")
-        .changed();
-    changed |= ui
-        .checkbox(
-            &mut style.full_row_select,
-            "Click anywhere on a row to select it",
-        )
-        .on_hover_text(
-            "Off, you must click the name — which is what this app has always done. \
-             The name still takes the double-click that renames it either way.",
-        )
-        .changed();
+    ui.checkbox(&mut style.stripes, "Shade every other row");
+    ui.checkbox(
+        &mut style.full_row_select,
+        "Click anywhere on a row to select it",
+    )
+    .on_hover_text(
+        "Off, you must click the name — which is what this app has always done. \
+         The name still takes the double-click that renames it either way.",
+    );
 
     ui.add_space(10.0);
     ui.separator();
     ui.add_space(6.0);
-    changed |= thumbnails_ui(ui, session);
-
-    changed
+    thumbnails_ui(ui, session);
 }
 
 /// How big thumbnails are drawn, and whether they get a border.
@@ -573,10 +554,10 @@ fn display_ui(
 /// reason three fixed sizes should be the only three.
 ///
 /// Not a listing change — nothing here decides what is *in* the list, only how
-/// big the picture beside it is, so no relist follows.
-fn thumbnails_ui(ui: &mut egui::Ui, session: &mut SessionSettings) -> bool {
-    let mut changed = false;
-
+/// big the picture beside it is, so no relist follows. Measured in points,
+/// like every other size in the window: a 2× display decodes twice the pixels
+/// (`tile::key_for`).
+fn thumbnails_ui(ui: &mut egui::Ui, session: &mut SessionSettings) {
     ui.label(egui::RichText::new("Thumbnails").strong());
     ui.label(
         egui::RichText::new(
@@ -588,21 +569,15 @@ fn thumbnails_ui(ui: &mut egui::Ui, session: &mut SessionSettings) -> bool {
     );
     ui.add_space(4.0);
 
-    changed |= ui
-        .add(
-            egui::Slider::new(
-                &mut session.thumb_size,
-                crate::viewmodel::THUMB_MIN..=crate::viewmodel::THUMB_MAX,
-            )
-            .text("Size")
-            .suffix(" px"),
+    ui.add(
+        egui::Slider::new(
+            &mut session.thumb_size,
+            crate::viewmodel::THUMB_MIN..=crate::viewmodel::THUMB_MAX,
         )
-        .changed();
-    changed |= ui
-        .checkbox(&mut session.thumb_border, "Draw a border around thumbnails")
-        .changed();
-
-    changed
+        .text("Size")
+        .suffix(" pt"),
+    );
+    ui.checkbox(&mut session.thumb_border, "Draw a border around thumbnails");
 }
 
 /// The three visibility switches and the system-folder guard.
@@ -693,9 +668,7 @@ fn file_system_ui(ui: &mut egui::Ui, session: &mut SessionSettings) -> bool {
 
 /// What a fresh start deliberately forgets — the Startup page. Every switch is
 /// off by default.
-fn startup_ui(ui: &mut egui::Ui, startup: &mut Startup) -> bool {
-    let mut changed = false;
-
+fn startup_ui(ui: &mut egui::Ui, startup: &mut Startup) {
     ui.label(
         egui::RichText::new(
             "The app remembers where you were. These are the parts you can tell it to forget.",
@@ -705,25 +678,20 @@ fn startup_ui(ui: &mut egui::Ui, startup: &mut Startup) -> bool {
     );
     ui.add_space(6.0);
 
-    changed |= ui
-        .checkbox(&mut startup.clear_subfolders, "Uncheck Subfolders")
+    ui.checkbox(&mut startup.clear_subfolders, "Uncheck Subfolders")
         .on_hover_text(
-            "\"Reducing the risk of painfully long startup times\" — a deep tree left switched \
-             on is walked before the window appears.",
-        )
-        .changed();
-    changed |= ui
-        .checkbox(&mut startup.clear_pattern, "Clear the pattern box")
-        .on_hover_text("So a forgotten *.mp3 does not silently hide everything else")
-        .changed();
-    changed |= ui
-        .checkbox(&mut startup.clear_pipeline, "Clear the pipeline")
+            "So a start is never slow: a deep tree left switched on is walked before the \
+             window appears.",
+        );
+    ui.checkbox(&mut startup.clear_pattern, "Clear the pattern box")
+        .on_hover_text("So a forgotten *.mp3 does not silently hide everything else");
+    ui.checkbox(&mut startup.clear_pipeline, "Clear the pipeline")
         .on_hover_text(
-            "\"If you are concerned about privacy.\" The whole card stack goes, rather than \
-             each box being blanked: eight cards with every field empty is not privacy, it is \
-             a puzzle. Save a preset to get it back deliberately.",
-        )
-        .changed();
+            "So the next person at this machine does not see what you were renaming. The \
+             whole card stack goes, rather than each box being blanked: eight cards with \
+             every field empty is not privacy, it is a puzzle. Save a preset to get it back \
+             deliberately.",
+        );
 
     ui.add_space(8.0);
     ui.label(
@@ -731,12 +699,10 @@ fn startup_ui(ui: &mut egui::Ui, startup: &mut Startup) -> bool {
             .weak()
             .small(),
     );
-
-    changed
 }
 
-/// *"Here I have collected various problems and their solutions"*, and
-/// *"as well as shortcuts to the settings folder"*.
+/// Answers to the problems people actually hit, and shortcuts to the folders
+/// the app keeps its files in.
 ///
 /// The shortcuts are the useful half and the only half that can go stale, so
 /// they are read from the same functions the app uses rather than typed out.
@@ -828,8 +794,8 @@ fn problem_solver_ui(
         ),
         (
             "A rename finished but left files behind",
-            "It did not finish. The app never renames half a batch: if a run is interrupted, \
-             the next start offers to roll it back.",
+            "A run stops at a file it cannot rename, or at Cancel; Undo reverts it. Only a \
+             crash is rolled back at the next start.",
         ),
         (
             "Undo is greyed out after tagging music",
@@ -874,8 +840,8 @@ fn shell_ui(
 ) {
     ui.label(
         egui::RichText::new(
-            "\"Shell Integration means that you can access RenameIt directly from your file \
-             manager.\"",
+            "Open RenameIt from your file manager's right-click menu, on the files you \
+             have selected there — or with one of your presets already loaded.",
         )
         .weak()
         .small(),
@@ -892,7 +858,16 @@ fn shell_ui(
     };
 
     let menu = crate::app::menu_presets(presets);
-    let mut failure = None;
+    // Kept across frames in egui's temp store, not in a local: the page is
+    // redrawn on the next mouse move, and a local set only on the click's
+    // frame showed a failed registry write for one frame — after which the
+    // box simply refused to stay ticked, with nothing saying why. Cleared by
+    // the next write that succeeds.
+    let failure_id = ui.id().with("shell_menu_failure");
+    let mut failure: Option<String> = ui.data(|d| d.get_temp(failure_id));
+    let mut wrote = |result: ren_platform::Result<()>| {
+        failure = result.err().map(|error| error.to_string());
+    };
 
     let mut want = installed;
     if ui
@@ -906,7 +881,7 @@ fn shell_ui(
         )
         .changed()
     {
-        failure = platform.set_context_menu(want, &menu).err();
+        wrote(platform.set_context_menu(want, &menu));
     }
 
     ui.add_space(6.0);
@@ -932,7 +907,7 @@ fn shell_ui(
                 )
                 .clicked()
             {
-                failure = platform.set_context_menu(true, &menu).err();
+                wrote(platform.set_context_menu(true, &menu));
             }
         });
     }
@@ -952,14 +927,18 @@ fn shell_ui(
         );
     }
 
-    if let Some(error) = failure {
-        // Shown rather than swallowed: the one thing worse than a failed
-        // registry write is one the user thinks succeeded.
-        ui.label(
-            egui::RichText::new(format!("Could not change it: {error}"))
-                .color(ui.visuals().error_fg_color)
-                .small(),
-        );
+    match &failure {
+        Some(error) => {
+            // Shown rather than swallowed: the one thing worse than a failed
+            // registry write is one the user thinks succeeded.
+            ui.label(
+                egui::RichText::new(format!("Could not change it: {error}"))
+                    .color(ui.visuals().error_fg_color)
+                    .small(),
+            );
+            ui.data_mut(|d| d.insert_temp(failure_id, error.clone()));
+        }
+        None => ui.data_mut(|d| d.remove::<String>(failure_id)),
     }
 
     ui.add_space(10.0);
@@ -996,4 +975,76 @@ fn shell_ui(
         .weak()
         .small(),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+    use std::path::Path;
+
+    /// A machine whose menu is not installed and cannot be: a policy has
+    /// locked `HKCU\Software\Classes`. Only the three calls the page makes
+    /// are answered.
+    #[derive(Debug)]
+    struct LockedMenu;
+
+    impl ren_platform::Platform for LockedMenu {
+        fn name(&self) -> &'static str {
+            "Locked"
+        }
+        fn capabilities(&self) -> &'static [ren_platform::Capability] {
+            &[]
+        }
+        fn rename(&self, _: &Path, _: &Path) -> ren_platform::Result<()> {
+            unreachable!()
+        }
+        fn replace_file(&self, _: &Path, _: &Path) -> ren_platform::Result<()> {
+            unreachable!()
+        }
+        fn get_attributes(&self, _: &Path) -> ren_platform::Result<ren_platform::FileAttributes> {
+            unreachable!()
+        }
+        fn set_attributes(
+            &self,
+            _: &Path,
+            _: ren_platform::AttributeChange,
+        ) -> ren_platform::Result<()> {
+            unreachable!()
+        }
+        fn get_times(&self, _: &Path) -> ren_platform::Result<ren_platform::FileTimes> {
+            unreachable!()
+        }
+        fn set_times(&self, _: &Path, _: ren_platform::TimeChange) -> ren_platform::Result<()> {
+            unreachable!()
+        }
+        fn naming_rules(&self, _: &Path) -> &'static ren_platform::NamingRules {
+            &ren_platform::WINDOWS
+        }
+        fn case_sensitivity(&self, _: &Path) -> ren_platform::CaseSensitivity {
+            unreachable!()
+        }
+        fn reveal_in_file_manager(&self, _: &Path) -> ren_platform::Result<()> {
+            unreachable!()
+        }
+        fn notify_shell_changed(&self, _: &Path) {}
+        fn context_menu_installed(&self) -> Option<bool> {
+            Some(false)
+        }
+    }
+
+    /// The failure outlives the frame of the click. It used to be a local, so
+    /// the next repaint dropped it and the box just refused to stay ticked.
+    #[test]
+    fn a_menu_that_could_not_be_written_keeps_saying_so() {
+        let mut harness = egui_kittest::Harness::new_ui(|ui| shell_ui(ui, &LockedMenu, &[]));
+        harness.run();
+        harness
+            .get_by_label("Show a RenameIt menu when I right-click files, folders and drives")
+            .click();
+        for _ in 0..3 {
+            harness.run();
+        }
+        harness.get_by_label_contains("Could not change it:");
+    }
 }

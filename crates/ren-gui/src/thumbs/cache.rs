@@ -39,7 +39,6 @@ pub struct CostCache<K: Hash + Eq, V> {
     /// current frame is not evictable — see [`Self::insert`].
     frame: u64,
     touched: std::collections::HashMap<K, u64>,
-    evictions: u64,
 }
 
 impl<K: Hash + Eq + Clone, V> CostCache<K, V> {
@@ -51,7 +50,6 @@ impl<K: Hash + Eq + Clone, V> CostCache<K, V> {
             budget,
             frame: 0,
             touched: std::collections::HashMap::new(),
-            evictions: 0,
         }
     }
 
@@ -120,7 +118,6 @@ impl<K: Hash + Eq + Clone, V> CostCache<K, V> {
             if let Some(dropped) = self.entries.pop(&key) {
                 self.bytes -= (self.cost)(&dropped) + ENTRY_OVERHEAD;
                 self.touched.remove(&key);
-                self.evictions += 1;
             } else {
                 break;
             }
@@ -174,10 +171,6 @@ impl<K: Hash + Eq + Clone, V> CostCache<K, V> {
 
     pub fn budget(&self) -> usize {
         self.budget
-    }
-
-    pub fn evictions(&self) -> u64 {
-        self.evictions
     }
 }
 

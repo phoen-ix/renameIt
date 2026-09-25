@@ -56,13 +56,6 @@ impl Tile {
             Self::None(_) => 0,
         }
     }
-
-    pub fn texture(&self) -> Option<&egui::TextureHandle> {
-        match self {
-            Self::Ready { texture, .. } => Some(texture),
-            Self::None(_) => None,
-        }
-    }
 }
 
 impl std::fmt::Debug for Tile {
@@ -196,6 +189,10 @@ impl Thumbs {
     /// is sent only when it names something not already coming: re-sending an
     /// identical set every frame would cancel the work in flight and restart
     /// it, and nothing would ever finish.
+    ///
+    /// Scrolling onto tiles that are **all** held sends no set at all, so it
+    /// cancels explicitly ([`ThumbWorker::cancel`]) — once, while something
+    /// is outstanding, not on every frame of a still view.
     pub fn want(&mut self, visible: impl IntoIterator<Item = ThumbKey>) {
         let visible: Vec<ThumbKey> = visible.into_iter().collect();
         // Room for everything on screen at once, up to the ceiling. Without it,
@@ -215,6 +212,13 @@ impl Thumbs {
             .into_iter()
             .filter(|key| !self.cache.contains(key) && !self.staged.contains_key(key))
             .collect();
+        if missing.is_empty() {
+            if !self.outstanding.is_empty() {
+                self.worker.cancel();
+                self.outstanding.clear();
+            }
+            return;
+        }
         if missing.iter().all(|key| self.outstanding.contains(key)) {
             return; // Everything wanted is already on its way.
         }
@@ -310,7 +314,7 @@ impl Thumbs {
         self.outstanding.clear();
     }
 
-    /// What the cache holds, in bytes — for the tests and the spike harness.
+    /// What the cache holds, in bytes — for the tests.
     pub fn bytes(&self) -> usize {
         self.cache.bytes()
     }
@@ -321,11 +325,6 @@ impl Thumbs {
 
     pub fn is_empty(&self) -> bool {
         self.cache.is_empty()
-    }
-
-    /// Entries dropped to stay under budget, for the performance harness.
-    pub fn evictions(&self) -> u64 {
-        self.cache.evictions()
     }
 
     /// What the cache is currently allowed to hold.
@@ -386,6 +385,39 @@ mod tests {
         let tile = thumbs.tile(&ctx, &key(&path)).expect("a decoded tile");
         assert!(matches!(tile, Tile::Ready { size, .. } if *size == [40, 20]));
         assert_eq!(thumbs.bytes(), 40 * 20 * 4 + 256);
+    }
+
+    /// Scrolling back onto tiles that are all held abandons the decodes the
+    /// view asked for a moment ago, rather than leaving them to decode
+    /// pictures nobody is looking at.
+    #[test]
+    fn scrolling_back_onto_held_tiles_cancels_what_was_on_its_way() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (a, b) = (picture(dir.path(), "a.jpg"), picture(dir.path(), "b.jpg"));
+        let ctx = egui::Context::default();
+
+        let mut thumbs = thumbs();
+        thumbs.begin_frame();
+        thumbs.want([key(&a)]);
+        thumbs.wait(Duration::from_secs(10));
+        assert!(thumbs.tile(&ctx, &key(&a)).is_some());
+
+        // Scroll down onto b: one decode asked for.
+        thumbs.begin_frame();
+        thumbs.want([key(&b)]);
+        assert_eq!(thumbs.pending(), 1);
+        let requests = thumbs.requests();
+
+        // And straight back onto a, which is held.
+        thumbs.begin_frame();
+        thumbs.want([key(&a)]);
+        assert_eq!(thumbs.pending(), 0, "b is abandoned, not waited on");
+        assert_eq!(thumbs.requests(), requests + 1);
+
+        // A still view cancels nothing more.
+        thumbs.begin_frame();
+        thumbs.want([key(&a)]);
+        assert_eq!(thumbs.requests(), requests + 1);
     }
 
     /// The one that keeps `Harness::run` from panicking: a file that is not a

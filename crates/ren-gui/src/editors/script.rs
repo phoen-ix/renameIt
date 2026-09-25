@@ -125,7 +125,15 @@ pub fn ui(ui: &mut egui::Ui, op: &mut Script, cx: &crate::editors::EditorCx<'_>)
             })
             .inner;
 
-        if hint.is_none() && chosen.is_some() {
+        // Only for a script that compiled and declares no `# args:` line. A
+        // missing or broken one has said so above, and cannot say whether it
+        // takes arguments — the note beside that error read as "delete what
+        // is in the box", which a script that is merely missing today will
+        // want back.
+        if chosen
+            .as_ref()
+            .is_some_and(|c| c.as_ref().as_ref().is_ok_and(|c| c.header().args.is_none()))
+        {
             form.note("This script does not take arguments.");
         }
     });

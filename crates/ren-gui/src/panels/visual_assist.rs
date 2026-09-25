@@ -1,9 +1,10 @@
-//! The Visual Assist strip — *"visually select the text you want to find"*.
+//! The Visual Assist strip — picking a field's text, position or span by
+//! selecting it in the name the card is handed.
 //!
 //! Five controls — a combo box of filenames, a prompt, a live `Position: N`
 //! readout, and buttons captioned **Select** and **Cancel** — drawn inside the
 //! card whose field they fill rather than in a window of their own (D143) — which is what
-//! `docs/DESIGN.md:265` asked for when it said *"instead of a separate
+//! `docs/DESIGN.md` §S4 asked for when it said *"instead of a separate
 //! window"*, and not what it asked for in the next clause.
 //!
 //! # Why the text is not the file name
@@ -223,10 +224,10 @@ fn refusal(why: NoSubject) -> &'static str {
 
 /// The id of the read-only field.
 ///
-/// Fixed and app-computable, the `source_bar::address_box()` pattern, for two
-/// reasons: only one strip is ever open, and `handle_hotkeys` has to be able to
-/// exempt exactly this field from the guard that stands the shortcuts down
-/// while a text edit has focus.
+/// Fixed rather than salted, the `source_bar::address_box()` pattern: only one
+/// strip is ever open, and the selection this module caches is keyed off it.
+/// F3 does not need it — it is handled above the guard that stands the other
+/// shortcuts down while a text field has focus.
 pub fn field_id() -> egui::Id {
     egui::Id::new("renameit_visual_assist_subject")
 }
@@ -237,7 +238,11 @@ pub fn field_id() -> egui::Id {
 /// either the app's (recomputed once per preview generation) or the widget's
 /// own (the selection, in egui's store). That is what lets a card deep inside
 /// the pipeline panel draw it without reaching the app.
-pub fn ui(ui: &mut egui::Ui, state: &VisualAssist) -> Outcome {
+///
+/// `find_reads_wildcards` is true when the target is a Find box that is *not*
+/// a regex: there `*`, `:` and `?` are wildcards, and a selection holding one
+/// would be written into it verbatim — see [`wildcard_note`].
+pub fn ui(ui: &mut egui::Ui, state: &VisualAssist, find_reads_wildcards: bool) -> Outcome {
     let mut outcome = Outcome::Open;
     let mut selection = selection_of(ui.ctx());
 
@@ -338,6 +343,19 @@ pub fn ui(ui: &mut egui::Ui, state: &VisualAssist) -> Outcome {
             }
         });
 
+        if find_reads_wildcards
+            && state.target == AssistTarget::ReplaceFind
+            && let Some(note) = state
+                .span(selection)
+                .and_then(|span| wildcard_note(&span.text))
+        {
+            ui.label(
+                egui::RichText::new(note)
+                    .color(ui.visuals().warn_fg_color)
+                    .small(),
+            );
+        }
+
         if state.unreplayed_script {
             ui.label(
                 egui::RichText::new("A script above this card is not reflected here.")
@@ -384,6 +402,27 @@ pub fn ui(ui: &mut egui::Ui, state: &VisualAssist) -> Outcome {
     });
 
     outcome
+}
+
+/// What a selection holding wildcard characters would mean in a Find box that
+/// reads wildcards, or `None` when it holds none.
+///
+/// Said *before* Select rather than after: the wildcard language has no escape
+/// ([`wildcards_in`](crate::editors::assist::wildcards_in)), so the text would
+/// go into the box verbatim and match more than it says — and the one box that
+/// can hold it literally is a tick away. Only reachable where a name can hold
+/// `*`, `:` or `?`, which is everywhere but Windows.
+fn wildcard_note(text: &str) -> Option<String> {
+    let found = crate::editors::assist::wildcards_in(text);
+    if found.is_empty() {
+        return None;
+    }
+    let listed: Vec<String> = found.iter().map(char::to_string).collect();
+    Some(format!(
+        "The selection contains {} — a wildcard in the Find box. To match it as it is, tick \
+         Regular expression before Select.",
+        listed.join(" ")
+    ))
 }
 
 /// The names the picker offers, and how many the cap dropped.

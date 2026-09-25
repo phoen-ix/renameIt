@@ -14,6 +14,7 @@
 //! the normal case rather than the edge case.
 
 use ren_core::model::Scope;
+use ren_core::ops::Produces;
 
 use crate::editors::{self, EditorCx};
 use crate::viewmodel::{Card, CardId, CardStack};
@@ -199,7 +200,21 @@ fn card_ui(
                 // would be worse than saying so.
                 let mine = assist.filter(|state| state.card == card.id);
                 let card_cx = cx.for_card(card.id, card.scope, mine);
-                changed |= editors::ui(ui, &mut card.op, &card_cx);
+                // The editors write straight into the live operation, and the
+                // header, the count line and the red line above are all read
+                // from what that operation derived and cached the first time it
+                // was asked (D21) — so an edit that did not throw those away
+                // left a Filename Editor reporting the lines it had before the
+                // click, a regex its half-typed error, and a Batch Replace card
+                // indexing rules by where they used to be. One place, after
+                // every editor, so a cache added to an operation later is
+                // covered without anyone remembering it here. The repaint is
+                // for the lines this frame already drew from the old answer.
+                if editors::ui(ui, &mut card.op, &card_cx) {
+                    card.op.refresh();
+                    ui.ctx().request_repaint();
+                    changed = true;
+                }
                 ui.add_space(6.0);
                 changed |= scope_ui(ui, card);
 
@@ -210,7 +225,11 @@ fn card_ui(
                 // any half-typed number the moment it opened.
                 if let Some(state) = mine {
                     ui.add_space(6.0);
-                    let outcome = crate::panels::visual_assist::ui(ui, state);
+                    let wildcards = matches!(
+                        &card.op,
+                        ren_core::ops::OpKind::Replace(replace) if !replace.regex
+                    );
+                    let outcome = crate::panels::visual_assist::ui(ui, state, wildcards);
                     if let Some(request) = request_for(outcome) {
                         cx.requests.ask_assist(request);
                     }
@@ -286,13 +305,21 @@ fn summary_toggle(
     if ui.is_rect_visible(rect) {
         let visuals = ui.style().interact(&response);
         // Only the hovered and pressed states get a frame: at rest this is a
-        // line of text with a caret, not a slab.
-        if response.hovered() || expanded {
+        // line of text with a caret, not a slab. Keyboard focus gets one too,
+        // outlined in the selection colour — a card header reached with Tab
+        // otherwise changed only its text colour, which is not something a
+        // keyboard user can find on a screen of eight cards.
+        let focused = response.has_focus();
+        if response.hovered() || expanded || focused {
             ui.painter().rect(
                 rect,
                 visuals.corner_radius,
                 visuals.weak_bg_fill,
-                visuals.bg_stroke,
+                if focused {
+                    ui.visuals().selection.stroke
+                } else {
+                    visuals.bg_stroke
+                },
                 egui::StrokeKind::Inside,
             );
         }
@@ -366,8 +393,33 @@ fn menu(ui: &mut egui::Ui, index: usize, last: bool, commands: &mut Vec<Command>
 
 /// The Process Name / Process Extension switches (D19), plus the
 /// per-card include filter — the two things a preset stores per operation.
+///
+/// An operation that changes the file rather than its name — Set Date, Set
+/// Attributes, the two tag operations — is handed no slice of the name and no
+/// pre-processor (`Pipeline` skips both for an action), so for one of those
+/// the expander offers only the filter, which is the part that still decides
+/// something: which files it touches.
 fn scope_ui(ui: &mut egui::Ui, card: &mut Card) -> bool {
     let mut changed = false;
+
+    if card.op.produces() == Produces::Action {
+        egui::CollapsingHeader::new("Scope")
+            .id_salt("card_scope")
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} changes the file, not its name — use the filter to choose which \
+                         files.",
+                        card.op.label()
+                    ))
+                    .weak()
+                    .small(),
+                );
+                ui.add_space(6.0);
+                changed |= filter_ui(ui, card);
+            });
+        return changed;
+    }
 
     // The header says what the pre-processor does, because Scope is collapsed
     // by default and a card that silently narrows what it sees is the thing
@@ -440,10 +492,8 @@ fn filter_ui(ui: &mut egui::Ui, card: &mut Card) -> bool {
     changed
 }
 
-/// The pre-processor a card carries.
-///
-/// > *"The pre-processor filters out a section of the filename. Only this
-/// > section is then processed by the actual rename function."*
+/// The pre-processor a card carries: it narrows the name to one section, and
+/// only that section is handed to the card's operation.
 ///
 /// The layout lives in `widgets::preproc_editor`, beside `widgets::filter_editor`
 /// which owns the other control on this expander. Until M8 this drew a
@@ -456,14 +506,17 @@ fn preproc_ui(ui: &mut egui::Ui, card: &mut Card) -> bool {
 /// The one-line reason a card cannot run, if it has one.
 ///
 /// Drawn **every frame for every card**, collapsed or expanded, so it must stay
-/// cheap and must never touch the disk.
+/// cheap: it reads only what the operation has already derived and cached, and
+/// [`card_ui`] refreshes that cache after every edit.
 ///
-/// Deliberately delegates to the engine rather than dry-running `apply` here.
-/// The old version called `apply` with a synthetic entry and `total = 1`, which
-/// the Filename Editor would read as "1 file is listed" — so a three-line
-/// editor showed a permanent, wrong error on a collapsed card forever. Anything
-/// that depends on the *listing* rather than on the card's own configuration
-/// belongs in the plan, where the listing is.
+/// Delegates to the engine, whose answer is about the card's configuration
+/// only ([`OpKind::problem`](ren_core::ops::OpKind::problem)): a Filename
+/// Editor is judged on its lines' tags and never on how many files a made-up
+/// one-file listing holds. Anything that depends on the *listing* belongs in
+/// the plan, where the listing is. Most operations are answered by running
+/// them once on a made-up file that does not exist: a card holding a
+/// file-content tag such as `<Crc32>` tries that path once, and the reader's
+/// own cache answers every frame after.
 fn trouble(card: &Card) -> Option<String> {
     card.op.problem()
 }

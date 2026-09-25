@@ -1,8 +1,8 @@
 //! Set Attributes.
 //!
-//! A 2×2 grid of tri-state boxes, laid out as the dialog has
-//! them: Write Protect and System on the first row, Hidden and Archive on the
-//! second.
+//! A 2×2 grid of tri-state boxes: Write Protect and System on the first row,
+//! Hidden and Archive on the second — the two a user most often means to
+//! change are the left-hand column.
 
 use ren_core::ops::SetAttributes;
 use ren_platform::{Capability, Platform};
@@ -28,11 +28,11 @@ pub fn ui(ui: &mut egui::Ui, op: &mut SetAttributes, platform: &dyn Platform) ->
         .num_columns(2)
         .spacing([16.0, 4.0])
         .show(ui, |ui| {
-            // Column-major, because that is how the dialog reads: Write
-            // Protect | System on the first row, Hidden | Archive on the
-            // second. `op.bits()` is in bit order, and egui fills a Grid
-            // row-major, so walking it straight put Write Protect beside
-            // Hidden — the transpose of the layout this file cites.
+            // Column-major: Write Protect | System on the first row, Hidden |
+            // Archive on the second. `op.bits()` is in bit order, and egui
+            // fills a Grid row-major, so walking it straight put Write Protect
+            // beside Hidden — the transpose of the layout the module doc
+            // describes.
             const ROWS: [[usize; 2]; 2] = [[0, 2], [1, 3]];
             let mut bits = op.bits();
             for row in ROWS {

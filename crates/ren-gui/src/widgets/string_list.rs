@@ -1,14 +1,18 @@
 //! An editable list of short strings, with add, remove and restore-defaults.
 //!
-//! Four Settings pages want exactly this — Music Styles, the casing exception
-//! words, the title-case lowercase exceptions, and the guarded-folder list —
-//! and each of them is *only* this, so writing it four times would be four
-//! places for the ✖ button to behave differently.
+//! Four lists want exactly this — Settings ▸ Music Styles, the two casing
+//! exception lists on Settings ▸ Casing Exceptions, and the same exception
+//! list inside a Set Casing card — and each of them is *only* this, so writing
+//! it four times would be four places for the ✖ button to behave differently.
 //!
 //! Deliberately not a rule table: `widgets::rule_table` edits `Replace` rows,
-//! which have **seven** fields and an order that matters. These are bare
-//! strings in a set, and giving them reorder arrows would suggest an order they
-//! do not have.
+//! which have **seven** fields. The order of these lists is kept as typed —
+//! Music Styles are offered in it — but new rows go at the end and there are
+//! no reorder arrows: nobody has needed one, and each would be one more
+//! control on every row.
+//!
+//! Rows are keyed by identity, not position (`widgets::row_keys`), so deleting
+//! one never hands its text box's cursor or undo history to the row below.
 
 /// Draws the list. Returns true if anything changed.
 ///
@@ -59,25 +63,30 @@ impl<'a> StringList<'a> {
 
     pub fn show(self, ui: &mut egui::Ui, values: &mut Vec<String>) -> bool {
         let mut changed = false;
+        let keys_id = ui.id().with((self.id, "keys"));
+        let mut keys = crate::widgets::row_keys::RowKeys::load(ui, keys_id, values.len());
 
         let mut remove = None;
         for (index, value) in values.iter_mut().enumerate() {
-            ui.horizontal(|ui| {
-                changed |= ui
-                    .add(
-                        egui::TextEdit::singleline(value)
-                            .desired_width(self.width)
-                            .hint_text(self.hint)
-                            .id_salt((self.id, index)),
-                    )
-                    .changed();
-                if ui.button("✖").on_hover_text("Remove this row").clicked() {
-                    remove = Some(index);
-                }
+            ui.push_id((self.id, keys.get(index)), |ui| {
+                ui.horizontal(|ui| {
+                    changed |= ui
+                        .add(
+                            egui::TextEdit::singleline(value)
+                                .desired_width(self.width)
+                                .hint_text(self.hint)
+                                .id_salt("value"),
+                        )
+                        .changed();
+                    if ui.button("✖").on_hover_text("Remove this row").clicked() {
+                        remove = Some(index);
+                    }
+                });
             });
         }
         if let Some(index) = remove {
             values.remove(index);
+            keys.remove(index);
             changed = true;
         }
 
@@ -88,6 +97,7 @@ impl<'a> StringList<'a> {
                 // with a placeholder means a row that looks configured and is
                 // not. Blank rows are dropped on the way out (`tidy`).
                 values.push(String::new());
+                keys.grow_to(values.len());
                 changed = true;
             }
             if let Some((tooltip, defaults)) = self.defaults
@@ -97,9 +107,11 @@ impl<'a> StringList<'a> {
                     .clicked()
             {
                 *values = defaults;
+                keys.clear();
                 changed = true;
             }
         });
+        keys.store(ui, keys_id);
 
         changed
     }

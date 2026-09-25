@@ -9,7 +9,7 @@ pub fn ui(ui: &mut egui::Ui, op: &mut ZeroPadding) -> bool {
 
     Form::new("zero_pad").show(ui, |form| {
         let digits = form.row("Digits:", After::Nothing, |row| {
-            super::number_box(row.ui(), &mut op.digits).changed()
+            super::number_box_to(row.ui(), &mut op.digits, ren_core::ops::MAX_PAD_WIDTH).changed()
         });
         changed |= digits.inner;
         digits.response.on_hover_text(

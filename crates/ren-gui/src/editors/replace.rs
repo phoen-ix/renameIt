@@ -38,8 +38,8 @@ pub fn ui(ui: &mut egui::Ui, op: &mut Replace, cx: &super::EditorCx<'_>) -> bool
             .inner;
 
         let with_history = cx.history("replace_with");
-        // *"You can use tags in the replace box"* — so it is a tag field, with
-        // the picker and the D29 error report every other one has.
+        // The replacement takes tags, so it is a tag field, with the picker and
+        // the D29 error report every other one has.
         changed |= form
             .row(
                 "Replace with:",
@@ -103,11 +103,10 @@ pub fn ui(ui: &mut egui::Ui, op: &mut Replace, cx: &super::EditorCx<'_>) -> bool
     });
 
     ui.add_space(6.0);
-    // *"You can also add the current Replace function settings to the list by
-    // pressing the button."* The **defaults** list, which is what Settings
-    // edits and what a *new* Batch Replace card copies (D35) — adding to a
-    // card that already exists would edit somebody's built pipeline from
-    // another card's button.
+    // This card's settings, all seven, appended to the Batch Replace
+    // **defaults** list — which is what Settings edits and what a *new* Batch
+    // Replace card copies (D35). Adding to a card that already exists would
+    // edit somebody's built pipeline from another card's button.
     if ui
         .add_enabled(
             !op.find.is_empty(),

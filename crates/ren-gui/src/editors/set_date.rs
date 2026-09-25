@@ -1,8 +1,8 @@
 //! Set Date & Time.
 //!
-//! Laid out as the dialog has it: the Source dropdown, the date and
-//! time boxes it feeds, the interval controls beside them, and the `Change:`
-//! grid of six components and three targets.
+//! Top to bottom in the order the choices are made: the Source dropdown, the
+//! date and time boxes it feeds, the interval controls, and the `Change:` grid
+//! of six components and three targets.
 
 use ren_core::datetime::{self, DateComponents, IntervalUnit};
 use ren_core::ops::{DateSource, DateTargets, SetDate, WallClock};
@@ -46,49 +46,62 @@ pub fn ui(ui: &mut egui::Ui, op: &mut SetDate, platform: &dyn Platform) -> bool 
         //
         // Under the Source they feed rather than beside a label of their own,
         // which is what the form's unlabelled row is for.
+        let mut unparsed: Option<&str> = None;
         changed |= form
             .unlabelled(After::Nothing, |row| {
                 let live = op.source.uses_wall_clock();
                 row.ui()
                     .add_enabled_ui(live, |ui| {
                         let mut changed = false;
-                        let mut date = format!(
-                            "{:04}-{:02}-{:02}",
-                            op.date.year, op.date.month, op.date.day
+                        let (date, typed) = typed_box(
+                            ui,
+                            "set_date_date",
+                            || {
+                                format!(
+                                    "{:04}-{:02}-{:02}",
+                                    op.date.year, op.date.month, op.date.day
+                                )
+                            },
+                            FIELD_DATE,
+                            "yyyy-mm-dd",
                         );
-                        let mut time = format!(
-                            "{:02}:{:02}:{:02}",
-                            op.date.hour, op.date.minute, op.date.second
-                        );
-                        if ui
-                            .add(
-                                egui::TextEdit::singleline(&mut date)
-                                    .desired_width(FIELD_DATE)
-                                    .hint_text("yyyy-mm-dd")
-                                    .id_salt("set_date_date"),
-                            )
-                            .changed()
-                            && let Some(parsed) = parse_date(&date)
-                        {
-                            op.date.year = parsed.0;
-                            op.date.month = parsed.1;
-                            op.date.day = parsed.2;
-                            changed = true;
+                        if date.changed() {
+                            match parse_date(&typed) {
+                                Some(parsed) => {
+                                    op.date.year = parsed.0;
+                                    op.date.month = parsed.1;
+                                    op.date.day = parsed.2;
+                                    changed = true;
+                                }
+                                None => unparsed = Some("yyyy-mm-dd"),
+                            }
+                        } else if date.has_focus() && parse_date(&typed).is_none() {
+                            unparsed = Some("yyyy-mm-dd");
                         }
-                        if ui
-                            .add(
-                                egui::TextEdit::singleline(&mut time)
-                                    .desired_width(FIELD_TOKEN)
-                                    .hint_text("hh:mm:ss")
-                                    .id_salt("set_date_time"),
-                            )
-                            .changed()
-                            && let Some(parsed) = parse_time(&time)
-                        {
-                            op.date.hour = parsed.0;
-                            op.date.minute = parsed.1;
-                            op.date.second = parsed.2;
-                            changed = true;
+                        let (time, typed) = typed_box(
+                            ui,
+                            "set_date_time",
+                            || {
+                                format!(
+                                    "{:02}:{:02}:{:02}",
+                                    op.date.hour, op.date.minute, op.date.second
+                                )
+                            },
+                            FIELD_TOKEN,
+                            "hh:mm:ss",
+                        );
+                        if time.changed() {
+                            match parse_time(&typed) {
+                                Some(parsed) => {
+                                    op.date.hour = parsed.0;
+                                    op.date.minute = parsed.1;
+                                    op.date.second = parsed.2;
+                                    changed = true;
+                                }
+                                None => unparsed = Some("hh:mm or hh:mm:ss"),
+                            }
+                        } else if time.has_focus() && parse_time(&typed).is_none() {
+                            unparsed = Some("hh:mm or hh:mm:ss");
                         }
                         if ui
                             .button("Now")
@@ -96,6 +109,8 @@ pub fn ui(ui: &mut egui::Ui, op: &mut SetDate, platform: &dyn Platform) -> bool 
                             .clicked()
                         {
                             op.date = WallClock::from_naive(chrono::Local::now().naive_local());
+                            forget_typed(ui, "set_date_date");
+                            forget_typed(ui, "set_date_time");
                             changed = true;
                         }
                         changed
@@ -103,8 +118,31 @@ pub fn ui(ui: &mut egui::Ui, op: &mut SetDate, platform: &dyn Platform) -> bool 
                     .inner
             })
             .inner;
-        if op.date.to_naive().is_none() {
+        if let Some(format) = unparsed {
+            form.note(
+                egui::RichText::new(format!(
+                    "Not complete yet — type it as {format}. Until it is, the card uses \
+                     {:04}-{:02}-{:02} {:02}:{:02}:{:02}.",
+                    op.date.year,
+                    op.date.month,
+                    op.date.day,
+                    op.date.hour,
+                    op.date.minute,
+                    op.date.second
+                ))
+                .color(error),
+            );
+        } else if op.date.to_naive().is_none() {
             form.note(egui::RichText::new("That is not a real date.").color(error));
+        } else if op.source == DateSource::FromFilename {
+            // The label names the slots; this says what to do about them,
+            // because a Parts pattern that is not set up leaves every row
+            // alone without an error — a file with no year has no date to
+            // give.
+            form.note(
+                "Set up Parts so <%4> is the year, <%5> month, <%6> day, <%7>–<%9> time; \
+                 a file with no year is left alone.",
+            );
         } else if !op.source.uses_wall_clock() {
             form.note("These boxes are only used by 'Enter new date (set below)'.");
         }
@@ -145,8 +183,8 @@ pub fn ui(ui: &mut egui::Ui, op: &mut SetDate, platform: &dyn Platform) -> bool 
 
     // --- The Change grid: six components, then the three targets ---
     //
-    // The dialog reads *down* each column, not across: Year/Month/Day, then
-    // Hour/Min./Sec., then the three stamps.
+    // Read *down* each column, not across: Year/Month/Day, then Hour/Min./Sec.,
+    // then the three stamps — the date, the time, and where they go.
     let mut change = op.change;
     let mut targets = op.targets;
     egui::Grid::new("set_date_change")
@@ -243,6 +281,53 @@ pub fn ui(ui: &mut egui::Ui, op: &mut SetDate, platform: &dyn Platform) -> bool 
     );
 
     changed
+}
+
+/// A text box over a value that is stored parsed, which keeps what is being
+/// typed for as long as it has the keyboard.
+///
+/// Formatting the box from the stored value every frame threw away every
+/// keystroke that did not parse yet — `2026-1` on the way to `2026-10-17` —
+/// and re-padded the ones that did, while egui's cursor stayed at the same
+/// character index: select `09` in a date and type `10`, and the box read
+/// `2026-001-17`, which parses as January. So the text lives in egui's temp
+/// store, keyed by the box, from the frame it takes focus to the frame it
+/// loses it, and the caller writes the value only when the text parses.
+/// Out of focus the box shows the stored value again, which is also how a
+/// preset load or *Now* reaches it.
+fn typed_box(
+    ui: &mut egui::Ui,
+    salt: &str,
+    stored: impl FnOnce() -> String,
+    width: f32,
+    hint: &str,
+) -> (egui::Response, String) {
+    let key = typed_key(ui, salt);
+    let mut text = ui
+        .data(|d| d.get_temp::<String>(key))
+        .unwrap_or_else(stored);
+    let response = ui.add(
+        egui::TextEdit::singleline(&mut text)
+            .desired_width(width)
+            .hint_text(hint)
+            .id_salt(salt),
+    );
+    if response.has_focus() {
+        ui.data_mut(|d| d.insert_temp(key, text.clone()));
+    } else {
+        ui.data_mut(|d| d.remove::<String>(key));
+    }
+    (response, text)
+}
+
+/// Drops what [`typed_box`] was keeping, so the box shows the stored value.
+fn forget_typed(ui: &mut egui::Ui, salt: &str) {
+    let key = typed_key(ui, salt);
+    ui.data_mut(|d| d.remove::<String>(key));
+}
+
+fn typed_key(ui: &egui::Ui, salt: &str) -> egui::Id {
+    ui.make_persistent_id(salt).with("typed")
 }
 
 fn parse_date(text: &str) -> Option<(i32, u32, u32)> {

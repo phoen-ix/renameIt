@@ -1,8 +1,8 @@
 //! A three-state checkbox: set / clear / keep-current.
 //!
-//! *"To keep the current attributes, set the
-//! checkboxes to gray (shows in XP as a 'full' box) for the attribute you don't
-//! want to change."*
+//! Grey means *leave this attribute as each file already has it*, which is
+//! what makes one Set Attributes card able to change one bit and not the
+//! other three.
 //!
 //! Built on [`egui::Checkbox::indeterminate`] rather than painted by hand,
 //! because that is what makes the grey state *readable*: egui maps an
@@ -10,12 +10,12 @@
 //! accessibility tree — a screen reader announces it, and a headless test can
 //! assert on it. A hand-drawn dash would be invisible to both.
 
-/// The next state, in the Win32 `BS_AUTO3STATE` order.
+/// The next state: grey → cleared → set → grey, the order a Windows
+/// three-state box cycles in.
 ///
-/// Grey → cleared → set → grey. Starting from grey, **one** click clears, which
-/// is exactly *"simply uncheck the write protected checkbox"* for the
-/// files-copied-off-a-CD case. The other order would make that one use case
-/// take two clicks.
+/// Starting from grey, **one** click clears — which is the commonest use there
+/// is, files copied off a CD arriving write-protected. The other order would
+/// make that take two clicks.
 pub fn next(value: Option<bool>) -> Option<bool> {
     match value {
         None => Some(false),
@@ -57,7 +57,7 @@ pub fn tri_checkbox(ui: &mut egui::Ui, value: &mut Option<bool>, label: &str) ->
 mod tests {
     use super::*;
 
-    /// From grey, one click clears — the worked example.
+    /// From grey, one click clears — the files-off-a-CD case.
     #[test]
     fn the_cycle_matches_a_windows_three_state_box() {
         assert_eq!(next(None), Some(false), "grey → cleared, in one click");

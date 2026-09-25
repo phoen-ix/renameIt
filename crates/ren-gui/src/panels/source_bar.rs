@@ -21,6 +21,12 @@ pub fn address_box() -> egui::Id {
 pub struct SourceBarOutput {
     /// The listing must be rebuilt from disk.
     pub relist: bool,
+    /// ⟳ was pressed: forget everything read from inside the files, then
+    /// relist — F9's `forget_and_relist`, not merely `relist` (D140). A plain
+    /// relist re-reads names, sizes and dates, so a file retagged by a tool
+    /// that kept its length and mtime went on showing its old tags, and the
+    /// button that says "Refresh (F9)" confirmed the stale value.
+    pub hard_refresh: bool,
     /// The filter changed, so the preview must be recomputed.
     pub refilter: bool,
     /// The Settings button was pressed.
@@ -32,6 +38,7 @@ pub struct SourceBarOutput {
 impl SourceBarOutput {
     fn merge(&mut self, other: Self) {
         self.relist |= other.relist;
+        self.hard_refresh |= other.hard_refresh;
         self.refilter |= other.refilter;
         self.open_settings |= other.open_settings;
         self.open_about |= other.open_about;
@@ -214,7 +221,7 @@ fn browser_controls(
     }
 
     if ui.button("⟳").on_hover_text("Refresh (F9)").clicked() {
-        out.relist = true;
+        out.hard_refresh = true;
     }
 
     out

@@ -114,8 +114,15 @@ impl Accents {
 /// Naming a font that is already linked in costs nothing: no new dependency to
 /// audit under D2, no growth in the binary D14 watches. The fallback only
 /// fires for a code point Ubuntu-Light lacks, so ordinary text is untouched.
-/// The five marks Hack does not have either are painted instead — see
-/// [`crate::widgets::icons`].
+/// The six marks Hack does not have either are painted, or swapped for one
+/// Ubuntu-Light has — see [`crate::widgets::icons`].
+///
+/// The bundled script faces go on **both** chains. `Monospace` is what the
+/// filename editor, Visual Assist's subject line and the Problem Solver's
+/// folder paths are set in, and a filename in Japanese or Hebrew is exactly
+/// what they show — on the `Proportional` chain alone, the table drew the
+/// name and the editor beside it drew a row of `◻` (D161's failure, one
+/// family over).
 pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     if let Some(chain) = fonts.families.get_mut(&egui::FontFamily::Proportional)
@@ -135,9 +142,12 @@ pub fn install_fonts(ctx: &egui::Context) {
         // Appended, never prepended. `FontDefinitions::families` makes the
         // first face primary, so a CJK font at the front would take over Latin
         // too — and the icon glyphs and the `Hack` fallback both have to keep
-        // winning over these.
-        if let Some(chain) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-            chain.push((*name).to_owned());
+        // winning over these. On `Monospace` they follow Hack for the same
+        // reason: Latin stays fixed-width.
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            if let Some(chain) = fonts.families.get_mut(&family) {
+                chain.push((*name).to_owned());
+            }
         }
     }
     ctx.set_fonts(fonts);
@@ -222,9 +232,11 @@ fn text_styles() -> std::collections::BTreeMap<egui::TextStyle, egui::FontId> {
         (TextStyle::Body, FontId::new(14.0, Proportional)),
         (TextStyle::Button, FontId::new(14.0, Proportional)),
         (TextStyle::Heading, FontId::new(20.0, Proportional)),
-        // Left at 13: the two places it is used — the config paths and the
-        // filename editor — are dense by nature, and a monospace face is
-        // already wider per character than the proportional one beside it.
+        // Left at 13: where it is used — the filename editor and its pairing
+        // preview, Visual Assist's subject line, the folder paths on the
+        // Problem Solver page and About — is dense by nature, and a monospace
+        // face is already wider per character than the proportional one
+        // beside it.
         (TextStyle::Monospace, FontId::new(13.0, Monospace)),
     ]
     .into()
@@ -334,8 +346,11 @@ fn visuals(dark: bool) -> Visuals {
     //
     // Light mode cannot satisfy both "accent reads against the panel" and "dark
     // text reads on the accent" — the two constraints have no overlapping
-    // luminance. So light mode takes a saturated fill with white text, and the
-    // chip's `inactive.bg_stroke` border is what keeps its edge legible.
+    // luminance. So light mode takes a *light* fill (1.66:1 against the panel)
+    // with navy text on it (the text is what has to be read), and the chip's
+    // `inactive.bg_stroke` border is what keeps its edge legible. A selected
+    // row or tile has no border, so it carries a bar in the text colour, which
+    // clears 3:1 against the panel (`rows::paint_selected`).
     v.selection.bg_fill = if dark {
         a.primary
     } else {
@@ -401,16 +416,16 @@ mod tests {
     /// Every non-ASCII character the crate puts in a string literal must have
     /// a glyph in the font that will draw it.
     ///
-    /// This is the test the app did not have. Twelve code points shipped as
+    /// This is the test the app did not have. Thirteen code points shipped as
     /// `◻` — the card's drag handle and overflow menu, the About button, the
     /// sort indicator, four controls on every Batch Replace row, and the `▸`
-    /// and `→` inside sentences — because nothing anywhere asserted that a
-    /// glyph the code typed was a glyph the font could draw.
+    /// and `→` inside sentences among them (`widgets::icons` has the list) —
+    /// because nothing anywhere asserted that a glyph the code typed was a
+    /// glyph the font could draw.
     ///
     /// Literals only, not comments: a doc comment is free to name `⠿` as the
     /// thing that used to be there, and a `#[cfg(test)]` module is free to
-    /// name a fixture file in any script it likes. `spike.rs` is skipped
-    /// outright — M0's throwaway benchmark harness is fixtures end to end.
+    /// name a fixture file in any script it likes.
     ///
     /// That limitation is now closed for the scripts a filename is most likely
     /// to be in: `BUNDLED_FACES` adds CJK, Hebrew, Arabic, Thai and
@@ -429,9 +444,6 @@ mod tests {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut missing: Vec<(String, char)> = Vec::new();
         for file in rust_files(&src) {
-            if file.file_name().is_some_and(|name| name == "spike.rs") {
-                continue;
-            }
             let text = std::fs::read_to_string(&file).expect("readable source");
             let where_ = file
                 .strip_prefix(&src)
@@ -546,26 +558,46 @@ mod tests {
             ("Devanagari", 'क'),
             ("Latin", 'A'),
         ] {
-            assert!(
-                ctx.fonts_mut(|f| f.has_glyph(&egui::FontId::proportional(14.0), sample)),
-                "no bundled face claims {script} ({sample:?})"
-            );
-            let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    let galley = ui.painter().layout_no_wrap(
-                        sample.to_string(),
-                        egui::FontId::proportional(14.0),
-                        egui::Color32::WHITE,
-                    );
-                    let drawn = galley
-                        .rows
-                        .iter()
-                        .flat_map(|row| row.glyphs.iter())
-                        .any(|g| g.uv_rect.min != [0, 0] || g.uv_rect.max != [0, 0]);
-                    assert!(drawn, "{script} ({sample:?}) laid out to nothing");
+            // Both families: the filename editor, Visual Assist's subject line
+            // and the Problem Solver's folder paths are monospace, and a name
+            // is exactly what they show.
+            for font in [
+                egui::FontId::proportional(14.0),
+                egui::FontId::monospace(13.0),
+            ] {
+                // Not asked of Latin in Monospace: `has_glyph` answers "is the
+                // face that owns this the one that draws `◻`", and on
+                // Monospace that face is Hack itself, so every letter it
+                // draws reads as missing. The layout check below still holds
+                // it.
+                let latin_in_monospace =
+                    script == "Latin" && font.family == egui::FontFamily::Monospace;
+                assert!(
+                    latin_in_monospace || ctx.fonts_mut(|f| f.has_glyph(&font, sample)),
+                    "no bundled face claims {script} ({sample:?}) in {:?}",
+                    font.family
+                );
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let galley = ui.painter().layout_no_wrap(
+                            sample.to_string(),
+                            font.clone(),
+                            egui::Color32::WHITE,
+                        );
+                        let drawn = galley
+                            .rows
+                            .iter()
+                            .flat_map(|row| row.glyphs.iter())
+                            .any(|g| g.uv_rect.min != [0, 0] || g.uv_rect.max != [0, 0]);
+                        assert!(
+                            drawn,
+                            "{script} ({sample:?}) laid out to nothing in {:?}",
+                            font.family
+                        );
+                    });
                 });
-            });
-            output.textures_delta.clear();
+                output.textures_delta.clear();
+            }
         }
     }
 
@@ -658,7 +690,7 @@ mod tests {
             let body = v.widgets.noninteractive.fg_stroke.color;
             let button_text = v.widgets.inactive.fg_stroke.color;
 
-            let cases: [(&str, Color32, Color32, f64); 9] = [
+            let cases: [(&str, Color32, Color32, f64); 10] = [
                 ("body on panel", body, panel, 4.5),
                 ("body on card", body, card, 4.5),
                 (
@@ -698,6 +730,14 @@ mod tests {
                     v.selection.stroke.color,
                     v.selection.bg_fill,
                     4.5,
+                ),
+                // What makes a selected row findable (`rows::paint_selected`):
+                // the 35 % tint under it is 1.19:1 in light mode.
+                (
+                    "selection marker on panel",
+                    v.selection.stroke.color,
+                    panel,
+                    3.0,
                 ),
             ];
 

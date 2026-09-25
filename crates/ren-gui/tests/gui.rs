@@ -2071,61 +2071,14 @@ fn the_palette_search_narrows_to_what_you_typed() {
     );
 }
 
-/// The palette doubled as the roadmap: what was not built yet was listed,
-/// greyed, with the milestone that would bring it.
+/// An entry found by searching and clicked really does land in the stack.
 ///
-/// It was repointed as each one landed — Set Attributes until M5, Music Rename
-/// until M6, Scripting until M7 — and Scripting was the last of them. So there
-/// is nothing left to point it at, and it asserts the end state instead: no
-/// entry still promises to arrive later, and the one that was a placeholder
-/// until this milestone really does add.
+/// Search first, so the row is actually on screen: the catalogue is taller
+/// than the palette's scroll area, so an entry past the General group is
+/// clipped while still reaching the accessibility tree, and a click aimed at
+/// it lands on nothing.
 #[test]
-fn the_palette_has_no_unbuilt_entries_left() {
-    let fixture = Fixture::new(&["a.txt"]);
-    let mut harness = harness(fixture.app());
-    let before = harness.state().stack().len();
-
-    harness.state_mut().open_palette();
-    settle(&mut harness);
-
-    assert_eq!(
-        harness.query_all_by_label_contains("arrives with").count(),
-        0,
-        "an entry still says it is coming later"
-    );
-
-    // Search first, so the row is actually on screen. Without this the click
-    // below lands on nothing — the catalogue is taller than the palette's
-    // 360px scroll area, so everything past the General group is clipped while
-    // still reaching the accessibility tree. This test passed for a whole
-    // milestone that way, pointed at an entry that had since been built.
-    let search = harness
-        .get_all_by_role(egui::accesskit::Role::TextInput)
-        .last()
-        .expect("the search box");
-    search.focus();
-    harness.run();
-    harness
-        .get_all_by_role(egui::accesskit::Role::TextInput)
-        .last()
-        .unwrap()
-        .type_text("scripting");
-    settle(&mut harness);
-
-    harness.get_by_label_contains("Scripting").click();
-    settle(&mut harness);
-    assert_eq!(
-        harness.state().stack().len(),
-        before + 1,
-        "Scripting was the last placeholder and is a real operation now"
-    );
-}
-
-/// The other half of that: a *ready* entry, clicked the same way, really does
-/// land in the stack. Without this the test above cannot tell "the entry is
-/// inert because it is not built" from "the click missed".
-#[test]
-fn a_ready_palette_entry_clicked_the_same_way_really_is_added() {
+fn a_palette_entry_found_by_searching_and_clicked_is_added() {
     let fixture = Fixture::new(&["a.txt"]);
     let mut harness = harness(fixture.app());
     let before = harness.state().stack().len();
@@ -2848,9 +2801,8 @@ fn a_set_attributes_card_shows_four_tri_state_boxes_that_all_start_grey() {
     }
 }
 
-/// The grid is drawn column-major so it reads like the dialog — Write Protect
-/// above Hidden, System above Archive — and each box still writes through to
-/// its **own** bit.
+/// The grid is drawn column-major — Write Protect above Hidden, System above
+/// Archive — and each box still writes through to its **own** bit.
 ///
 /// The second half is the one worth having. The grid walks `op.bits()` out of
 /// order now, and `bits()` hands out `&mut` into the operation; getting that
@@ -6040,4 +5992,665 @@ fn a_dragged_order_survives_a_swap_and_its_undo() {
     settle(&mut harness);
     assert_eq!(order(&harness), ["c.txt", "a.txt", "b.txt"], "and back");
     assert!(harness.state().session().settings.sort.manual);
+}
+
+// --- Cards edited in place, and the widgets inside them ---------------------
+
+/// The first text box whose value passes `pick`.
+fn text_box<'h>(
+    harness: &'h Harness<'_, RenameItApp>,
+    pick: impl Fn(&str) -> bool,
+) -> egui_kittest::Node<'h> {
+    harness
+        .get_all_by_role(egui::accesskit::Role::TextInput)
+        .find(|node| node.value().is_some_and(|v| pick(&v)))
+        .expect("a text box holding that")
+}
+
+/// The text box that has the keyboard.
+fn focused_text_box<'h>(harness: &'h Harness<'_, RenameItApp>) -> egui_kittest::Node<'h> {
+    harness
+        .get_all_by_role(egui::accesskit::Role::TextInput)
+        .find(|node| node.is_focused())
+        .expect("a focused text box")
+}
+
+/// A card's editor writes into the live operation, and everything the card
+/// says about itself — its header, its count line, its red line — is derived
+/// from that operation and cached (D21). A click that fills a Filename Editor
+/// has to show up in all three, not only in the preview.
+#[test]
+fn a_filename_editor_card_counts_the_lines_it_was_just_given() {
+    let fixture = Fixture::new(&["a.txt", "b.txt", "c.txt"]);
+    let mut harness = harness(fixture.app());
+    harness.state_mut().delete_card(0);
+    harness
+        .state_mut()
+        .add_operation(OpKind::FilenameEditor(Default::default()));
+    settle(&mut harness);
+    harness.get_by_label_contains("Filename Editor (empty)");
+
+    harness
+        .get_by_label("(copy current filename list into editor)")
+        .click();
+    settle(&mut harness);
+
+    harness.get_by_label("3 line(s) for 3 file(s).");
+    harness.get_by_label_contains("Names from 3 typed lines");
+    assert!(
+        harness.query_by_label_contains("run is blocked").is_none()
+            && harness.query_by_label_contains("0 line(s)").is_none(),
+        "the card still describes the editor it had before the click"
+    );
+}
+
+/// The same by hand: three lines typed into the box, one key at a time.
+#[test]
+fn three_lines_typed_into_a_filename_editor_are_three_lines() {
+    let fixture = Fixture::new(&["a.txt", "b.txt", "c.txt"]);
+    let mut harness = harness(fixture.app());
+    harness.state_mut().delete_card(0);
+    harness
+        .state_mut()
+        .add_operation(OpKind::FilenameEditor(Default::default()));
+    settle(&mut harness);
+
+    harness
+        .get_by_role(egui::accesskit::Role::MultilineTextInput)
+        .focus();
+    harness.run();
+    for (n, line) in ["one", "two", "three"].into_iter().enumerate() {
+        if n > 0 {
+            harness.key_press(egui::Key::Enter);
+            harness.run();
+        }
+        harness
+            .get_by_role(egui::accesskit::Role::MultilineTextInput)
+            .type_text(line);
+        harness.run();
+    }
+    settle(&mut harness);
+
+    harness.get_by_label("3 line(s) for 3 file(s).");
+    harness.get_by_label_contains("Names from 3 typed lines");
+    assert_eq!(new_names(&harness), ["one.txt", "two.txt", "three.txt"]);
+}
+
+/// Typing a pattern goes through a state that does not compile — `(` on the
+/// way to `(\d+)` — and the card must not keep reporting it once it does.
+#[test]
+fn a_regex_that_is_finished_being_typed_clears_its_error() {
+    let fixture = Fixture::new(&["a1.txt"]);
+    let mut harness = harness(fixture.app());
+    let half = Replace::new("(", "").regex(true);
+    let error = OpKind::Replace(half.clone())
+        .problem()
+        .expect("an unclosed group does not compile");
+    *harness.state_mut().operation_mut() = OpKind::Replace(half);
+    harness.state_mut().expand_card(0);
+    settle(&mut harness);
+    harness.get_by_label(&error);
+
+    harness
+        .get_all_by_role(egui::accesskit::Role::TextInput)
+        .find(|node| node.value().as_deref() == Some("("))
+        .expect("the find box")
+        .focus();
+    harness.run();
+    harness
+        .get_all_by_role(egui::accesskit::Role::TextInput)
+        .find(|node| node.value().as_deref() == Some("("))
+        .expect("the find box")
+        .type_text(r"\d+)");
+    settle(&mut harness);
+
+    match &harness.state().stack().cards()[0].op {
+        OpKind::Replace(op) => assert_eq!(op.find, r"(\d+)"),
+        other => panic!("expected the Replace card, got {other:?}"),
+    }
+    assert!(
+        harness.query_by_label(&error).is_none(),
+        "the card still reports the pattern as it was half-way through"
+    );
+}
+
+/// Deleting a rule from a card's own Batch Replace list. The card had already
+/// worked out which rules could match and which carried a broken tag; both
+/// answers are about the list it had, and the list it has now is shorter —
+/// with the last rule, which matches the probe name, one slot further up.
+#[test]
+fn deleting_a_batch_rule_takes_its_broken_tag_with_it() {
+    let fixture = Fixture::new(&["one.txt"]);
+    let mut harness = harness(fixture.app());
+    *harness.state_mut().operation_mut() =
+        OpKind::BatchReplace(ren_core::ops::BatchReplace::new(vec![
+            Replace::new("zzz", "<Nmae>"),
+            Replace::new("e", "E"),
+        ]));
+    harness.state_mut().expand_card(0);
+    settle(&mut harness);
+    assert!(
+        harness.query_all_by_label_contains("<Nmae>").count() >= 2,
+        "the rule's own field and the card both name the broken tag"
+    );
+
+    harness
+        .get_all_by_label("✖")
+        .next()
+        .expect("rule 0")
+        .click();
+    settle(&mut harness);
+
+    match &harness.state().stack().cards()[0].op {
+        OpKind::BatchReplace(batch) => assert_eq!(batch.rules.len(), 1),
+        other => panic!("expected the Batch Replace card, got {other:?}"),
+    }
+    assert_eq!(
+        harness.query_all_by_label_contains("<Nmae>").count(),
+        0,
+        "the rule with the broken tag is gone, and so is the complaint"
+    );
+    assert_eq!(new_names(&harness), ["onE.txt"]);
+}
+
+/// The date box keeps what is being typed while it has focus. Rebuilding it
+/// from the stored date every frame threw away every keystroke that did not
+/// parse yet and re-padded the ones that did, under a cursor that stayed put.
+#[test]
+fn a_date_typed_one_key_at_a_time_is_the_date_that_was_typed() {
+    let fixture = Fixture::new(&["a.txt"]);
+    let mut harness = harness(fixture.app());
+    harness.state_mut().delete_card(0);
+    harness
+        .state_mut()
+        .add_operation(OpKind::SetDate(Default::default()));
+    settle(&mut harness);
+
+    let date_box = |value: &str| value.matches('-').count() == 2;
+    text_box(&harness, date_box).focus();
+    harness.run();
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    harness.run();
+    for key in "2026-10-17".chars() {
+        focused_text_box(&harness).type_text(&key.to_string());
+        harness.run();
+    }
+    settle(&mut harness);
+
+    let date = match &harness.state().stack().cards()[0].op {
+        OpKind::SetDate(op) => op.date,
+        other => panic!("expected the Set Date card, got {other:?}"),
+    };
+    assert_eq!((date.year, date.month, date.day), (2026, 10, 17));
+    assert!(harness.query_by_label("That is not a real date.").is_none());
+}
+
+/// The same for the time box, where the first key typed over a selection is
+/// never a whole time.
+#[test]
+fn a_time_typed_over_the_old_one_is_the_time_that_was_typed() {
+    let fixture = Fixture::new(&["a.txt"]);
+    let mut harness = harness(fixture.app());
+    harness.state_mut().delete_card(0);
+    harness
+        .state_mut()
+        .add_operation(OpKind::SetDate(Default::default()));
+    settle(&mut harness);
+
+    let time_box = |value: &str| value.matches(':').count() == 2;
+    text_box(&harness, time_box).focus();
+    harness.run();
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    harness.run();
+    for key in "09:30".chars() {
+        focused_text_box(&harness).type_text(&key.to_string());
+        harness.run();
+    }
+    settle(&mut harness);
+
+    let date = match &harness.state().stack().cards()[0].op {
+        OpKind::SetDate(op) => op.date,
+        other => panic!("expected the Set Date card, got {other:?}"),
+    };
+    assert_eq!((date.hour, date.minute, date.second), (9, 30, 0));
+}
+
+/// *Regular expression* over the pre-processor's searches is an on/off switch
+/// whenever the searches agree: a ticked box unticks. A search armed while it
+/// is on is a regex too, rather than the one literal among regexes.
+#[test]
+fn the_pre_processor_regex_switch_unticks_and_new_searches_follow_it() {
+    use ren_core::{MatchSpec, PreProcessor, StepConfig};
+
+    let fixture = Fixture::new(&["one.txt"]);
+    let mut harness = tall_harness(fixture.app());
+    harness.state_mut().delete_card(0);
+    let mut preproc = PreProcessor::new();
+    preproc.skip_until = Some(MatchSpec::Regex("o.".to_owned()));
+    harness.state_mut().stack_mut().append_steps(vec![(
+        OpKind::Casing(Casing::new(CaseMode::Upper)),
+        StepConfig {
+            preproc: Some(preproc),
+            ..Default::default()
+        },
+    )]);
+    harness.state_mut().expand_card(0);
+    settle(&mut harness);
+    harness.get_by_label_contains("Scope").click();
+    settle(&mut harness);
+
+    let preproc = |h: &Harness<'_, RenameItApp>| -> PreProcessor {
+        h.state().stack().to_steps()[0]
+            .1
+            .preproc
+            .clone()
+            .expect("still on")
+    };
+
+    harness.get_by_label("Cut if string is found:").click();
+    settle(&mut harness);
+    assert_eq!(
+        preproc(&harness).cut_at,
+        Some(MatchSpec::Regex(String::new())),
+        "armed while the switch is on, so read as a regex"
+    );
+
+    harness.get_by_label("Regular expression").click();
+    settle(&mut harness);
+    let off = preproc(&harness);
+    assert!(
+        !matches!(off.skip_until, Some(MatchSpec::Regex(_)))
+            && !matches!(off.cut_at, Some(MatchSpec::Regex(_))),
+        "one click unticks a ticked switch: {off:?}"
+    );
+    assert_eq!(
+        harness
+            .get_by_label("Regular expression")
+            .accesskit_node()
+            .toggled(),
+        Some(egui::accesskit::Toggled::False)
+    );
+
+    harness.get_by_label("Regular expression").click();
+    settle(&mut harness);
+    assert_eq!(
+        preproc(&harness).skip_until,
+        Some(MatchSpec::Regex("o.".to_owned())),
+        "and the next ticks it again, text unchanged"
+    );
+}
+
+// --- The grid, the tile and the row menu --------------------------------------
+
+/// A tile that is not a picture is still a tile: a click selects it, a
+/// right-click opens the row menu, and a double-click renames — P77 in both
+/// views. Clicked through the glyph where the picture would be, which carries
+/// no name of its own (P72), so the click is aimed from the caption under it.
+#[test]
+fn a_tile_that_is_not_a_picture_still_takes_a_click() {
+    let fixture = Fixture::pictures(&["a.jpg"]);
+    std::fs::write(fixture.dir.path().join("notes.txt"), b"x").unwrap();
+    let mut harness = harness(fixture.app());
+    use_the_grid(&mut harness);
+    settle(&mut harness);
+
+    let notes = harness
+        .state()
+        .session()
+        .entries()
+        .iter()
+        .position(|e| e.file_name == "notes.txt")
+        .unwrap();
+    let caption = harness.get_by_label("notes.txt").rect();
+    let glyph = egui::pos2(caption.center().x, caption.top() - 30.0);
+    harness.hover_at(glyph);
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: glyph,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        });
+    }
+    settle(&mut harness);
+    assert!(
+        harness.state().session().selection.contains(notes),
+        "the click selected the tile it landed on"
+    );
+
+    harness.hover_at(glyph);
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: glyph,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        });
+    }
+    settle(&mut harness);
+    harness.get_by_label("Rename…");
+}
+
+/// Tiles sit on a fixed pitch whatever their captions say. A new name wider
+/// than a tile used to widen that tile and push the rest of the row along, so
+/// the rows drawn stopped matching the rows the scroll maths counted.
+#[test]
+fn grid_tiles_sit_on_a_fixed_pitch_whatever_their_new_names_are() {
+    let names: Vec<String> = (0..4).map(|i| format!("p{i}.jpg")).collect();
+    let fixture = Fixture::pictures(&names.iter().map(String::as_str).collect::<Vec<_>>());
+    let mut harness = harness(fixture.app());
+    use_the_grid(&mut harness);
+    *harness.state_mut().operation_mut() = OpKind::FreeFormat(ren_core::ops::FreeFormat::new(
+        "<Name> taken on a long holiday somewhere very far away",
+    ));
+    settle(&mut harness);
+
+    let side = harness.state().session().settings.thumb_size as f32;
+    let left: Vec<f32> = names
+        .iter()
+        .map(|name| {
+            harness
+                .get_by_label(&format!("thumbnail of {name}"))
+                .rect()
+                .left()
+        })
+        .collect();
+    for pair in left.windows(2) {
+        assert!(
+            (pair[1] - pair[0] - (side + 8.0)).abs() < 0.5,
+            "tiles at {left:?} are not {} apart",
+            side + 8.0
+        );
+    }
+}
+
+/// The grid's new-name line is the smaller of the two, renamed or not — the
+/// renamed one used to be drawn at Body size because its diff spans named a
+/// font of their own.
+#[test]
+fn a_renamed_tile_caption_is_as_small_as_an_unchanged_one() {
+    let fixture = Fixture::pictures(&["a_x.jpg", "b.jpg"]);
+    let mut harness = harness(fixture.app());
+    use_the_grid(&mut harness);
+    *harness.state_mut().operation_mut() = OpKind::Replace(Replace::new("_", "-"));
+    settle(&mut harness);
+
+    let renamed = harness.get_by_label("a-x.jpg").rect().height();
+    let unchanged = harness.get_by_label("unchanged").rect().height();
+    assert!(
+        (renamed - unchanged).abs() < 0.5,
+        "renamed {renamed} vs unchanged {unchanged}"
+    );
+}
+
+/// P65 from the mouse: the row menu in Free Select takes the rows out of the
+/// list and leaves the files where they are.
+#[test]
+fn the_row_menu_removes_rows_from_free_select() {
+    let fixture = Fixture::new(&["a.txt", "b.txt"]);
+    let mut app = fixture.app();
+    app.start_at(vec![
+        fixture.dir.path().join("a.txt"),
+        fixture.dir.path().join("b.txt"),
+    ]);
+    let mut harness = harness(app);
+
+    harness.get_by_label_contains("b.txt").click_secondary();
+    settle(&mut harness);
+    assert!(
+        harness.query_by_label("Add to Free Select").is_none(),
+        "the rows are in Free Select already"
+    );
+    harness.get_by_label("Remove from Free Select").click();
+    settle(&mut harness);
+
+    assert_eq!(listed(&harness), ["a.txt"]);
+    assert_eq!(fixture.names(), ["a.txt", "b.txt"], "nothing deleted");
+}
+
+/// A folder has no extension: its Ext cell is empty and F2 selects the whole
+/// name, however many dots it has.
+#[test]
+fn a_folder_with_a_dot_in_its_name_has_no_extension() {
+    let fixture = Fixture::new(&["a.txt"]);
+    std::fs::create_dir(fixture.dir.path().join("photos.2024")).unwrap();
+    let mut harness = harness(fixture.app());
+    harness.state_mut().session_mut().settings.folders = true;
+    harness
+        .state_mut()
+        .show_column(ren_gui::viewmodel::ColumnKind::Extension, true);
+    harness.state_mut().session_mut().request_refresh();
+    settle(&mut harness);
+
+    assert!(
+        harness.query_by_label("2024").is_none(),
+        "a folder's name is all name"
+    );
+    harness.get_by_label("txt");
+}
+
+// --- Source bar, Settings and the modals ------------------------------------
+
+/// ⟳ is F9 (D140): it forgets what was read from inside the files, then
+/// relists. The same file-kept-its-length-and-date edit as the F9 test above,
+/// fixed by the button this time.
+#[test]
+fn the_refresh_button_reads_the_files_again_as_f9_does() {
+    use ren_core::meta::testing::image::jpeg_with_exif;
+
+    let fixture = Fixture::new(&[]);
+    let path = fixture.dir.path().join("photo.jpg");
+    let stamped = |date: &str| jpeg_with_exif(Some(date), None, None);
+    std::fs::write(&path, stamped("2020:01:01 00:00:00")).expect("write");
+    let when = std::fs::metadata(&path)
+        .expect("stat")
+        .modified()
+        .expect("mtime");
+    ren_core::meta::exif::forget_all();
+
+    let mut harness = harness(fixture.app());
+    *harness.state_mut().operation_mut() =
+        OpKind::FreeFormat(ren_core::ops::FreeFormat::new("<ExifDate>"));
+    settle(&mut harness);
+    assert_eq!(new_names(&harness), ["2020-01-01.jpg"]);
+
+    std::fs::write(&path, stamped("2021:06:06 12:00:00")).expect("rewrite");
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .expect("open")
+        .set_modified(when)
+        .expect("put the timestamp back");
+
+    harness.get_by_label("⟳").click();
+    settle(&mut harness);
+    assert_eq!(new_names(&harness), ["2021-06-06.jpg"]);
+}
+
+/// The reset puts back more than the Settings pages, and the dialog has to
+/// say so before it is pressed: it is the one thing on the page that cannot
+/// be undone.
+#[test]
+fn the_reset_dialog_names_everything_outside_the_window_it_puts_back() {
+    let fixture = Fixture::new(&["a.txt"]);
+    let mut harness = harness(fixture.app());
+    harness.state_mut().set_simulate(true);
+    harness.state_mut().settings_mut().parts = ren_core::PartsSpec::new("<%1> - <%2>");
+    settle(&mut harness);
+
+    harness.key_press(egui::Key::F8);
+    settle(&mut harness);
+    harness.get_by_label("Problem Solver").click();
+    settle(&mut harness);
+    harness.get_by_label("Reset all settings…").click();
+    settle(&mut harness);
+
+    for what in [
+        "Setup Parts",
+        "Only rename if all tags are available",
+        "remembered",
+        "Simulate",
+        "List or Grid",
+        "include filter",
+    ] {
+        assert!(
+            harness.query_all_by_label_contains(what).count() >= 1,
+            "the dialog does not say it resets {what}"
+        );
+    }
+
+    harness.get_by_label("Restore every setting").click();
+    settle(&mut harness);
+    assert!(harness.state().settings().parts.is_empty());
+}
+
+/// The `<Ask>` modal takes the keyboard when it opens, and Enter answers it.
+#[test]
+fn the_ask_modal_is_typed_into_straight_away_and_enter_renames() {
+    let fixture = Fixture::new(&["one.txt"]);
+    let mut harness = harness(fixture.app());
+    *harness.state_mut().operation_mut() =
+        OpKind::AddRemove(AddRemove::add("<Ask>", 0).backwards(true));
+    settle(&mut harness);
+
+    harness.state_mut().run_now();
+    settle(&mut harness);
+    harness.get_by_label("Enter text");
+    focused_text_box(&harness).type_text(" 2024");
+    harness.run();
+    harness.key_press(egui::Key::Enter);
+    settle(&mut harness);
+    settle(&mut harness);
+
+    assert_eq!(fixture.names(), ["one 2024.txt"]);
+}
+
+/// Deleting a row from a list of strings must not hand the row that moves up
+/// the deleted row's text box — its cursor, and its undo history.
+#[test]
+fn a_string_list_row_that_moves_up_keeps_its_own_undo() {
+    let fixture = Fixture::new(&["a.txt"]);
+    let mut harness = harness(fixture.app());
+    harness.key_press(egui::Key::F8);
+    settle(&mut harness);
+    harness.get_by_label("Music Styles").click();
+    settle(&mut harness);
+
+    let styles = harness.state().music_styles().to_vec();
+    assert!(styles.len() >= 3);
+    let (second, third) = (styles[1].clone(), styles[2].clone());
+
+    text_box(&harness, |v| v == second).focus();
+    harness.run();
+    focused_text_box(&harness).type_text("x");
+    settle(&mut harness);
+    harness
+        .get_all_by_label("✖")
+        .nth(1)
+        .expect("row 2's ✖")
+        .click();
+    settle(&mut harness);
+    assert_eq!(harness.state().music_styles()[1], third);
+
+    text_box(&harness, |v| v == third).focus();
+    harness.run();
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    settle(&mut harness);
+    assert_eq!(
+        harness.state().music_styles()[1],
+        third,
+        "Ctrl+Z replayed the deleted row's edit into the row below it"
+    );
+}
+
+/// Quick Setup can point Genre at a part of the name, which is not one of the
+/// genres the list offers. The list keeps it as its first choice rather than
+/// showing it with nothing to pick.
+#[test]
+fn a_genre_from_setup_parts_can_be_kept() {
+    let fixture = Fixture::new(&["a.mp3"]);
+    let mut harness = harness(fixture.app());
+    let tagger = ren_core::ops::MusicTagger {
+        genre: Some(ren_core::template::TextTemplate::new("<%3>")),
+        ..Default::default()
+    };
+    *harness.state_mut().operation_mut() = OpKind::MusicTagger(Box::new(tagger));
+    harness.state_mut().expand_card(0);
+    settle(&mut harness);
+
+    harness
+        .get_all_by_role(egui::accesskit::Role::ComboBox)
+        .find(|node| node.value().as_deref() == Some("<%3>"))
+        .expect("the Genre box, showing the part it was pointed at")
+        .click();
+    settle(&mut harness);
+    harness.get_by_label_contains("<%3> — keep").click();
+    settle(&mut harness);
+
+    match &harness.state().stack().cards()[0].op {
+        OpKind::MusicTagger(tagger) => assert_eq!(
+            tagger.genre.as_ref().map(|g| g.as_str().to_owned()),
+            Some("<%3>".to_owned())
+        ),
+        other => panic!("expected the tagger, got {other:?}"),
+    }
+}
+
+/// A script that cannot be found says so — and nothing about arguments, which
+/// it may well take once it is back.
+#[test]
+fn a_missing_script_is_not_said_to_take_no_arguments() {
+    let fixture = Fixture::new(&["a.txt"]);
+    let scripts = TempDir::new().unwrap();
+    ren_core::script::store::forget_all();
+    let mut harness = harness(fixture.app());
+    *harness.state_mut().operation_mut() =
+        OpKind::Script(ren_core::ops::Script::new("Nowhere").in_dir(scripts.path()));
+    harness.state_mut().expand_card(0);
+    settle(&mut harness);
+
+    assert!(harness.query_all_by_label_contains("⚠").count() >= 1);
+    assert!(
+        harness
+            .query_by_label("This script does not take arguments.")
+            .is_none()
+    );
+}
+
+/// Set Date changes the file, not its name, so Process Name / Extension mean
+/// nothing on its card; its Scope says so and keeps the filter.
+#[test]
+fn an_action_card_scope_offers_only_the_filter() {
+    let fixture = Fixture::new(&["a.txt"]);
+    let mut harness = tall_harness(fixture.app());
+    harness.state_mut().delete_card(0);
+    harness
+        .state_mut()
+        .add_operation(OpKind::SetDate(Default::default()));
+    settle(&mut harness);
+    harness.get_by_label_contains("Scope").click();
+    settle(&mut harness);
+
+    assert!(harness.query_by_label("Apply to").is_none());
+    harness.get_by_label_contains("changes the file, not its name");
+    harness.get_by_label("Use a filter for this operation only");
+}
+
+/// Picking text for a Find box that reads wildcards: a `?` or a `:` in the
+/// selection is a wildcard there, and the wildcard language has no escape.
+/// The strip says so before Select, and names the box that can hold it.
+#[cfg(unix)]
+#[test]
+fn a_selection_holding_a_wildcard_character_says_what_it_will_mean() {
+    let fixture = Fixture::new(&["Talk: Part 1?.mp3"]);
+    let mut harness = harness(fixture.app());
+    *harness.state_mut().operation_mut() = OpKind::Replace(Replace::new("x", "y"));
+    harness.state_mut().expand_card(0);
+    settle(&mut harness);
+    harness.get_by_label_contains("⌖ find").click();
+    settle(&mut harness);
+    harness.state_mut().visual_assist_select(4, 9);
+    settle(&mut harness);
+
+    harness.get_by_label_contains("tick Regular expression");
 }

@@ -14,6 +14,9 @@ pub struct AskForm {
     pub fields: Vec<(u8, String)>,
     /// Whether the pipeline also wants the clipboard.
     pub clipboard: bool,
+    /// Whether the first field has been handed the keyboard yet — once, as
+    /// the palette does, because asking every frame keeps it from settling.
+    focused: bool,
 }
 
 impl AskForm {
@@ -21,6 +24,7 @@ impl AskForm {
         Self {
             fields: asks.iter().map(|a| (a.slot, String::new())).collect(),
             clipboard,
+            focused: false,
         }
     }
 
@@ -45,6 +49,12 @@ pub enum AskOutcome {
     Cancelled,
 }
 
+/// Draws the form.
+///
+/// Typed into from the keyboard alone: the first field has the keyboard when
+/// the form opens, and Enter in any field is **Rename**. A modal that asked a
+/// question and then needed the mouse to start answering it, and again to
+/// submit, was the one place in the run where a keyboard user got stuck.
 pub fn ui(ctx: &egui::Context, form: &mut AskForm) -> AskOutcome {
     let mut outcome = AskOutcome::Open;
 
@@ -53,17 +63,27 @@ pub fn ui(ctx: &egui::Context, form: &mut AskForm) -> AskOutcome {
         ui.heading("Enter text");
         ui.add_space(6.0);
 
-        for (slot, text) in form.fields.iter_mut() {
+        let first_frame = !form.focused;
+        form.focused = true;
+        for (index, (slot, text)) in form.fields.iter_mut().enumerate() {
             ui.label(if *slot == 0 {
                 "<Ask>".to_owned()
             } else {
                 format!("<Ask-{slot}>")
             });
-            ui.add(
+            let field = ui.add(
                 egui::TextEdit::singleline(text)
                     .desired_width(f32::INFINITY)
                     .id_salt(("ask_field", *slot)),
             );
+            if first_frame && index == 0 {
+                field.request_focus();
+            }
+            // A single-line box gives the keyboard up on Enter, which is what
+            // `lost_focus` reads — the same test the inline rename uses.
+            if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                outcome = AskOutcome::Confirmed;
+            }
             ui.add_space(4.0);
         }
         if form.clipboard {
@@ -92,8 +112,8 @@ pub fn ui(ctx: &egui::Context, form: &mut AskForm) -> AskOutcome {
 }
 
 /// `<Clipboard>` — best effort. A machine with no clipboard (a CI runner, a
-/// bare tty) simply leaves the tag unavailable, which is exactly what
-/// *"only rename if all tags are available"* is for.
+/// bare tty) simply leaves the tag unavailable, which is exactly what Run
+/// Settings' *Only rename if all tags are available* is for.
 fn read_clipboard() -> Option<String> {
     arboard::Clipboard::new().ok()?.get_text().ok()
 }

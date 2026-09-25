@@ -1,10 +1,13 @@
 //! Music Tagger: the Quick Setup button, then Track / Title / Artist / Album /
 //! Year / Genre / Comm, each an enable checkbox beside a tag-accepting box.
 //!
-//! Genre is the one exception — a plain dropdown with no tag button. It is
-//! restricted for a reason: lofty writes an ID3v1 genre by looking the string
-//! up in the numeric table, and anything not in it is written as *absent*,
-//! silently.
+//! Genre is the one exception — a dropdown over the standard genre list, with
+//! no tag button. The list is what an ID3v1 tag can hold: lofty writes an
+//! ID3v1 genre by looking the string up in the numeric table, and anything
+//! not in it is written there as *absent*, silently. Quick Setup can still
+//! point Genre at a part of the name (`<%3>`), and a preset can carry text of
+//! its own; the dropdown then offers that value first, so opening it to look
+//! does not lose it.
 //!
 //! Unticking a box clears the field, because that is what the operation stores
 //! and what keeps a job file honest. The text is remembered in the ui's own
@@ -103,10 +106,25 @@ pub fn ui(ui: &mut egui::Ui, op: &mut MusicTagger, cx: &EditorCx<'_>) -> bool {
                     }
                     Some(template) if dropdown => {
                         let mut picked = template.as_str().to_owned();
+                        let own = (!picked.is_empty() && !GENRES.contains(&picked.as_str()))
+                            .then(|| picked.clone());
                         egui::ComboBox::from_id_salt(id)
                             .selected_text(if picked.is_empty() { "—" } else { &picked })
                             .height(320.0)
                             .show_ui(row.ui(), |ui| {
+                                // A value the list does not have — Setup
+                                // Parts, or a preset's own text — is kept as
+                                // the first choice rather than lost to the
+                                // first click.
+                                if let Some(own) = &own {
+                                    ui.selectable_label(true, format!("{own} — keep"))
+                                        .on_hover_text(
+                                            "Not one of the listed genres. Written as it is \
+                                             to the file's own tag; an ID3v1 tag, which only \
+                                             holds the listed ones, leaves it out.",
+                                        );
+                                    ui.separator();
+                                }
                                 for genre in GENRES {
                                     if ui.selectable_label(picked == *genre, *genre).clicked() {
                                         picked = (*genre).to_owned();
@@ -173,9 +191,10 @@ pub fn ui(ui: &mut egui::Ui, op: &mut MusicTagger, cx: &EditorCx<'_>) -> bool {
     );
     ui.label(
         egui::RichText::new(
-            "ID3v2 is written on every file. An ID3v1 tag is refreshed only where one \
-             already exists — it truncates at 30 characters and cannot hold non-Latin \
-             text, so it is never created for you.",
+            "Each file's own tag block is written — ID3v2 on MP3, Vorbis comments on FLAC, \
+             Ogg, Opus and Speex, MP4 atoms on M4A, APEv2 on WavPack and Musepack. On an MP3 \
+             an existing ID3v1 tag is refreshed too; one is never created, because it \
+             truncates at 30 characters and cannot hold non-Latin text.",
         )
         .weak()
         .small(),

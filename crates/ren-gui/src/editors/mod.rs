@@ -8,13 +8,13 @@
 //! file picker, and the listing their lines pair with — so that arrives as an
 //! [`EditorCx`] the dispatcher holds and only the editors that want it read.
 //!
-//! **Ten of the seventeen take it now**, and the promise D25 made is the one
-//! that survives: an editor that needs nothing beyond its operation is not made
-//! to carry an argument for one that does. This line used to say "the nine
-//! older editors keep their signature untouched", which was already wrong
-//! before Visual Assist widened two more — a stated rule the code broke is
-//! worse than no rule, so it is a count that can be checked rather than a claim
-//! that goes stale.
+//! **Of the eighteen editor functions in [`ui`], eight take the whole context
+//! and three take one field of it** (the CSV list its dialogs, Set Attributes
+//! and Set Date the platform); the other seven take their operation alone. The
+//! promise D25 made is the one that survives: an editor that needs nothing
+//! beyond its operation is not made to carry an argument for one that does.
+//! The dispatcher below is the place to recount, and a count that can be
+//! checked is worth more than a rule the code has already broken once.
 
 use std::cell::{Cell, RefCell};
 
@@ -47,18 +47,17 @@ mod zero_pad;
 ///
 /// A `Cell` rather than a return value because an editor's contract is
 /// `-> bool` and D25 is the reason to keep it that way: widening the signature
-/// would touch all fourteen. Read once, after the whole stack has been drawn,
+/// would touch every editor. Read once, after the whole stack has been drawn,
 /// so a card cannot open a window in the middle of the frame that drew it.
 #[derive(Debug, Default)]
 pub struct EditorRequests {
     /// Music Rename's *(edit styles)* link — Settings ▸ Music Styles.
     pub edit_music_styles: Cell<bool>,
     /// Music Tagger's Quick Setup, which configures the run-wide Setup Parts
-    /// pattern as well as its own fields — *"a 'quick setup' button that will
-    /// automatically perform the above actions for you"*.
+    /// pattern as well as its own fields in one click.
     pub set_parts: RefCell<Option<String>>,
-    /// Find & Replace's *"add the current Replace function settings to the
-    /// list"* — the rule to append to the Batch Replace defaults.
+    /// Find & Replace's *Add to Batch Replace* — the card's settings, as a
+    /// rule to append to the Batch Replace defaults.
     pub add_batch_rule: RefCell<Option<ren_core::ops::Replace>>,
     /// A ⌖ was clicked, or the strip it opened asked for something.
     ///
@@ -147,12 +146,12 @@ impl<'a> EditorCx<'a> {
         self.scoped.iter().filter_map(|&i| self.entries.get(i))
     }
 
-    /// The same context, for a card with its own identity, scope and strip.
     /// One field's remembered strings.
     pub(crate) fn history(&self, id: &str) -> &[String] {
         self.field_history.get(id).map_or(&[], Vec::as_slice)
     }
 
+    /// The same context, for a card with its own identity, scope and strip.
     pub(crate) fn for_card(
         self,
         card: crate::viewmodel::CardId,
@@ -258,5 +257,12 @@ pub(crate) fn number(ui: &mut egui::Ui, label: &str, value: &mut usize) -> bool 
 /// The integer box alone, for a [`Form`](crate::widgets::form::Form) row that
 /// draws its own label — which every position-based operation's editor now is.
 pub(crate) fn number_box(ui: &mut egui::Ui, value: &mut usize) -> egui::Response {
-    crate::widgets::number::add(ui, egui::DragValue::new(value).range(0..=99_999).speed(0.2))
+    number_box_to(ui, value, 99_999)
+}
+
+/// The same, with a ceiling of its own — Zero Padding's width, which the
+/// engine caps at [`ren_core::ops::MAX_PAD_WIDTH`] and which a box offering
+/// more would only let the user type past.
+pub(crate) fn number_box_to(ui: &mut egui::Ui, value: &mut usize, max: usize) -> egui::Response {
+    crate::widgets::number::add(ui, egui::DragValue::new(value).range(0..=max).speed(0.2))
 }

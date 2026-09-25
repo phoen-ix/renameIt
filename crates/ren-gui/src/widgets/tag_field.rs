@@ -13,8 +13,9 @@ struct Entry {
     what: &'static str,
 }
 
-/// The menu, grouped by subject. Only tags M3 implements are listed:
-/// offering `<Artist>` before it works would be a worse lie than omitting it.
+/// The menu, grouped by subject. Every entry is a tag the engine renders —
+/// `the_tag_menu_offers_only_tags_that_compile` holds that — and the hover
+/// text says what it gives, in the words `docs/tags.md` uses.
 const GROUPS: [(&str, &[Entry]); 8] = [
     (
         "Name",
@@ -195,7 +196,7 @@ const GROUPS: [(&str, &[Entry]); 8] = [
             },
             Entry {
                 tag: "<Rnd3>",
-                what: "Random number (0-9)",
+                what: "Random number, # digits",
             },
             Entry {
                 tag: "<Rnd3-1-100>",
@@ -240,11 +241,11 @@ const GROUPS: [(&str, &[Entry]); 8] = [
             },
             Entry {
                 tag: "<FileMax-64>",
-                what: "Limit filename length to # chars",
+                what: "Cut the text this field produces to # characters",
             },
             Entry {
                 tag: "<PathMax-260>",
-                what: "Limit path length to # chars",
+                what: "Cut this field's text so the folder, a separator and the text fit in # characters",
             },
             Entry {
                 tag: "<\\>",
@@ -416,16 +417,12 @@ const GROUPS: [(&str, &[Entry]); 8] = [
     ),
 ];
 
-/// How many strings a field remembers.
+/// How many strings a field with a drop-down history remembers.
 ///
-/// > *"Drop Down History Items — How many items to save for each DropDown
-/// > control (if it has a history function)"*
-///
-/// A constant, not a setting. **P71** takes the Advanced tab apart and its
-/// survivors become first-class settings — this one has no page to be
-/// first-class on, and the precedent is already set by *"Visual Assist Max
-/// Items"*, which became `MAX_ITEMS` and whose row reads **changed**: which
-/// number you mark up changes nothing about the result.
+/// A constant, not a setting (P71). How many past patterns a box offers
+/// changes nothing about any rename, so it has no page to live on — the same
+/// reasoning that made Visual Assist's picker length a constant
+/// (`visual_assist::MAX_ITEMS`).
 pub const HISTORY_ITEMS: usize = 12;
 
 /// Draws a tag-accepting field. Returns true if the text changed.
@@ -433,11 +430,9 @@ pub fn tag_field(ui: &mut egui::Ui, id: &str, field: &mut TextTemplate, width: f
     edit(ui, id, field, width, "", true, &[])
 }
 
-/// The same, with the strings this field has been **run** with.
-///
-/// the Free Format box shows the Free Format box as a combo with a
-/// drop-down arrow beside its tag button, and so do Find, *…and replace with*,
-/// and Insert.
+/// The same, with the strings this field has been **run** with, offered from
+/// a chevron beside its tag button — Free Format's pattern, *Replace with*
+/// and Insert. (Find is [`text_with_history`]: it takes no tags.)
 pub fn tag_field_with_history(
     ui: &mut egui::Ui,
     id: &str,
@@ -448,7 +443,7 @@ pub fn tag_field_with_history(
     edit(ui, id, field, width, "", true, history)
 }
 
-/// The same, with a history.
+/// The same again, with a placeholder shown while the box is empty.
 pub fn tag_field_hinted_with_history(
     ui: &mut egui::Ui,
     id: &str,

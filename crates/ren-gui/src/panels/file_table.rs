@@ -13,12 +13,11 @@ use super::tile;
 use crate::thumbs::Thumbs;
 use crate::viewmodel::{Column, ColumnKind, Columns, RowFilter, SortColumn, TableStyle};
 
-/// What the table needs to draw one frame.
 /// Breathing room above and below a row's text.
 ///
-/// With `Body` at 13 this reproduced the old hardcoded row height of 20; the
-/// point is that it now moves with the type scale instead of being a number
-/// that happened to fit one of them.
+/// With `Body` at 13 this reproduced the old hardcoded row height of 20 (and
+/// `Body` is 14 now); the point is that it moves with the type scale instead of
+/// being a number that happened to fit one of them.
 const ROW_PADDING: f32 = 2.5;
 
 /// What the header needs beyond a row: its label is a frameless `Button`, so
@@ -39,6 +38,7 @@ const CELL_GUTTER: f32 = 8.0;
 #[derive(Debug, Clone)]
 struct RowDrag(Vec<usize>);
 
+/// What the table needs to draw one frame.
 pub struct FileTable<'a> {
     pub entries: &'a [FileEntry],
     /// The plan, if the worker has delivered one.
@@ -84,6 +84,9 @@ pub struct FileTable<'a> {
     pub rename_confirmed: Option<(std::path::PathBuf, String)>,
     /// What the right-click menu asked for, read once the table is done.
     pub row_action: Option<RowAction>,
+    /// Whether the listing is Free Select, which changes what the row menu
+    /// offers ([`rows::row_menu`]). Set by the caller, like `scroll_to`.
+    pub free_select: bool,
     /// Rows that pass `row_filter`, in display order.
     visible: Vec<usize>,
 }
@@ -126,6 +129,7 @@ impl<'a> FileTable<'a> {
             move_request: None,
             rename_confirmed: None,
             row_action: None,
+            free_select: false,
             visible,
             thumbs,
             thumb,
@@ -308,12 +312,11 @@ impl egui_table::TableDelegate for FileTable<'_> {
             return;
         };
         let kind = column.kind;
-        // The New name header owns the arrow while the order is hand-set, and
-        // no other header does — the listing is in neither column's order then.
         // The New name header owns the arrow only while the hand-set order is
-        // **its own**. After a row drag the listing is in nobody's column
-        // order, so no header claims it — `move_rows` sets `manual` and leaves
-        // `column` alone, while `reorder_by_new_names` sets both.
+        // **its own**, and no other header has one then. After a row drag the
+        // listing is in nobody's column order, so no header claims it —
+        // `move_rows` sets `manual` and leaves `column` alone, while
+        // `reorder_by_new_names` sets both.
         let active = if kind == ColumnKind::NewName {
             self.sort.manual && !self.sort.dragged
         } else {
@@ -352,18 +355,14 @@ impl egui_table::TableDelegate for FileTable<'_> {
         };
         let rect = ui.max_rect();
 
-        // *"Draw gray background on every other row."* Painted before the
-        // selection, so a selected stripe still reads as selected.
+        // Stripes (Settings ▸ Display), painted before the selection so a
+        // selected stripe still reads as selected.
         if self.style.stripes && row % 2 == 1 {
             ui.painter()
                 .rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
         }
         if self.selection.contains(index) {
-            ui.painter().rect_filled(
-                rect,
-                0.0,
-                ui.visuals().selection.bg_fill.gamma_multiply(0.35),
-            );
+            rows::paint_selected(ui, rect);
         }
         // Where the keyboard is. Inset inside the row's own rect, because the
         // next row paints afterwards and would cover a line drawn on the shared
@@ -380,8 +379,9 @@ impl egui_table::TableDelegate for FileTable<'_> {
             );
         }
 
-        // > *"You can drag files up and down in the listview to change the
-        // > file order and thus the enumeration index for the file."*
+        // Dragging rows up and down changes the list order, and the list order
+        // is the run order — so it is how a file gets the counter value it
+        // should have.
         //
         // **The whole row is the drag source, and the cells keep their clicks.**
         // egui resolves click hits and drag hits independently, so a
@@ -436,7 +436,7 @@ impl egui_table::TableDelegate for FileTable<'_> {
             }
         }
 
-        // *"This option allows you to click anywhere on the row."* The name
+        // Full Row Select: a click anywhere on the row selects it. The name
         // cell is drawn after this and sits on top, so it still wins where the
         // two overlap — which is what keeps double-click-to-rename working.
         if self.style.full_row_select {
@@ -475,9 +475,8 @@ impl egui_table::TableDelegate for FileTable<'_> {
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
         ui.add_space(CELL_GUTTER);
 
-        // *"Full Row Select — … allows you to click anywhere on the row."*
-        //
-        // Registered per **cell** rather than once over the whole row: the row
+        // Full Row Select, again: registered per **cell** rather than once over
+        // the whole row, because the row
         // is painted before the cells, so an interact there is covered by them
         // and never sees a click.
         // The Name and Thumb cells are skipped because each already senses its
@@ -503,10 +502,7 @@ impl egui_table::TableDelegate for FileTable<'_> {
                     self.selection.click(index, ctrl, shift, &self.visible);
                 }
                 if response.double_clicked() {
-                    *self.inline_rename = Some(crate::panels::rows::InlineRename::opening(
-                        &entry.path,
-                        &entry.file_name,
-                    ));
+                    self.row_action = Some(RowAction::Rename(index));
                 }
             }
             ColumnKind::Name => self.name_cell(ui, index, entry),
@@ -533,8 +529,9 @@ impl egui_table::TableDelegate for FileTable<'_> {
                     ui.label(human_time(created));
                 }
             }
+            // A folder has no extension, whatever dots its name holds.
             ColumnKind::Extension => {
-                if let Some(ext) = ren_core::split_file_name(&entry.file_name).1 {
+                if let Some(ext) = entry.split().1 {
                     ui.label(ext);
                 }
             }
@@ -581,10 +578,11 @@ impl FileTable<'_> {
         // frame in a thousand, and a 10 000-row selection copied for every
         // visible row of every other frame is the waste this avoids.
         let selection = &*self.selection;
+        let free_select = self.free_select;
         let mut asked = None;
         response.context_menu(|ui| {
             let selected: Vec<usize> = selection.iter().collect();
-            asked = rows::row_menu(ui, index, &selected);
+            asked = rows::row_menu(ui, index, &selected, free_select);
         });
         if asked.is_some() {
             self.row_action = asked;
@@ -594,11 +592,11 @@ impl FileTable<'_> {
             let (ctrl, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
             self.selection.click(index, ctrl, shift, &self.visible);
         }
+        // Asked for rather than opened here, so the app can refuse it while a
+        // run is out — as it refuses F2 — instead of opening an editor whose
+        // Enter it would then have to turn down.
         if response.double_clicked() {
-            *self.inline_rename = Some(crate::panels::rows::InlineRename::opening(
-                &entry.path,
-                &entry.file_name,
-            ));
+            self.row_action = Some(RowAction::Rename(index));
         }
     }
 }
@@ -624,11 +622,13 @@ fn human_size(bytes: u64) -> String {
 /// days-since-epoch arithmetic and render UTC, while every date the engine puts
 /// into a filename goes through `chrono::Local` (P48). In any zone but UTC the
 /// same file therefore read one time in the list and renamed to another — and
-/// the gap moved by an hour across a daylight-saving boundary, which is exactly
-/// a genuine confusion, and one the spec listed
-/// as a thing for us to get right.
+/// the gap moved by an hour across a daylight-saving boundary.
+///
+/// A stamp outside the calendar chrono can represent — a filesystem that
+/// stores one hundred thousand years from now will — shows as `—` rather
+/// than a date.
 fn human_time(time: std::time::SystemTime) -> String {
-    human_time_in(&chrono::Local, time)
+    human_time_in(&chrono::Local, time).unwrap_or_else(|| "—".to_owned())
 }
 
 /// The same, in a zone you name.
@@ -638,15 +638,15 @@ fn human_time(time: std::time::SystemTime) -> String {
 /// the same thing, so a test written against `Local` cannot tell a correct
 /// implementation from the UTC-hardcoded one this replaced. Handing the zone in
 /// makes the offset observable everywhere.
-fn human_time_in<Tz>(tz: &Tz, time: std::time::SystemTime) -> String
-where
-    Tz: chrono::TimeZone,
-    Tz::Offset: std::fmt::Display,
-{
-    let utc: chrono::DateTime<chrono::Utc> = time.into();
-    tz.from_utc_datetime(&utc.naive_utc())
-        .format("%Y-%m-%d %H:%M")
-        .to_string()
+///
+/// Through [`ren_core::datetime::to_local`], the engine's own checked
+/// conversion. `SystemTime` into `chrono::DateTime` is an `unwrap` inside
+/// chrono, and this runs while the table is painted, outside any worker's
+/// `catch_unwind` — one file with a far-future mtime would have taken the
+/// whole window down the moment its row was shown.
+fn human_time_in<Tz: chrono::TimeZone>(tz: &Tz, time: std::time::SystemTime) -> Option<String> {
+    ren_core::datetime::to_local(tz, ren_core::TimeStamp::from_system(time))
+        .map(|local| local.format("%Y-%m-%d %H:%M").to_string())
 }
 
 /// Keeps the **end** of a long path, which is the half that identifies it.
@@ -683,13 +683,16 @@ mod tests {
         let india = chrono::FixedOffset::east_opt(5 * 3600 + 1800).unwrap();
         let t = std::time::UNIX_EPOCH;
 
-        assert_eq!(human_time_in(&chrono::Utc, t), "1970-01-01 00:00");
-        assert_eq!(human_time_in(&india, t), "1970-01-01 05:30");
+        let shown = |tz: &dyn Fn(std::time::SystemTime) -> Option<String>, t| tz(t).unwrap();
+        let utc = |t| human_time_in(&chrono::Utc, t);
+        let in_india = |t| human_time_in(&india, t);
+        assert_eq!(shown(&utc, t), "1970-01-01 00:00");
+        assert_eq!(shown(&in_india, t), "1970-01-01 05:30");
 
         // And a date that rolls over the day boundary because of the offset.
         let late = std::time::UNIX_EPOCH + std::time::Duration::from_secs(20 * 3600);
-        assert_eq!(human_time_in(&chrono::Utc, late), "1970-01-01 20:00");
-        assert_eq!(human_time_in(&india, late), "1970-01-02 01:30");
+        assert_eq!(shown(&utc, late), "1970-01-01 20:00");
+        assert_eq!(shown(&in_india, late), "1970-01-02 01:30");
 
         // `human_time` is the same function bound to the machine's zone.
         let expected = chrono::Local
@@ -699,6 +702,16 @@ mod tests {
             .format("%Y-%m-%d %H:%M")
             .to_string();
         assert_eq!(human_time(t), expected);
+    }
+
+    /// A stamp chrono cannot put on a calendar is a dash, not a panic on the UI
+    /// thread. A filesystem that stores 64-bit seconds — tmpfs, btrfs, a share —
+    /// will keep an mtime of `@100000000000000` for anyone who sets one.
+    #[test]
+    fn a_date_past_the_calendar_shows_a_dash_rather_than_taking_the_window_down() {
+        let far = std::time::UNIX_EPOCH + std::time::Duration::from_secs(100_000_000_000_000);
+        assert_eq!(human_time_in(&chrono::Utc, far), None);
+        assert_eq!(human_time(far), "—");
     }
 
     /// The engine and the table must agree about what time it is: `<Date>` and

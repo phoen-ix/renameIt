@@ -21,6 +21,28 @@ use ren_core::{ConflictKind, Plan, PlanItem, RowState};
 use crate::viewmodel::RowFilter;
 use crate::widgets::diff_text::{self, DiffStyle};
 
+/// How wide the bar that marks a selected row or tile is, in points.
+const SELECTED_BAR: f32 = 3.0;
+
+/// Marks a selected row (the list) or tile (the grid).
+///
+/// A tint **and** a bar. The tint is the accent at 35 %, which in light mode
+/// lands 1.19:1 against the panel — next to invisible, and indistinguishable
+/// from a stripe — while the selection is what decides which files a run
+/// touches (P22). The bar is drawn in `selection.stroke`'s colour, the one the
+/// theme sets for text on the accent, which clears 3:1 against the panel in
+/// both themes (`theme`'s "selection marker on panel" case holds it there).
+pub(crate) fn paint_selected(ui: &egui::Ui, rect: egui::Rect) {
+    let visuals = ui.visuals();
+    ui.painter()
+        .rect_filled(rect, 0.0, visuals.selection.bg_fill.gamma_multiply(0.35));
+    ui.painter().rect_filled(
+        egui::Rect::from_min_size(rect.min, egui::vec2(SELECTED_BAR, rect.height())),
+        0.0,
+        visuals.selection.stroke.color,
+    );
+}
+
 /// The plan item for one entry, if this run covers it.
 pub(crate) fn item_of<'a>(
     entries: &[FileEntry],
@@ -140,8 +162,6 @@ fn describe_actions(item: &PlanItem) -> Option<String> {
     )
 }
 
-/// What a click on a row does to the selection.
-///
 /// What the right-click menu asked the app to do.
 ///
 /// A request rather than an action, like `sort_request` beside it: the view has
@@ -149,13 +169,18 @@ fn describe_actions(item: &PlanItem) -> Option<String> {
 /// session, not the clipboard.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RowAction {
-    /// Open the inline editor, as F2 and a double-click do.
+    /// Open the inline editor, as F2 and a double-click do — and as a
+    /// double-click now asks for, rather than opening the editor itself, so
+    /// the app's one refusal while a run is out covers every way in (D169).
     Rename(usize),
     /// *"show in Explorer"* (DESIGN §S3).
     Reveal(usize),
-    /// *"Right click on one or more files in file browser mode, and choose
-    /// 'add to free select'"*.
+    /// Browser mode: collect these rows into Free Select, where one run can
+    /// cover files from several folders.
     AddToFreeSelect(Vec<usize>),
+    /// Free Select: take these rows out of the list (P65). The files are not
+    /// touched — the same thing the Delete key does there.
+    RemoveFromFreeSelect(Vec<usize>),
     Copy {
         what: CopyWhat,
         rows: Vec<usize>,
@@ -166,8 +191,8 @@ pub enum RowAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopyWhat {
     Names,
-    /// *"Copy to Clipboard ▸ All Previews"* — the worked example
-    /// for getting a listing out of the app and into a text editor.
+    /// Every new name, one per line — the way to get a preview out of the app
+    /// and into a text editor or a spreadsheet.
     NewNames,
     Paths,
     /// Both columns, tab separated, which is what a spreadsheet wants.
@@ -182,7 +207,16 @@ impl CopyWhat {
 }
 
 /// The right-click menu, drawn wherever a row is.
-pub(crate) fn row_menu(ui: &mut egui::Ui, index: usize, selected: &[usize]) -> Option<RowAction> {
+///
+/// `free_select` swaps the last item: in Browser mode it collects rows into
+/// Free Select, and in Free Select it takes them back out, which is the one
+/// thing a list you built by hand needs and the other would do nothing there.
+pub(crate) fn row_menu(
+    ui: &mut egui::Ui,
+    index: usize,
+    selected: &[usize],
+    free_select: bool,
+) -> Option<RowAction> {
     let count = selected.len().max(1);
     let mut asked: Option<RowAction> = None;
 
@@ -214,13 +248,23 @@ pub(crate) fn row_menu(ui: &mut egui::Ui, index: usize, selected: &[usize]) -> O
     .on_hover_text(format!("{count} row(s) — the selection, or all of them"));
 
     ui.separator();
-    let free_select = ui.button("Add to Free Select");
-    if free_select.clicked() {
-        asked = Some(RowAction::AddToFreeSelect(selected.to_vec()));
+    if free_select {
+        let remove = ui.button("Remove from Free Select");
+        if remove.clicked() {
+            asked = Some(RowAction::RemoveFromFreeSelect(selected.to_vec()));
+        }
+        remove.on_hover_text(
+            "Take these rows out of the list. The files themselves are not touched (Delete)",
+        );
+    } else {
+        let add = ui.button("Add to Free Select");
+        if add.clicked() {
+            asked = Some(RowAction::AddToFreeSelect(selected.to_vec()));
+        }
+        add.on_hover_text(
+            "Move these rows into Free Select, where a run can mix files from different folders",
+        );
     }
-    free_select.on_hover_text(
-        "Move these rows into Free Select, where a run can mix files from different folders",
-    );
 
     if asked.is_some() {
         ui.close();
@@ -253,15 +297,18 @@ pub(crate) enum RenameEdit {
 pub struct InlineRename {
     pub path: std::path::PathBuf,
     pub text: String,
+    /// A folder's whole name is its name, so the editor selects all of it.
+    is_dir: bool,
     /// Cleared the first frame the box actually has the keyboard.
     seed: bool,
 }
 
 impl InlineRename {
-    pub fn opening(path: &std::path::Path, name: &str) -> Self {
+    pub fn opening(entry: &FileEntry) -> Self {
         Self {
-            path: path.to_path_buf(),
-            text: name.to_owned(),
+            path: entry.path.clone(),
+            text: entry.file_name.clone(),
+            is_dir: entry.is_dir,
             seed: true,
         }
     }
@@ -280,23 +327,20 @@ pub(crate) fn inline_rename_id() -> egui::Id {
 
 /// How many **characters** of a name the editor selects.
 ///
-/// Characters, not bytes: `CCursor` counts characters and `split_file_name`
+/// Characters, not bytes: `CCursor` counts characters and `split_name`
 /// returns byte slices, so `日本.txt` is six bytes of stem and two characters
-/// of it.
-pub(crate) fn stem_chars(name: &str) -> usize {
-    ren_core::split_file_name(name).0.chars().count()
+/// of it. A folder has no extension, so all of `photos.2024` is its stem.
+pub(crate) fn stem_chars(name: &str, is_dir: bool) -> usize {
+    ren_core::split_name(name, is_dir).0.chars().count()
 }
 
 /// F2's text box, drawn in place of a name.
 ///
-/// > *"It will figure out where the filename ends and the extension begins, and
-/// > place the cursor there."*
-///
-/// The stem is **selected**, with the caret at that boundary —
-/// `CCursorRange::two(0, boundary)` puts the primary cursor on the second end,
-/// so this is literally the documented behaviour *and* what Explorer does. A bare
-/// caret would mean typing gives `namexxx.ext`; selecting the stem means typing
-/// replaces it, which is what anyone's hands expect.
+/// The stem is **selected**, with the caret where the name ends and the
+/// extension begins — `CCursorRange::two(0, boundary)` puts the primary cursor
+/// on the second end, which is also what a file manager's own rename does. A
+/// bare caret would mean typing gives `namexxx.ext`; selecting the stem means
+/// typing replaces it, which is what anyone's hands expect.
 pub(crate) fn inline_rename_field(ui: &mut egui::Ui, edit: &mut InlineRename) -> RenameEdit {
     let id = inline_rename_id();
 
@@ -315,7 +359,7 @@ pub(crate) fn inline_rename_field(ui: &mut egui::Ui, edit: &mut InlineRename) ->
             .cursor
             .set_char_range(Some(egui::text::CCursorRange::two(
                 egui::text::CCursor::new(0),
-                egui::text::CCursor::new(stem_chars(&edit.text)),
+                egui::text::CCursor::new(stem_chars(&edit.text, edit.is_dir)),
             )));
         egui::TextEdit::store_state(ui.ctx(), id, state);
     }
@@ -331,9 +375,9 @@ pub(crate) fn inline_rename_field(ui: &mut egui::Ui, edit: &mut InlineRename) ->
     // egui *surrenders* focus when Enter is pressed in a single-line box, which
     // is what `lost_focus()` reads. Re-requesting focus straight after the
     // `add` put it back inside the same frame, so `lost_focus()` was never true
-    // and **Enter never committed a rename**. The documented behaviour — *"you
-    // can enter a new name and press enter to rename the file"* — did not work,
-    // and nothing caught it because no test drove the F2 key path.
+    // and **Enter never committed a rename** — typing a new name and pressing
+    // Enter, the whole point of the box, did nothing, and nothing caught it
+    // because no test drove the F2 key path.
     //
     // It is also what `palette.rs` warns about for its own field: asking
     // continuously keeps the frame dirty and never settles (D26).
@@ -413,11 +457,12 @@ pub(crate) fn renamed(ui: &mut egui::Ui, entry: &FileEntry, new: &str) {
     let style = DiffStyle::for_ui(ui);
     ui.horizontal(|ui| {
         diff_text::new_name(ui, &entry.file_name, new, style);
-        // The "warn about changing extensions" setting, shown inline instead
-        // of as a dialog after the fact.
+        // A changed extension is flagged on the row, where it happens, rather
+        // than in a dialog after the fact.
         if extension_changed(
             &entry.file_name,
             new,
+            entry.is_dir,
             ren_platform::host().naming_rules(&entry.path),
         ) {
             ui.label(egui::RichText::new("⚠").color(egui::Color32::from_rgb(0xff, 0xb3, 0x00)))
@@ -479,10 +524,22 @@ pub(crate) fn conflict_help(kind: &ConflictKind) -> String {
 /// extensions apart, so telling the user their extension changed is a false
 /// alarm on the single most common thing a Set Casing card does. On a
 /// case-sensitive volume the same rename really is a change, and still warns.
-pub(crate) fn extension_changed(old: &str, new: &str, rules: &ren_platform::NamingRules) -> bool {
+///
+/// A folder has no extension ([`ren_core::split_name`]), so renaming
+/// `photos.2023` to `photos.2024` is not an extension change either.
+pub(crate) fn extension_changed(
+    old: &str,
+    new: &str,
+    is_dir: bool,
+    rules: &ren_platform::NamingRules,
+) -> bool {
     // Folded *inside* the Option, so "gained an extension" and "lost one" stay
     // changes — only the text is compared case-insensitively.
-    let extension = |name: &str| ren_core::split_file_name(name).1.map(|ext| rules.fold(ext));
+    let extension = |name: &str| {
+        ren_core::split_name(name, is_dir)
+            .1
+            .map(|ext| rules.fold(ext))
+    };
     extension(old) != extension(new)
 }
 
@@ -490,19 +547,35 @@ pub(crate) fn extension_changed(old: &str, new: &str, rules: &ren_platform::Nami
 mod tests {
     use super::*;
 
-    /// > *"It will figure out where the filename ends and the extension
-    /// > begins, and place the cursor there."*
+    /// The editor selects the name and leaves the extension.
     ///
-    /// **Characters, not bytes.** `CCursor` counts characters; `split_file_name`
+    /// **Characters, not bytes.** `CCursor` counts characters; `split_name`
     /// returns byte slices. The Japanese case is the only one that catches a
     /// `.len()` here, which is why it is in the list.
     #[test]
     fn the_editor_selects_the_name_and_leaves_the_extension() {
-        assert_eq!(stem_chars("song.mp3"), 4);
-        assert_eq!(stem_chars("README"), 6, "no extension: the whole name");
-        assert_eq!(stem_chars(".gitignore"), 10, "a leading dot is not one");
-        assert_eq!(stem_chars("a.b.c"), 3, "the *last* period");
-        assert_eq!(stem_chars("日本.txt"), 2, "six bytes, two characters");
+        assert_eq!(stem_chars("song.mp3", false), 4);
+        assert_eq!(
+            stem_chars("README", false),
+            6,
+            "no extension: the whole name"
+        );
+        assert_eq!(
+            stem_chars(".gitignore", false),
+            10,
+            "a leading dot is not one"
+        );
+        assert_eq!(stem_chars("a.b.c", false), 3, "the *last* period");
+        assert_eq!(
+            stem_chars("日本.txt", false),
+            2,
+            "six bytes, two characters"
+        );
+        assert_eq!(
+            stem_chars("photos.2024", true),
+            11,
+            "a folder has no extension to leave out"
+        );
     }
 
     /// A case-only extension change is **not** a change on a volume that cannot
@@ -511,21 +584,35 @@ mod tests {
     fn a_case_only_extension_change_only_warns_where_it_is_real() {
         let insensitive = ren_platform::WINDOWS;
         let sensitive = ren_platform::POSIX;
-        assert!(!extension_changed("SONG.MP3", "song.mp3", &insensitive));
-        assert!(extension_changed("SONG.MP3", "song.mp3", &sensitive));
+        assert!(!extension_changed(
+            "SONG.MP3",
+            "song.mp3",
+            false,
+            &insensitive
+        ));
+        assert!(extension_changed("SONG.MP3", "song.mp3", false, &sensitive));
         // A real change is still a real change on either.
-        assert!(extension_changed("song.mp3", "song.txt", &insensitive));
-        assert!(extension_changed("song.mp3", "song.txt", &sensitive));
+        assert!(extension_changed(
+            "song.mp3",
+            "song.txt",
+            false,
+            &insensitive
+        ));
+        assert!(extension_changed("song.mp3", "song.txt", false, &sensitive));
     }
 
     #[test]
     fn an_extension_change_is_detected() {
         let rules = ren_platform::POSIX;
-        let extension_changed = |a: &str, b: &str| extension_changed(a, b, &rules);
-        assert!(extension_changed("song.mp3", "song.txt"));
-        assert!(extension_changed("song.mp3", "song"));
-        assert!(!extension_changed("song.mp3", "Song.mp3"));
-        assert!(!extension_changed("README", "READ ME"));
+        let changed = |a: &str, b: &str| extension_changed(a, b, false, &rules);
+        assert!(changed("song.mp3", "song.txt"));
+        assert!(changed("song.mp3", "song"));
+        assert!(!changed("song.mp3", "Song.mp3"));
+        assert!(!changed("README", "READ ME"));
+        assert!(
+            !extension_changed("photos.2023", "photos.2024", true, &rules),
+            "a folder has no extension to change"
+        );
     }
 
     #[test]

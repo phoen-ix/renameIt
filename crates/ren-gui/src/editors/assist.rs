@@ -12,7 +12,7 @@ use ren_core::ops::{AddRemoveMode, OpKind, regex_escape};
 
 /// Which field a ⌖ fills. One value per button.
 ///
-/// Four, not "every position/length field" as `docs/DESIGN.md:265` proposed:
+/// Four, not "every position/length field" as `docs/DESIGN.md` §S4 proposed:
 /// Replace's Skip and Max are match counts, Zero Padding's Digits is a width,
 /// and the CSV columns are column numbers — a span picker on those means
 /// nothing. Move Section's *paste at* is out for a sharper reason: its
@@ -33,10 +33,7 @@ pub enum AssistTarget {
 impl AssistTarget {
     /// The line above the field.
     ///
-    /// Three variants, one per shape of answer. A fourth phrasing — *"the
-    /// position and length of the add or remove
-    /// function"* — is inside a commented-out block describing an older layout
-    /// where Add and Remove shared one position, so it is not used here.
+    /// Three variants, one per shape of answer: text, a caret, or a span.
     pub fn prompt(self) -> &'static str {
         match self {
             Self::ReplaceFind => "Select text:",
@@ -198,11 +195,12 @@ pub fn anchor_to_end(op: &mut OpKind, target: AssistTarget, subject_chars: usize
 /// The wildcard language has **no escape**: `wildcard::to_regex` maps `*`, `:`
 /// and `?` unconditionally, and `MatchSpec::auto` switches the *Look For* box
 /// into that language the moment one appears. So unlike the regex case there is
-/// nothing to sanitise — the honest move is to say what happened and offer the
-/// one box that can express the literal.
+/// nothing to sanitise — the honest move is to say what will happen and offer
+/// the one box that can express the literal, which the strip does before
+/// Select (`visual_assist::wildcard_note`).
 ///
 /// All three are Windows-reserved characters, so this is reachable only on
-/// Linux and macOS. Cheap to handle; not worth agonising over.
+/// Linux and macOS.
 pub fn wildcards_in(text: &str) -> Vec<char> {
     let mut found: Vec<char> = "*:?".chars().filter(|c| text.contains(*c)).collect();
     found.dedup();

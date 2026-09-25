@@ -94,9 +94,10 @@ pub fn ui(ui: &mut egui::Ui, op: &mut MusicRename, cx: &EditorCx<'_>) -> bool {
     ui.add_space(4.0);
     ui.label(
         egui::RichText::new(
-            "Reads MP3, FLAC, Ogg Vorbis, Opus, Speex, MP4/M4A, Musepack, WavPack and APE — \
-             ID3v1, ID3v2, Vorbis comments, MP4 atoms and APEv2 alike. A folder takes its \
-             name from the first track inside it.",
+            "Reads MP3, FLAC, Ogg Vorbis, Opus, Speex, MP4/M4A, Musepack, WavPack and \
+             Monkey's Audio — ID3v1, ID3v2, Vorbis comments, MP4 atoms and APEv2 alike. A \
+             folder takes its name from the first track inside it, of any of those but \
+             Monkey's Audio (.ape).",
         )
         .weak()
         .small(),

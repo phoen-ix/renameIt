@@ -1,10 +1,11 @@
 //! Showing what changed in a name.
 //!
 //! `docs/DESIGN.md` Part 2 §3 (S3): *"deleted spans struck/red-tinted, inserted
-//! spans green-tinted"*. Names are short and almost every edit is one
-//! contiguous change, so trimming the common prefix and suffix says everything
-//! a character-level diff would — for a fraction of the work, and this runs for
-//! every visible row of every frame.
+//! spans green-tinted"* — with one narrowing, explained on [`new_name`]: the
+//! deleted span is shown only when nothing was inserted in its place. Names are
+//! short and almost every edit is one contiguous change, so trimming the
+//! common prefix and suffix says everything a character-level diff would — for
+//! a fraction of the work, and this runs for every visible row of every frame.
 
 /// A name split into the part that survived and the part that changed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,13 +91,39 @@ impl DiffStyle {
     }
 }
 
-/// Renders the *new* name with its inserted stretch highlighted.
+/// Renders the *new* name with what changed marked.
+///
+/// The inserted stretch is green. A rename that only **deletes** —
+/// `song_v2.mp3` → `song.mp3` — has nothing inserted to colour, and used to be
+/// drawn as a plain name indistinguishable from one the run leaves alone; so
+/// then the deleted stretch is shown where it was, struck through in red. Only
+/// then: shown beside an insertion as well, it would double the cell for the
+/// commonest edit there is, a replacement.
+///
+/// The accessible name is the new name alone. A struck-through stretch is
+/// paint, and a screen reader reading `song_v2.mp3` as the name the run will
+/// write would be reading the one name it will not.
+///
+/// The font follows the `Ui`'s text-style override, as a plain label does —
+/// the grid draws this line at `Small`, and a `LayoutJob` with a font of its
+/// own ignores the override.
 pub fn new_name(ui: &mut egui::Ui, old: &str, new: &str, style: DiffStyle) {
-    let diff = diff(old, new);
-    let font = egui::TextStyle::Body.resolve(ui.style());
-    let mut job = egui::text::LayoutJob::default();
+    let font = ui
+        .style()
+        .override_text_style
+        .clone()
+        .unwrap_or(egui::TextStyle::Body)
+        .resolve(ui.style());
+    let response = ui.label(job(old, new, style, &font));
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), new));
+}
 
-    let mut push = |text: &str, color: egui::Color32| {
+/// The sections [`new_name`] draws, apart from any `Ui` so they are testable.
+fn job(old: &str, new: &str, style: DiffStyle, font: &egui::FontId) -> egui::text::LayoutJob {
+    let diff = diff(old, new);
+    let mut job = egui::text::LayoutJob::default();
+    let mut push = |text: &str, color: egui::Color32, struck: bool| {
         if !text.is_empty() {
             job.append(
                 text,
@@ -104,16 +131,24 @@ pub fn new_name(ui: &mut egui::Ui, old: &str, new: &str, style: DiffStyle) {
                 egui::TextFormat {
                     font_id: font.clone(),
                     color,
+                    strikethrough: if struck {
+                        egui::Stroke::new(1.0, color)
+                    } else {
+                        egui::Stroke::NONE
+                    },
                     ..Default::default()
                 },
             );
         }
     };
-    push(diff.prefix, style.unchanged);
-    push(diff.added, style.added);
-    push(diff.suffix, style.unchanged);
-
-    ui.label(job);
+    push(diff.prefix, style.unchanged, false);
+    if diff.added.is_empty() {
+        push(diff.removed, style.removed, true);
+    } else {
+        push(diff.added, style.added, false);
+    }
+    push(diff.suffix, style.unchanged, false);
+    job
 }
 
 #[cfg(test)]
@@ -195,6 +230,57 @@ mod tests {
         let d = diff("gone.txt", "");
         assert_eq!(d.removed, "gone.txt");
         assert_eq!(d.added, "");
+    }
+
+    fn style() -> DiffStyle {
+        DiffStyle {
+            removed: egui::Color32::RED,
+            added: egui::Color32::GREEN,
+            unchanged: egui::Color32::GRAY,
+        }
+    }
+
+    fn sections(old: &str, new: &str) -> Vec<(String, egui::Color32, bool)> {
+        let job = job(old, new, style(), &egui::FontId::proportional(14.0));
+        job.sections
+            .iter()
+            .map(|s| {
+                (
+                    job.text[s.byte_range.start.0..s.byte_range.end.0].to_owned(),
+                    s.format.color,
+                    s.format.strikethrough != egui::Stroke::NONE,
+                )
+            })
+            .collect()
+    }
+
+    /// A rename that only deletes has nothing inserted to colour. The deleted
+    /// stretch is shown struck through, so the cell does not read as a name
+    /// the run leaves alone.
+    #[test]
+    fn a_deletion_shows_what_went_struck_through() {
+        assert_eq!(
+            sections("song_v2.mp3", "song.mp3"),
+            [
+                ("song".to_owned(), egui::Color32::GRAY, false),
+                ("_v2".to_owned(), egui::Color32::RED, true),
+                (".mp3".to_owned(), egui::Color32::GRAY, false),
+            ]
+        );
+    }
+
+    /// Beside an insertion the deleted text is left out, or a replacement —
+    /// the commonest edit — would draw both names in one cell.
+    #[test]
+    fn a_replacement_shows_only_what_arrived() {
+        assert_eq!(
+            sections("my_song.mp3", "my song.mp3"),
+            [
+                ("my".to_owned(), egui::Color32::GRAY, false),
+                (" ".to_owned(), egui::Color32::GREEN, false),
+                ("song.mp3".to_owned(), egui::Color32::GRAY, false),
+            ]
+        );
     }
 
     /// Reassembling the two halves must give back exactly what went in — the

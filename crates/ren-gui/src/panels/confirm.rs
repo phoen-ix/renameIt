@@ -246,7 +246,13 @@ pub fn ui(ctx: &egui::Context, state: &Confirm) -> Outcome {
 /// saying "OK", so muscle memory has nothing to grab.
 ///
 /// It names what it **spares**, because a button called "reset settings" sitting
-/// ten lines under three folder shortcuts invites exactly the wrong guess.
+/// ten lines under three folder shortcuts invites exactly the wrong guess — and
+/// it names, one by one, everything it puts back that is **not** on a Settings
+/// page, because those are the ones nobody would guess: Run Settings (the
+/// counter, Setup Parts and the tag policy, which a saved pipeline also
+/// carries), the remembered values behind every drop-down, Simulate, List or
+/// Grid, and the include filter. The list is `RenameItApp::reset_settings`,
+/// field by field; D156 as amended says the same.
 pub fn reset_ui(ctx: &egui::Context) -> Outcome {
     let mut outcome = Outcome::Open;
 
@@ -256,17 +262,23 @@ pub fn reset_ui(ctx: &egui::Context) -> Outcome {
         ui.add_space(6.0);
         ui.label(
             egui::RichText::new(
-                "⚠ This cannot be undone. Your Batch Replace rules, casing exception words, \
-                 music styles, columns, theme, counter and every switch in this window go \
-                 back to what the app ships with.",
+                "⚠ This cannot be undone. The settings in this window go back to what the app \
+                 ships with — your Batch Replace rules, music styles, casing exception words, \
+                 columns, thumbnails, theme, interface size, and the switches on the Display, \
+                 File System and Startup pages.",
             )
             .color(ui.visuals().warn_fg_color),
         );
         ui.add_space(6.0);
+        ui.label("So do these, which live outside this window:");
+        for what in RESET_OUTSIDE_THE_WINDOW {
+            ui.label(format!("•  {what}"));
+        }
+        ui.add_space(6.0);
         ui.label(
             "It does not touch your files, your presets, your scripts or the undo journal — \
              those are files on disk, and the folders are listed on the page behind this. The \
-             pipeline you have built and the folder you are looking at are left alone too.",
+             cards in your pipeline and the folder you are looking at are left alone too.",
         );
 
         ui.add_space(8.0);
@@ -285,6 +297,16 @@ pub fn reset_ui(ctx: &egui::Context) -> Outcome {
     }
     outcome
 }
+
+/// What the reset puts back that no Settings page shows, in the order the
+/// dialog lists it.
+const RESET_OUTSIDE_THE_WINDOW: [&str; 5] = [
+    "Run Settings: the counter, Setup Parts and \"Only rename if all tags are available\"",
+    "the values every drop-down has remembered",
+    "Simulate",
+    "List or Grid",
+    "the include filter in the source bar",
+];
 
 #[cfg(test)]
 mod tests {

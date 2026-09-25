@@ -936,9 +936,10 @@ impl RenameItApp {
         else {
             return;
         };
-        let name = self.session.entries()[next].file_name.clone();
         self.session.selection.set_lead(Some(next));
-        self.inline_rename = Some(crate::panels::rows::InlineRename::opening(&path, &name));
+        self.inline_rename = Some(crate::panels::rows::InlineRename::opening(
+            &self.session.entries()[next],
+        ));
         self.scroll_to = Some(next);
     }
 
@@ -2606,7 +2607,12 @@ impl RenameItApp {
         } else {
             self.session.selection.iter().collect()
         };
-        let removed = self.session.remove_from_free_select(&rows);
+        self.remove_rows_from_free_select(&rows);
+    }
+
+    /// The Delete key's work, and the row menu's *Remove from Free Select*.
+    fn remove_rows_from_free_select(&mut self, rows: &[usize]) {
+        let removed = self.session.remove_from_free_select(rows);
         if removed > 0 {
             self.needs_preview = true;
             self.status = Some(format!(
@@ -2790,10 +2796,7 @@ impl RenameItApp {
             return;
         }
         if let Some(entry) = self.session.entries().get(index) {
-            self.inline_rename = Some(crate::panels::rows::InlineRename::opening(
-                &entry.path,
-                &entry.file_name,
-            ));
+            self.inline_rename = Some(crate::panels::rows::InlineRename::opening(entry));
         }
     }
 
@@ -2823,6 +2826,7 @@ impl RenameItApp {
                 self.session.add_to_free_select(paths);
                 self.needs_preview = true;
             }
+            RowAction::RemoveFromFreeSelect(rows) => self.remove_rows_from_free_select(&rows),
             RowAction::Copy { what, rows } => {
                 // The same rule `run()` keeps (P35): a plan older than the
                 // pipeline on screen is not what the user is looking at, and
@@ -3316,9 +3320,6 @@ impl RenameItApp {
                 // thing that happens to trigger one.
                 self.session.request_refresh();
             }
-            if out.changed {
-                self.needs_preview = true;
-            }
             if out.close {
                 // Blank rows are dropped when the window closes, not while the
                 // user is typing — see `string_list::tidy`.
@@ -3417,6 +3418,9 @@ impl RenameItApp {
             );
             if out.relist {
                 self.session.request_refresh();
+            }
+            if out.hard_refresh {
+                self.forget_and_relist();
             }
             if out.refilter {
                 self.needs_preview = true;
@@ -3597,7 +3601,14 @@ impl RenameItApp {
                 .resizable(true)
                 .default_size(300.0)
                 .show(ui, |ui| {
-                    out = presets::ui(ui, &mut state, &entries, &problems, self.dialogs.as_ref());
+                    out = presets::ui(
+                        ui,
+                        &mut state,
+                        &entries,
+                        &problems,
+                        self.dialogs.as_ref(),
+                        self.jobs.is_busy(),
+                    );
                 });
             self.drawer = (!out.close).then_some(state);
             self.apply_drawer(out);
@@ -3623,6 +3634,8 @@ impl RenameItApp {
                 size: self.session.settings.thumb_size,
                 border: self.session.settings.thumb_border,
             };
+            let free_select =
+                self.session.settings.mode == crate::viewmodel::SourceMode::FreeSelect;
 
             let mut sort_request = None;
             let mut reorder_request = false;
@@ -3646,6 +3659,7 @@ impl RenameItApp {
                         look,
                     );
                     table.scroll_to = scroll_to;
+                    table.free_select = free_select;
                     table.show(ui);
                     sort_request = table.sort_request;
                     reorder_request = table.reorder_request;
@@ -3668,6 +3682,7 @@ impl RenameItApp {
                         look,
                     );
                     grid.scroll_to = scroll_to;
+                    grid.free_select = free_select;
                     grid.show(ui);
                     row_action = grid.row_action.take();
                     rename_confirmed = grid.rename_confirmed.take();

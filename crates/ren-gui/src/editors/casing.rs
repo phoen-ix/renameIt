@@ -58,8 +58,8 @@ pub fn ui(ui: &mut egui::Ui, op: &mut Casing) -> bool {
         .checkbox(&mut op.preserve_mixed, "Preserve mixed case words")
         .on_hover_text("Words with any capital keep their current spelling, e.g. iPhone.")
         .changed();
-    // > *"Exceptions are words that should always be spelled with a certain
-    // > case… **Click on the button to edit the list of exceptions.**"*
+    // Exceptions are words spelled exactly as listed whatever the mode, and
+    // the list is edited from the card.
     //
     // The link edits **this card's** list, not the Settings page's. That is the
     // opposite of Music Rename's `(edit styles)`, and deliberately so: D66

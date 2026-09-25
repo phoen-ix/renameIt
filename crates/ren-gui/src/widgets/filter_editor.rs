@@ -126,6 +126,10 @@ impl FilterForm {
         ui.add_space(6.0);
         changed |= ui
             .checkbox(&mut self.extension, "Also test the extension")
+            .on_hover_text(
+                "Tests the extension on its own and the whole name with it, so *.bak \
+                 matches notes.bak",
+            )
             .changed();
         changed |= ui
             .checkbox(&mut self.whole_path, "Also test the whole path")

@@ -98,12 +98,20 @@ impl DrawerOutput {
     }
 }
 
+/// Draws the drawer.
+///
+/// `busy` is true while a run or an undo is out (D169). Load, Append and Run
+/// are disabled then: each replaces or extends the pipeline and its run-wide
+/// settings, which the job's own completion reads back when it lands — its
+/// fields' history, its running counter — and Run would then be refused by
+/// the job already going, after the pipeline on screen had changed under it.
 pub fn ui(
     ui: &mut egui::Ui,
     state: &mut DrawerState,
     entries: &[PresetEntry],
     problems: &[PresetProblem],
     dialogs: &dyn FileDialogs,
+    busy: bool,
 ) -> DrawerOutput {
     let mut out = DrawerOutput::default();
 
@@ -157,7 +165,7 @@ pub fn ui(
                 );
             }
             for entry in entries {
-                row(ui, state, entry, &mut out, dialogs);
+                row(ui, state, entry, &mut out, dialogs, busy);
                 ui.add_space(4.0);
             }
             // A file that will not load is named, not hidden: a preset that
@@ -194,6 +202,7 @@ fn row(
     entry: &PresetEntry,
     out: &mut DrawerOutput,
     dialogs: &dyn FileDialogs,
+    busy: bool,
 ) {
     egui::Frame::group(ui.style()).show(ui, |ui| {
         ui.push_id(&entry.path, |ui| {
@@ -237,23 +246,27 @@ fn row(
             ui.label(egui::RichText::new(description).weak().small());
 
             ui.horizontal(|ui| {
+                const BUSY: &str = "A run is still going";
                 if ui
-                    .button("Load")
+                    .add_enabled(!busy, egui::Button::new("Load"))
                     .on_hover_text("Replace the pipeline with this one")
+                    .on_disabled_hover_text(BUSY)
                     .clicked()
                 {
                     out.load = Some(entry.path.clone());
                 }
                 if ui
-                    .button("Append")
+                    .add_enabled(!busy, egui::Button::new("Append"))
                     .on_hover_text("Add its operations to the end of this pipeline")
+                    .on_disabled_hover_text(BUSY)
                     .clicked()
                 {
                     out.append = Some(entry.path.clone());
                 }
                 if ui
-                    .button("Run")
+                    .add_enabled(!busy, egui::Button::new("Run"))
                     .on_hover_text("Load it and rename straight away")
+                    .on_disabled_hover_text(BUSY)
                     .clicked()
                 {
                     out.run = Some(entry.path.clone());
@@ -324,6 +337,48 @@ mod tests {
             .asked_for_something(),
             "closing the drawer changes nothing on disk"
         );
+    }
+
+    /// The drawer over one preset, drawn headlessly.
+    fn drawn(busy: bool) -> egui_kittest::Harness<'static> {
+        let entries = vec![PresetEntry {
+            name: "Tidy".into(),
+            description: String::new(),
+            path: PathBuf::from("/p/tidy.toml"),
+            steps: 2,
+        }];
+        let mut state = DrawerState::default();
+        let mut harness = egui_kittest::Harness::new_ui(move |ui| {
+            let _ = super::ui(
+                ui,
+                &mut state,
+                &entries,
+                &[],
+                &crate::dialogs::NoDialogs,
+                busy,
+            );
+        });
+        harness.run();
+        harness
+    }
+
+    /// D169: a preset's Run is disabled while a run is out — and so are Load
+    /// and Append, which change the pipeline the job's completion reads back.
+    #[test]
+    fn a_preset_cannot_be_loaded_or_run_while_a_run_is_out() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+
+        let busy = drawn(true);
+        for button in ["Load", "Append", "Run"] {
+            assert!(
+                busy.get_by_label(button).accesskit_node().is_disabled(),
+                "{button} is live while a run is out"
+            );
+        }
+        let idle = drawn(false);
+        for button in ["Load", "Append", "Run"] {
+            assert!(!idle.get_by_label(button).accesskit_node().is_disabled());
+        }
     }
 
     /// Every action, one at a time. The compiler already refuses a tenth field

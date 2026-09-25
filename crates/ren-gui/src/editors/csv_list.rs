@@ -1,8 +1,8 @@
 //! CSV List Rename.
 //!
-//! Laid out as the dialog has it: the file and its browse button,
-//! the separator combo with its custom box, the two column numbers, and the
-//! case switch.
+//! Top to bottom in the order the choices are made: the file and its browse
+//! button, the separator combo with its custom box, the two column numbers,
+//! and the case switch.
 
 use ren_core::ops::{CsvList, CsvSeparator};
 

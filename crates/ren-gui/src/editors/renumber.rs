@@ -63,7 +63,14 @@ pub fn ui(ui: &mut egui::Ui, op: &mut ReNumber) -> bool {
             },
         );
         changed |= line.inner;
-        if needs_operand && op.action.needs_number() {
+        if op.action == NumberAction::ZeroPadTo {
+            // The engine refuses a wider one as a row error (`MAX_PAD_WIDTH`),
+            // so the limit is said where the width is typed.
+            form.note(format!(
+                "This one takes a width, up to {}.",
+                ren_core::ops::MAX_PAD_WIDTH
+            ));
+        } else if needs_operand && op.action.needs_number() {
             form.note("This one takes a number.");
         }
     });

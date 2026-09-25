@@ -6,6 +6,7 @@ pub mod form;
 pub mod icons;
 pub mod number;
 pub mod preproc_editor;
+pub mod row_keys;
 pub mod rule_table;
 pub mod string_list;
 pub mod tag_field;

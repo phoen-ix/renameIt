@@ -11,6 +11,13 @@
 //! A tile carries the picture, the name on disk **and** the name the run will
 //! write, with the same conflict badge and the same dimming the table uses —
 //! all of it from `super::rows`, so the two views cannot drift.
+//!
+//! **Every tile is placed, not flowed.** Each one gets exactly one cell at
+//! `(row, column)` of a fixed pitch, clipped to it, with text truncated inside
+//! it. Laying tiles out one after another let each advance by what it drew
+//! rather than by its cell: a row held a tile more than `columns` said, and a
+//! new name wider than the tile pushed the rest of the row along — so the rows
+//! the scroll maths counted were not the rows on screen.
 
 use ren_core::model::FileEntry;
 use ren_core::{Plan, PlanItem};
@@ -54,8 +61,11 @@ pub struct Grid<'a> {
     /// Set when an inline rename was confirmed with Enter.
     /// The file the editor was opened on, and the name typed for it.
     pub rename_confirmed: Option<(std::path::PathBuf, String)>,
-    /// What the right-click menu asked for.
+    /// What the right-click menu, or a double-click, asked for.
     pub row_action: Option<RowAction>,
+    /// Whether the listing is Free Select, which changes what the row menu
+    /// offers. Set by the caller, like `scroll_to`.
+    pub free_select: bool,
     /// Tiles actually laid out on the last frame, for the performance harness.
     pub laid_out: usize,
 }
@@ -88,6 +98,7 @@ impl<'a> Grid<'a> {
             scroll_to: None,
             rename_confirmed: None,
             row_action: None,
+            free_select: false,
             laid_out: 0,
         }
     }
@@ -106,7 +117,9 @@ impl<'a> Grid<'a> {
         egui::vec2(side + PADDING, side + self.caption_text + CAPTION_EXTRA)
     }
 
-    /// A `Body` line over a `Small` line — what a tile actually draws.
+    /// A `Body` line over a `Small` line — what a tile actually draws. The new
+    /// name is `Small` whatever its state, renamed ones included
+    /// ([`crate::widgets::diff_text::new_name`] follows the override).
     fn caption_height(ui: &egui::Ui) -> f32 {
         ui.text_style_height(&egui::TextStyle::Body) + ui.text_style_height(&egui::TextStyle::Small)
     }
@@ -164,21 +177,30 @@ impl<'a> Grid<'a> {
                 self.thumbs.want(wanted);
                 self.laid_out = on_screen.len();
 
-                let top = first as f32 * cell.y;
                 // Placed at the scroll offset rather than drawn from the top:
                 // the rows above are never built, which is the whole point.
-                let placed = egui::Rect::from_min_size(
-                    ui.min_rect().min + egui::vec2(0.0, top),
-                    egui::vec2(ui.available_width(), (last - first) as f32 * cell.y),
-                );
-                ui.scope_builder(egui::UiBuilder::new().max_rect(placed), |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
-                        for index in on_screen {
-                            ui.allocate_ui(cell, |ui| self.tile(ui, index));
-                        }
-                    });
-                });
+                let origin = ui.min_rect().min;
+                for (at, index) in on_screen.into_iter().enumerate() {
+                    let (row, column) = (first + at / columns, at % columns);
+                    let rect = egui::Rect::from_min_size(
+                        origin + egui::vec2(column as f32 * cell.x, row as f32 * cell.y),
+                        cell,
+                    );
+                    // Salted with the entry, not the position, so a tile's
+                    // widgets keep their state — a double-click in progress, an
+                    // open menu — when a scroll moves it to another slot.
+                    ui.scope_builder(
+                        egui::UiBuilder::new()
+                            .max_rect(rect)
+                            .id_salt(("tile", index))
+                            .layout(egui::Layout::top_down(egui::Align::Min)),
+                        |ui| {
+                            ui.set_clip_rect(rect.intersect(ui.clip_rect()));
+                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                            self.tile(ui, index);
+                        },
+                    );
+                }
             });
     }
 
@@ -190,11 +212,7 @@ impl<'a> Grid<'a> {
         let cell = cell_of(item);
 
         if self.selection.contains(index) {
-            ui.painter().rect_filled(
-                ui.max_rect(),
-                2.0,
-                ui.visuals().selection.bg_fill.gamma_multiply(0.35),
-            );
+            rows::paint_selected(ui, ui.max_rect());
         }
         // The same rule the table uses, from the same place: a row that is only
         // *acted* on must not be faded for looking unchanged.
@@ -213,10 +231,11 @@ impl<'a> Grid<'a> {
             // one frame in a thousand, and a 10 000-row selection copied for
             // every visible row of every other frame is the waste this avoids.
             let selection = &*self.selection;
+            let free_select = self.free_select;
             let mut asked = None;
             picture.context_menu(|ui| {
                 let selected: Vec<usize> = selection.iter().collect();
-                asked = rows::row_menu(ui, index, &selected);
+                asked = rows::row_menu(ui, index, &selected, free_select);
             });
             if asked.is_some() {
                 self.row_action = asked;
@@ -229,12 +248,10 @@ impl<'a> Grid<'a> {
             // The same gesture as in the list (P77). The alternative — a
             // double-click that navigates into a folder here and renames there —
             // is one gesture meaning two things depending on which button is
-            // lit, which is worse than a feature left out.
+            // lit, which is worse than a feature left out. Asked for rather
+            // than opened, so the app's refusal while a run is out covers it.
             if picture.double_clicked() {
-                *self.inline_rename = Some(crate::panels::rows::InlineRename::opening(
-                    &entry.path,
-                    &entry.file_name,
-                ));
+                self.row_action = Some(RowAction::Rename(index));
             }
         });
     }
