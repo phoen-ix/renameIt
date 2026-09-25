@@ -376,7 +376,7 @@ real desktop and a real screen reader show.
 | 1 | Light theme: select a few rows, with *Shade every other row* on | A navy bar at the left of each selected row and tile, clearly distinct from a stripe (P113) |
 | 2 | **Tab** onto a card header | A focus outline in the selection colour |
 | 3 | The grid over a folder of long Free Format names, scrolling | Columns stay even; a long name is clipped, not widening its tile |
-| 4 | The Filename Editor over a folder of CJK names | The glyphs, not ◻ (D233) |
+| 4 | The Filename Editor over a folder of CJK names | The glyphs, not ◻ (D161) |
 | 5 | Type a date into Set Date digit by digit, e.g. `2024-02-30` then correct it | What you type stays while you type; nothing snaps back or turns into another date |
 | 6 | Run a preset with `<Ask>` and type at once, then press Enter | The prompt had the keyboard, and Enter renames |
 | 7 | In Free Select, select two rows and press **Delete**; then right-click a row | They leave the list, the files stay on disk, and the menu offers *Remove from Free Select* (P111) |

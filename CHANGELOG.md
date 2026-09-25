@@ -43,8 +43,8 @@ is cut (**P66**).
   every journal ever written, in full (**D175**).
 - **`<Width>`, `<Height>`, `<Depth>` and `<ExifDate>` read only the headers of
   JPEGs and camera RAW files**, and thumbnails of very large JPEGs are refused
-  without being read (**D194**). `<FirstFileInFolder>` is cached per folder
-  instead of read for every row on every keystroke (**D193**).
+  without being read. `<FirstFileInFolder>` is cached per folder
+  instead of read for every row on every keystroke.
 - The engine refuses to run a plan that names a relative path, so an undo can
   never replay a batch in the wrong folder (**D177**). Both front ends make
   every path absolute before listing it (**D207**, **D225**).
@@ -107,7 +107,7 @@ is cut (**P66**).
   program folders), the CLI with exit 2 and the folder's name;
   `--allow-system-folders` goes ahead anyway. The guard also sees through `..`,
   and catches `/usr` itself when listing `/` with folders on.
-- **Free Select emptied itself after every run, F2 rename and undo** (**D224**).
+- **Free Select emptied itself after every run, F2 rename and undo** (**D246**).
   Its files are followed to their new names — through any number of renamed
   folders, and back through an undo (**D246**) — a hand-set row order survives the
   undo of the run that used it and a run whose renames swap names, and a file
@@ -164,7 +164,7 @@ is cut (**P66**).
   self-referencing `koto.deep_copy`, a huge format width, deeply nested code or
   a library loop of slow callbacks (**D189**).
 - **`<Crc32>` and `<DetectedExt>` could hang the preview for good** on a named
-  pipe, and re-hashed every file on every keystroke (**D179**). They read only
+  pipe, and re-hashed every file on every keystroke. They read only
   regular files now, through the metadata cache.
 - **A file dated far outside the calendar crashed the preview, the CLI and the
   file list's date cells** (**D180**). Its date tags are missing and the cell
@@ -182,9 +182,9 @@ is cut (**P66**).
   before the run. More than a thousand swaps in one folder are no longer falsely
   refused as unbreakable cycles, and preview faster. Two folders whose names
   differ only in a byte that is not valid Unicode no longer collide, and a
-  cycle's temporary name can no longer land on a folder the run creates
-  (**D176**). A produced name containing a NUL is refused in the preview on Linux
-  and macOS instead of failing mid-run (**D213**).
+  cycle's temporary name can no longer land on a folder the run creates.
+  A produced name containing a NUL is refused in the preview on Linux
+  and macOS instead of failing mid-run.
 - Journals: one that could not record its start is removed rather than showing
   up as a batch that did not finish, and journal order stays right when the
   system clock is set back (**D175**). The test suite no longer writes into the
@@ -202,14 +202,14 @@ is cut (**P66**).
   one string begins the other (`Art` ⇄ `Artist`), and Swap with an empty
   replacement deletes the find text, as the card says (**P102**). `<Ask>` and
   `<Clipboard>` in a Batch Replace rule are asked for before the run, and a
-  mistyped tag in any rule is reported (**P106**, **D187**). Space Trimming no
+  mistyped tag in any rule is reported (**P106**). Space Trimming no
   longer puts a space between a closing bracket and the punctuation after it
   (`Song (Live), 2020`) or between two brackets (**P103**). Re-Number arithmetic
   too large for a number, and a zero-pad width above 255, are row errors
   instead of a crash or exhausted memory (**P105**). Music Rename leaves
   untagged files alone even when the style contains `<\>` or `<Counter>`
-  (**P104**). Set Casing exception words match non-ASCII words in any case
-  (**P107**). Add Counter and Re-Number no longer ask for an `<Ask>` left in a
+  (**P104**). Set Casing exception words match non-ASCII words in any case.
+  Add Counter and Re-Number no longer ask for an `<Ask>` left in a
   field the chosen mode does not use (**P106**). A multi-line Filename Editor
   card and an interval or partial Set Date card no longer show a permanent
   false error (**P101**).
@@ -220,11 +220,11 @@ is cut (**P66**).
   longer listed and renamed (**D191**). Remove Tags removes Lyrics3 v2 blocks
   larger than 6 KB instead of calling them damaged. Set Date's *peek inside
   folders* takes effect whichever setting was used first, and tags on a
-  symbolic link read the file it points to (**D193**). A CSV list saved as
+  symbolic link read the file it points to. A CSV list saved as
   UTF-16 works, a CSV or script that could not be read is read again once the
   problem is fixed, and a `/` after an unclosed `<` in a CSV's new-name column
   no longer moves the file (**D195**). Scripts whose names contain a dot, or
-  whose extension is `.KOTO`, load again (**D198**). The shipped *Get HTML XML
+  whose extension is `.KOTO`, load again. The shipped *Get HTML XML
   Tags* script no longer moves a page into a subfolder when its title contains
   `/`, and *Length of Filename* counts characters (**D199**).
 - Platform: Set Date and Set Attributes on a symbolic link change the link, as
@@ -255,7 +255,7 @@ is cut (**P66**).
   selection changed during the run; *Add to Free Select* on a single folder row
   adds the folder instead of browsing into it; a batch undone with
   `ren-cli undo` or in another window leaves the Undo list instead of jamming
-  it (**D227**); saving over a preset keeps its description (**D229**); the
+  it (**D227**); saving over a preset keeps its description; the
   listing thread survives a panic in the walk; the About window's repository
   link opens in the browser (**D218**).
 - Cards and widgets: deleting a Batch Replace rule no longer reports the deleted
@@ -269,9 +269,9 @@ is cut (**P66**).
 - The grid and the list: folders and files that are not pictures can be
   clicked, right-clicked and double-clicked in the grid; tiles sit on a fixed
   pitch, so a long new name no longer widens its tile; the ⟳ button forgets
-  what was read from inside the files, as F9 does (**D232**); CJK, Hebrew,
+  what was read from inside the files, as F9 does; CJK, Hebrew,
   Arabic, Thai and Devanagari names draw in the Filename Editor, Visual Assist
-  and the Problem Solver's paths (**D233**); Settings edits no longer re-plan the
+  and the Problem Solver's paths; Settings edits no longer re-plan the
   whole listing, which the thumbnail slider did once per frame; and scrolling
   back onto loaded thumbnails cancels the decodes still queued for the tiles
   scrolled away from.
