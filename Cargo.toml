@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.4.0"
+version = "1.5.0"
 edition = "2024"
 rust-version = "1.97"
 license = "MIT"
@@ -24,8 +24,8 @@ ron = "0.12.2"
 # Clipboard access for the <Clipboard> tag. Already in the tree under
 # egui-winit; named here so the version is ours to pin.
 arboard = { version = "3.6.1", default-features = false }
-ren-core = { path = "crates/ren-core", version = "1.4.0" }
-ren-platform = { path = "crates/ren-platform", version = "1.4.0" }
+ren-core = { path = "crates/ren-core", version = "1.5.0" }
+ren-platform = { path = "crates/ren-platform", version = "1.5.0" }
 
 chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
 clap = { version = "4.6.6", features = ["derive"] }

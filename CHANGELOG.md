@@ -6,13 +6,12 @@ Two things this file does **not** track. Engine and UI decisions live in
 `docs/DECISIONS.md`, which is the authority on why anything behaves as it does;
 and the reasoning behind each default lives beside the code it governs.
 
-## [Unreleased]
+## [1.5.0] - 2026-09-25
 
 The second audit: a read of the whole workspace — engine, platform layer, both
 front ends, the build and the docs — with 259 confirmed findings, fixed in eight
 batches. Every behaviour change has its decision number in `docs/DECISIONS.md`
-(**D171**–**D246**, **P100**–**P114**). The version stays 1.4.0 until a release
-is cut (**P66**).
+(**D171**–**D246**, **P100**–**P114**).
 
 ### Changed
 
