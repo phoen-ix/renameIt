@@ -110,8 +110,9 @@ from their Exif date and then puts that date back on the file.
 `<Artist>`, `<Title>`, `<Album>`, `<Year>`, `<Genre>`, `<Track>`, `<Comment>`
 and about fifty `<ID3-*>` frame tags read from MP3, FLAC, Ogg Vorbis, Opus,
 Speex, MP4/M4A, Musepack and WavPack — one set of names across every format.
-`<Exif-Make>`, `<Exif-Model>` and any of the
-161 fields the Exif reader knows, plus `<ExifDate>` and `<ExifTime>`. A folder
+`<Exif-Make>`, `<Exif-Model>` and the rest of the 150 field names the Exif
+standard gives for the primary image, Exif and GPS blocks — a name outside them
+is an error, not an empty value — plus `<ExifDate>` and `<ExifTime>`. A folder
 takes its tags from the first music file inside it.
 
 `<Width>`, `<Height>`, `<Depth>`, `<Depthb>` and `<JpgComment>` read the image's
@@ -247,7 +248,7 @@ documented places.
 
 | Key | Does |
 |---|---|
-| **F2** | Rename the row under the keyboard in place. The stem is selected; **Enter** renames and moves to the next row, **Escape** cancels. Honours Simulate, and waits while a run is going. |
+| **F2** | Rename the row under the keyboard in place. The stem is selected; **Enter** renames and moves to the next row, **Escape** cancels. Honours Simulate. Refused while a run is going or the list is updating; a rename that fails says so in the status line. |
 | **F3** | Visual Assist: open, cycle through the card's ⌖ targets, close. |
 | **F4** or **Ctrl+Z** | Undo the last batch. |
 | **F5** | Rename (run the plan). |

@@ -86,7 +86,10 @@
 //! And a symbolic link is refused. The swap would replace the link itself
 //! with a file, and the tags belong to the file it points to, which no row
 //! names. That matches Set Attributes, which refuses a link's read-only bit
-//! rather than change its target.
+//! rather than change its target. The planner refuses both first, as a
+//! conflict on the link's row (`ConflictKind::TagsThroughLink`, D241), so a
+//! run never reaches this refusal part-way; it stays as the backstop for a
+//! file that became a link after the preview.
 //!
 //! The copy needs the file's size in free space on its volume. A Music Tagger
 //! with nothing to write and a Remove Tags with nothing to remove make no copy.
@@ -104,7 +107,7 @@ use lofty::ogg::{OggPictureStorage, OpusFile, SpeexFile, VorbisFile};
 use lofty::prelude::*;
 use lofty::probe::Probe;
 use lofty::tag::{ItemKey, ItemValue, MergeTag, SplitTag, Tag, TagItem, TagType};
-use ren_platform::{Capability, Platform, TimeChange};
+use ren_platform::{Capability, Platform, PlatformError, TimeChange};
 use serde::{Deserialize, Serialize};
 
 use super::lyrics3;
@@ -266,6 +269,21 @@ pub enum WriteError {
     /// it was.
     #[error("{step}: {detail}")]
     Copy { step: &'static str, detail: String },
+    /// The swap took the file out of its place and could not move the copy
+    /// in (`PlatformError::ReplacedButNotMoved`): the copy, with the new tags
+    /// already in it, is the only copy of the file left. It is kept, never
+    /// cleaned up, and named, so the user can rename it back.
+    #[error(
+        "could not put the copy in the file's place, and the file is no longer there: its \
+         contents, with the new tags, are in {} — rename that to {} to get it back ({detail})",
+        .copy.display(),
+        .target.file_name().unwrap_or_default().to_string_lossy()
+    )]
+    Stranded {
+        copy: PathBuf,
+        target: PathBuf,
+        detail: String,
+    },
 }
 
 /// The format, decided **from content**, and its primary tag type.
@@ -385,14 +403,15 @@ const COPYING: &str = "could not copy the file to write the tags into";
 /// file it was made from is whole.
 pub const SCRATCH_PREFIX: &str = "__renameit-tags-";
 
-/// A copy of a file, beside it, which is removed again unless it took the
-/// file's place.
+/// A copy of a file, beside it, which is removed again unless it is kept.
 ///
 /// Removed on drop, so an error from any step, a panic included, cleans up
-/// after itself.
+/// after itself. Kept when it took the file's place, and when a swap that
+/// failed half-way left it the only copy of the file
+/// ([`WriteError::Stranded`]).
 struct Scratch {
     path: PathBuf,
-    swapped: bool,
+    keep: bool,
 }
 
 impl Scratch {
@@ -423,10 +442,7 @@ impl Scratch {
                 .open(&path)
             {
                 Ok(_) => {
-                    let scratch = Self {
-                        path,
-                        swapped: false,
-                    };
+                    let scratch = Self { path, keep: false };
                     // The contents and the permission bits, and on Windows
                     // the attributes. A file made read-only after `rewrite`
                     // checked it gives a read-only copy, which lofty then
@@ -444,7 +460,7 @@ impl Scratch {
 
 impl Drop for Scratch {
     fn drop(&mut self) {
-        if !self.swapped {
+        if !self.keep {
             let _ = std::fs::remove_file(&self.path);
         }
     }
@@ -469,7 +485,9 @@ fn a_regular_file(path: &Path) -> Result<(), WriteError> {
 /// Runs `edit` on a copy of `path` and swaps the copy in (module docs).
 ///
 /// `path` is only read until the swap. An error from any step, `edit`'s
-/// included, removes the copy and leaves `path` as it was.
+/// included, removes the copy and leaves `path` as it was — except a swap
+/// that took `path` away and could not move the copy in, which keeps the
+/// copy and says where it is ([`WriteError::Stranded`]).
 fn rewrite<T>(
     path: &Path,
     platform: &dyn Platform,
@@ -512,10 +530,19 @@ fn rewrite<T>(
     // The folder is not flushed after the swap. A power cut before its new
     // entry reaches the disk brings back the old file, which is whole, and a
     // folder cannot be opened to flush it on Windows.
-    platform
-        .replace_file(&scratch.path, path)
-        .map_err(|e| step("could not put the copy in the file's place", e))?;
-    scratch.swapped = true;
+    match platform.replace_file(&scratch.path, path) {
+        Ok(()) => {}
+        Err(PlatformError::ReplacedButNotMoved { source, .. }) => {
+            scratch.keep = true;
+            return Err(WriteError::Stranded {
+                copy: scratch.path.clone(),
+                target: path.to_path_buf(),
+                detail: source.to_string(),
+            });
+        }
+        Err(e) => return Err(step("could not put the copy in the file's place", e)),
+    }
+    scratch.keep = true;
     Ok(value)
 }
 
@@ -1266,6 +1293,41 @@ mod tests {
 
         assert_eq!(platform.swaps(), 2);
         assert_eq!(names(dir.path()), ["t.mp3"], "a copy was left behind");
+    }
+
+    /// **A swap that removed the file and could not move the copy in keeps
+    /// the copy.** Windows' `ReplaceFileW` can fail after taking the file out
+    /// of its place (`ERROR_UNABLE_TO_MOVE_REPLACEMENT`), and when the move
+    /// back fails too the copy is the only copy of the file. Cleaning it up
+    /// as after any other failed swap deleted the file for good; it is kept,
+    /// and the error names it so the user can rename it back.
+    #[test]
+    fn a_swap_that_strands_the_copy_keeps_it_and_names_it() {
+        let dir = TempDir::new().unwrap();
+        let path = Mp3::tagged("A", "B").write(dir.path(), "t.mp3");
+        let platform = Spy {
+            strand_swap: true,
+            ..Spy::default()
+        };
+
+        let error = write_fields(&path, &[field(MusicField::Artist, "New")], &platform)
+            .expect_err("the swap strands the copy");
+        let WriteError::Stranded { copy, .. } = &error else {
+            panic!("an ordinary failure, whose copy would be cleaned up: {error:?}");
+        };
+        assert!(copy.exists(), "the only copy of the file was deleted");
+        assert!(
+            error.to_string().contains(&copy.display().to_string()),
+            "the error does not say where the file is: {error}"
+        );
+        assert!(!path.exists());
+
+        // Renamed back as the error says, it is the file with its new tags.
+        std::fs::rename(copy, &path).unwrap();
+        crate::meta::audio::forget_all();
+        let tags = crate::meta::audio::tags_of(&path).unwrap();
+        assert_eq!(tags.artist.as_deref(), Some("New"));
+        assert_eq!(names(dir.path()), ["t.mp3"]);
     }
 
     /// Writing tags leaves the file's modified date alone, and on Unix its

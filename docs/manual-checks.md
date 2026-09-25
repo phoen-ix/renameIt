@@ -346,7 +346,7 @@ about the machine around the code.
 | 6 | In Windows PowerShell 5.1: `Get-ChildItem *.jpg \| % FullName > list.txt`, then `ren-cli /l list.txt` | The files are listed. The file is UTF-16 with a byte-order mark; `Set-Content` (ANSI) must work as well (D212) |
 | 7 | With **Narrator** and then **NVDA** running, Tab through a card, a file row and a ⌖ button | Each is read with its name, not as *button* or silence (D218) |
 | 8 | About ▸ the repository link | The browser opens it (D218) |
-| 9 | Start an undo of a large batch on a network share, then close the window — and try **Alt+F4** | The window stays until the undo finishes, then closes; Alt+F4 never starts an undo (D220, D222) |
+| 9 | Start an undo of a large batch on a network share, then close the window — and try **Alt+F4**. Repeat with the window minimised, closing it from the taskbar | The window stays until the undo finishes, then closes, minimised or not; Alt+F4 never starts an undo (D220, D222, D245) |
 | 10 | Start a long run in one RenameIt window, then open a second | The second window's banner says *a run is still going on in another RenameIt window* and offers no Roll back for it (D175, D228) |
 | 11 | `ren-cli apply C:\Windows\Temp --suffix _x` from an elevated prompt | Exit 2, naming the folder; nothing renamed (D200) |
 

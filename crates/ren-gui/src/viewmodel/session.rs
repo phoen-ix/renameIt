@@ -986,28 +986,46 @@ fn moves(renamed: &[(PathBuf, PathBuf)]) -> HashMap<&Path, &Path> {
         .collect()
 }
 
-/// Where `path` is after the moves: its own new name if it has one, then
-/// carried along by the nearest folder above it that moved.
+/// Where `path` is after the moves.
 ///
-/// In that order because the planner renames deepest first
-/// (`order_renames`): a file inside a renamed folder is renamed while the
-/// folder still has its old name, so its pair names the old folder, and the
-/// folder's own pair then takes it along. One step up, never repeated — a
-/// repeated walk could chase two folders that swapped names round forever.
+/// **One prefix rewrite per depth, as many passes as it takes.** Each pass
+/// walks the path's ancestors, the path itself first, and rewrites through
+/// the deepest one that moved at a depth not yet rewritten; the walk stops
+/// when no such ancestor is left. That covers every order a report can come
+/// in:
+///
+/// - a run renames deepest first (`order_renames`), so a file's pair names
+///   its old folders, and each folder above then carries it along, one depth
+///   per pass — at any nesting;
+/// - an undo reverses newest first, so the folder goes back *before* the file
+///   inside it, and the file's pair names the folder's restored name: the
+///   folder is followed first, then the file's own name.
+///
+/// Each depth once, because two folders that swapped names would otherwise
+/// be chased round forever; with it the walk ends after at most as many passes
+/// as the path has components.
 fn followed(moved: &HashMap<&Path, &Path>, path: &Path) -> PathBuf {
-    let own = moved
-        .get(path)
-        .map_or_else(|| path.to_path_buf(), |to| to.to_path_buf());
-    let above = own
-        .ancestors()
-        .skip(1)
-        .find_map(|ancestor| moved.get(ancestor).map(|to| (ancestor, *to)));
-    match above {
-        Some((ancestor, to)) => match own.strip_prefix(ancestor) {
-            Ok(rest) => to.join(rest),
-            Err(_) => own.clone(),
-        },
-        None => own,
+    let mut current = path.to_path_buf();
+    let mut rewritten: Vec<usize> = Vec::new();
+    loop {
+        let next = current.ancestors().find_map(|ancestor| {
+            let depth = ancestor.components().count();
+            if rewritten.contains(&depth) {
+                return None;
+            }
+            moved.get(ancestor).map(|to| (depth, ancestor, *to))
+        });
+        let Some((depth, ancestor, to)) = next else {
+            return current;
+        };
+        let rest = current.strip_prefix(ancestor).unwrap_or(Path::new(""));
+        let joined = if rest.as_os_str().is_empty() {
+            to.to_path_buf()
+        } else {
+            to.join(rest)
+        };
+        rewritten.push(depth);
+        current = joined;
     }
 }
 
@@ -1636,6 +1654,55 @@ mod tests {
             (PathBuf::from("/p/b"), PathBuf::from("/p/a")),
         ]);
         assert_eq!(session.free_select, [PathBuf::from("/p/b/f.txt")]);
+    }
+
+    /// An undo reverses newest first, so the folder goes back *before* the
+    /// file inside it, and the file's pair names the folder's restored name.
+    /// The folder is followed first, then the file's own name.
+    #[test]
+    fn free_select_follows_an_undo_of_a_folder_and_a_file_in_it() {
+        let mut session = Session {
+            free_select: vec![PathBuf::from("/p/X"), PathBuf::from("/p/X/F.txt")],
+            ..Default::default()
+        };
+        session.follow_renames(&[
+            (PathBuf::from("/p/X"), PathBuf::from("/p/x")),
+            (PathBuf::from("/p/x/F.txt"), PathBuf::from("/p/x/f.txt")),
+        ]);
+        assert_eq!(
+            session.free_select,
+            [PathBuf::from("/p/x"), PathBuf::from("/p/x/f.txt")]
+        );
+    }
+
+    /// Two renamed folders nested in one run carry the file through both, at
+    /// any depth.
+    #[test]
+    fn free_select_follows_a_file_through_two_nested_renamed_folders() {
+        let mut session = Session {
+            free_select: vec![
+                PathBuf::from("/p/x"),
+                PathBuf::from("/p/x/sub"),
+                PathBuf::from("/p/x/sub/f.txt"),
+            ],
+            ..Default::default()
+        };
+        session.follow_renames(&[
+            (
+                PathBuf::from("/p/x/sub/f.txt"),
+                PathBuf::from("/p/x/sub/F.txt"),
+            ),
+            (PathBuf::from("/p/x/sub"), PathBuf::from("/p/x/SUB")),
+            (PathBuf::from("/p/x"), PathBuf::from("/p/X")),
+        ]);
+        assert_eq!(
+            session.free_select,
+            [
+                PathBuf::from("/p/X"),
+                PathBuf::from("/p/X/SUB"),
+                PathBuf::from("/p/X/SUB/F.txt"),
+            ]
+        );
     }
 
     /// P65: Delete edits the list and nothing else.

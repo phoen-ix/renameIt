@@ -6563,6 +6563,41 @@ fn a_string_list_row_that_moves_up_keeps_its_own_undo() {
     );
 }
 
+/// *Restore defaults* gives the restored rows keys no row had before, so a
+/// restored row does not inherit the old row's text box — and with it the
+/// undo of the edit the restore discarded.
+#[test]
+fn a_restored_string_list_row_does_not_inherit_the_old_rows_undo() {
+    let fixture = Fixture::new(&["a.txt"]);
+    let mut harness = harness(fixture.app());
+    harness.key_press(egui::Key::F8);
+    settle(&mut harness);
+    harness.get_by_label("Music Styles").click();
+    settle(&mut harness);
+
+    let first = harness.state().music_styles()[0].clone();
+    text_box(&harness, |v| v == first).focus();
+    harness.run();
+    focused_text_box(&harness).type_text("x");
+    settle(&mut harness);
+    assert_eq!(harness.state().music_styles()[0], format!("{first}x"));
+
+    harness.get_by_label("Restore defaults").click();
+    settle(&mut harness);
+    let restored = harness.state().music_styles()[0].clone();
+    assert_eq!(restored, first);
+
+    text_box(&harness, |v| v == restored).focus();
+    harness.run();
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    settle(&mut harness);
+    assert_eq!(
+        harness.state().music_styles()[0],
+        restored,
+        "Ctrl+Z in a restored row replayed the old row's edit"
+    );
+}
+
 /// Quick Setup can point Genre at a part of the name, which is not one of the
 /// genres the list offers. The list keeps it as its first choice rather than
 /// showing it with nothing to pick.

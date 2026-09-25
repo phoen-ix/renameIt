@@ -331,13 +331,28 @@ impl Platform for WindowsPlatform {
         // The one failure that leaves neither file where it was: `target` is
         // gone and the new contents are still at `temp`. Finishing the move
         // puts a file back under the name, which beats reporting an error
-        // for a file that no longer exists.
+        // for a file that no longer exists. Tried a few times, because what
+        // stopped `ReplaceFileW` is usually a scanner or a sync client that
+        // opened the new file for a moment.
         if err.raw_os_error() == Some(ERROR_UNABLE_TO_MOVE_REPLACEMENT as i32) {
-            // SAFETY: as above.
-            let moved = unsafe { MoveFileExW(temp_w.as_ptr(), target_w.as_ptr(), 0) };
-            if moved != 0 {
-                return Ok(());
+            let mut last = err;
+            for attempt in 0..5 {
+                if attempt > 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                // SAFETY: as above.
+                if unsafe { MoveFileExW(temp_w.as_ptr(), target_w.as_ptr(), 0) } != 0 {
+                    return Ok(());
+                }
+                last = std::io::Error::last_os_error();
             }
+            // `temp` is now the only copy of the file: said so, never
+            // reported as an ordinary failure a caller would clean up after.
+            return Err(PlatformError::ReplacedButNotMoved {
+                temp: temp.to_path_buf(),
+                target: target.to_path_buf(),
+                source: last,
+            });
         }
         Err(PlatformError::io(target, err))
     }

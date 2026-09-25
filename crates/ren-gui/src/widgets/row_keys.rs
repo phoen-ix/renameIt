@@ -11,37 +11,38 @@
 //! A list whose length no longer matches the keys was changed by somebody else
 //! — a preset load, *Restore defaults*, the app tidying blank rows — and is
 //! simply re-keyed, with keys after every one ever handed out, so no new row
-//! can inherit an old row's state either.
+//! can inherit an old row's state either. "Ever" is a high-water mark kept
+//! beside the keys, not the largest key still in the list: deleting the last
+//! row, or clearing the list for a restore, must not make its key the next
+//! one handed out.
 
 /// The keys for one list, loaded for a frame and stored back after it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RowKeys {
     keys: Vec<u64>,
+    /// One past the largest key ever handed out in this list. Every key in
+    /// `keys` is below it, and it never goes down.
+    next: u64,
 }
 
 impl RowKeys {
     /// The keys stored under `id`, re-keyed if they no longer fit `len` rows.
     pub fn load(ui: &egui::Ui, id: egui::Id, len: usize) -> Self {
-        let keys: Vec<u64> = ui.data_mut(|d| d.get_temp(id).unwrap_or_default());
-        Self { keys }.fitted(len)
+        let keys: Self = ui.data_mut(|d| d.get_temp(id).unwrap_or_default());
+        keys.fitted(len)
     }
 
     /// Puts them back for the next frame.
     pub fn store(self, ui: &egui::Ui, id: egui::Id) {
-        ui.data_mut(|d| d.insert_temp(id, self.keys));
+        ui.data_mut(|d| d.insert_temp(id, self));
     }
 
     fn fitted(mut self, len: usize) -> Self {
         if self.keys.len() != len {
-            let from = self.next();
-            self.keys = (from..from + len as u64).collect();
+            self.keys.clear();
+            self.grow_to(len);
         }
         self
-    }
-
-    /// One past the largest key ever handed out in this list.
-    fn next(&self) -> u64 {
-        self.keys.iter().max().map_or(0, |k| k + 1)
     }
 
     /// Row `index`'s key, for `ui.push_id`.
@@ -59,13 +60,13 @@ impl RowKeys {
 
     /// Fresh keys for rows appended until there are `len`.
     pub fn grow_to(&mut self, len: usize) {
-        let from = self.next();
         let more = len.saturating_sub(self.keys.len()) as u64;
-        self.keys.extend(from..from + more);
+        self.keys.extend(self.next..self.next + more);
+        self.next += more;
     }
 
-    /// Forgets every key: the next frame re-keys the list from scratch,
-    /// because none of its rows is one the user had.
+    /// Forgets every row's key: the next frame re-keys the list, past every
+    /// key handed out so far, because none of its rows is one the user had.
     pub fn clear(&mut self) {
         self.keys.clear();
     }
@@ -104,12 +105,30 @@ mod tests {
         let old: Vec<u64> = (0..3).map(|i| keys.get(i)).collect();
         keys.remove(2);
         keys.grow_to(3);
-        assert!(!old[..2].contains(&keys.get(2)));
+        // Not even the key of the row just deleted, which was the largest.
+        assert!(!old.contains(&keys.get(2)), "{old:?} {}", keys.get(2));
 
         // Somebody else changed the length: every row is re-keyed past them.
         let refitted = keys.clone().fitted(5);
         for i in 0..5 {
             assert!(!old.contains(&refitted.get(i)), "{i}");
         }
+    }
+
+    /// *Restore defaults* clears the keys so the next frame re-keys the list,
+    /// and the restored rows must not be given the keys the old rows had —
+    /// with them came the old rows' text-box undo, and Ctrl+Z in a restored
+    /// row replayed the edit the restore had discarded.
+    #[test]
+    fn cleared_keys_are_not_handed_out_again() {
+        let mut keys = keyed(3);
+        let old: Vec<u64> = (0..3).map(|i| keys.get(i)).collect();
+        keys.clear();
+        let refitted = keys.fitted(3);
+        let new: Vec<u64> = (0..3).map(|i| refitted.get(i)).collect();
+        assert!(
+            old.iter().all(|k| !new.contains(k)),
+            "restored rows reuse keys {old:?} == {new:?}"
+        );
     }
 }

@@ -211,8 +211,9 @@ impl History {
     /// What a run needs from here, for a worker that performs it elsewhere.
     ///
     /// The other half is [`Self::record_run`], with the report the worker
-    /// hands back. `run` is the two composed, for the one caller with no
-    /// frame to wait in — a single inline rename.
+    /// hands back. `run` is the two composed. F2's single inline rename
+    /// composes them itself, because an F2 that failed renamed nothing and
+    /// records nothing: the last run's log stays on screen.
     pub fn run_options(&self, simulate: bool, allow_irreversible: bool) -> ApplyOptions {
         ApplyOptions {
             simulate,

@@ -512,6 +512,10 @@ pub(crate) fn conflict_help(kind: &ConflictKind) -> String {
             "{kind}.\nRename the folder in a run of its own first, or send this file \
              somewhere else."
         ),
+        ConflictKind::TagsThroughLink => format!(
+            "{kind}.\nList the file the link points to and retag that, or leave this \
+             link out of the run."
+        ),
         ConflictKind::InvalidName(_) => format!("{kind}."),
         ConflictKind::UnresolvedCycle => format!("{kind}."),
     }
@@ -621,6 +625,7 @@ mod tests {
             ConflictKind::DuplicateTarget { others: vec![1, 2] },
             ConflictKind::TargetExists,
             ConflictKind::UnresolvedCycle,
+            ConflictKind::TagsThroughLink,
         ] {
             let help = conflict_help(&kind);
             assert!(help.len() > 10, "{kind:?} needs a real explanation: {help}");

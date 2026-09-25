@@ -430,7 +430,13 @@ mod tests {
             matches!(problems[..], [(_, ExecError::JournalInUse { .. })]),
             "{problems:?}"
         );
-        assert_eq!(Journal::latest_undoable(journals.path()).unwrap(), None);
+        // Not skipped for an older batch either: a live run is the newest
+        // batch, and plain `undo` is refused until it is over (D175).
+        let latest = Journal::latest_undoable(journals.path());
+        assert!(
+            matches!(latest, Err(ExecError::JournalInUse { .. })),
+            "{latest:?}"
+        );
         let refused = undo_transaction(live.path(), ren_platform::host().as_ref());
         assert!(
             matches!(refused, Err(ExecError::JournalInUse { .. })),

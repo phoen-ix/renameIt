@@ -41,12 +41,20 @@ pub enum Capability {
     RevealInFileManager,
     /// The file manager's *"Open with RenameIt"* entry (D7).
     ShellContextMenu,
+    /// Making a symbolic link *itself* read-only (D205, D241).
+    ///
+    /// Separate from [`Self::ReadOnlyAttribute`] because the two differ on
+    /// Unix: `chmod` follows a link to its target and Linux has no `lchmod`,
+    /// so a link has no read-only setting of its own. The planner asks for it
+    /// only on a row that is a link and only for *setting* read-only, so the
+    /// refusal shows in the preview rather than part-way through a run.
+    LinkReadOnly,
 }
 
 impl Capability {
     /// Every capability, so a caller can ask about all of them without
     /// hand-listing the set and silently missing the next one added.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::CreatedTime,
         Self::AccessedTime,
         Self::ModifiedTime,
@@ -56,6 +64,7 @@ impl Capability {
         Self::ArchiveAttribute,
         Self::RevealInFileManager,
         Self::ShellContextMenu,
+        Self::LinkReadOnly,
     ];
 }
 
@@ -71,6 +80,7 @@ impl fmt::Display for Capability {
             Self::ArchiveAttribute => "the archive attribute",
             Self::RevealInFileManager => "revealing a file in the file manager",
             Self::ShellContextMenu => "a file manager context-menu entry",
+            Self::LinkReadOnly => "making a symbolic link read-only",
         };
         f.write_str(s)
     }
@@ -93,6 +103,23 @@ pub enum PlatformError {
     /// `std::fs::rename`, which is exactly why `Platform::rename` exists.
     #[error("{path} already exists")]
     TargetExists { path: PathBuf },
+    /// [`Platform::replace_file`] removed `target` and could not move `temp`
+    /// into its place: the file's contents now exist **only** at `temp`.
+    ///
+    /// Distinct from [`Self::Io`] because the caller must not do what it does
+    /// after any other failed swap, which is delete `temp` as a copy nobody
+    /// needs. Windows reports this as `ERROR_UNABLE_TO_MOVE_REPLACEMENT` when
+    /// something — a sync client, a virus scanner — holds the new file open.
+    #[error(
+        "{target} was taken out of its place and its contents could not be moved back in: they \
+         are at {temp} — rename that file to {target} to get it back ({source})"
+    )]
+    ReplacedButNotMoved {
+        temp: PathBuf,
+        target: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, PlatformError>;
@@ -321,6 +348,10 @@ pub trait Platform: Send + Sync + fmt::Debug {
     /// Refuses when `target` does not exist, on every platform, so that the
     /// two agree: `ReplaceFileW` cannot create a file, and a caller that
     /// wanted one created has asked for something else.
+    ///
+    /// Any error leaves `target` as it was, except
+    /// [`PlatformError::ReplacedButNotMoved`]: `target` is gone and `temp`
+    /// holds the only copy of the file, which the caller must keep and name.
     fn replace_file(&self, temp: &Path, target: &Path) -> Result<()>;
 
     fn get_attributes(&self, path: &Path) -> Result<FileAttributes>;

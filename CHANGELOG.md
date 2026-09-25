@@ -11,7 +11,7 @@ and the reasoning behind each default lives beside the code it governs.
 The second audit: a read of the whole workspace — engine, platform layer, both
 front ends, the build and the docs — with 259 confirmed findings, fixed in eight
 batches. Every behaviour change has its decision number in `docs/DECISIONS.md`
-(**D171**–**D240**, **P100**–**P114**). The version stays 1.4.0 until a release
+(**D171**–**D246**, **P100**–**P114**). The version stays 1.4.0 until a release
 is cut (**P66**).
 
 ### Changed
@@ -30,7 +30,12 @@ is cut (**P66**).
   and Remove Tags refuse a symbolic link (instead of writing to the file it
   points to) and a file that cannot be written (**D217**). The cost is stated
   with the decision: a library scanner or a backup tool that compares dates and
-  sizes can miss a same-length retag.
+  sizes can miss a same-length retag. A link is refused in the preview, as a
+  conflict on its row, so the run does not start (**D241**); so is making a
+  link read-only on Linux, which has no read-only setting of its own for one.
+- **If Windows takes a file out of its place and cannot move the tagged copy
+  in**, the copy is kept and the error names it, so it can be renamed back
+  (**D243**).
 - **A script's top level and its `done()` get one second instead of 10 ms**
   (**D190**), so loading a table or writing a playlist no longer depends on the
   machine's speed. `rename()` keeps 10 ms per file.
@@ -75,7 +80,9 @@ is cut (**P66**).
 - `ren-cli presets export` refuses to replace an existing file unless given
   `--force` (**D216**). Undoing a transaction another window is still writing
   exits 2 (refused, nothing touched), and `recover` reports such a journal as
-  running rather than as a problem (**D206**).
+  running rather than as a problem (**D206**). Plain `ren-cli undo` refuses the
+  same way while a newer run is still going, rather than undoing the batch
+  before it (**D175**).
 
 ### Fixed
 
@@ -101,15 +108,19 @@ is cut (**P66**).
   `--allow-system-folders` goes ahead anyway. The guard also sees through `..`,
   and catches `/usr` itself when listing `/` with folders on.
 - **Free Select emptied itself after every run, F2 rename and undo** (**D224**).
-  Its files are followed to their new names, a hand-set row order survives the
+  Its files are followed to their new names — through any number of renamed
+  folders, and back through an undo (**D246**) — a hand-set row order survives the
   undo of the run that used it and a run whose renames swap names, and a file
   deleted outside the app costs only its own row.
 - **F2 could rename a different file.** Its editor belongs to the file it was
   opened on, so a sort or relist while it is open no longer makes Enter rename
-  another row. F2 honours Simulate, and waits while a run is going (**D221**).
+  another row. F2 honours Simulate, and is refused while a run is going or the
+  list is updating (**D221**, **D244**). An F2 rename that fails says so, and
+  leaves the last run's log on screen, instead of reporting the new name.
 - **Pressing Rename again before the list was re-read re-applied the old plan**,
   which swapped a swap back (**D223**).
-- **Closing the window during an undo killed it half-way** (**D222**). A crash
+- **Closing the window during an undo killed it half-way** (**D222**), and
+  still did from the taskbar while the window was minimised (**D245**). A crash
   or panic part-way through a run relists and offers Roll back at once, and an
   undo that panics says so instead of vanishing.
 - **Ctrl+Shift+Z and Alt+F4 undid the last batch** (**D220**). Ctrl+Z in a
@@ -140,6 +151,11 @@ is cut (**P66**).
 - **`ren-cli apply .` followed by `undo` from another folder undid the wrong
   files** (**D207**). Every path is made absolute before it is journalled, and a
   file named twice in `--list` or `--file` is renamed once.
+- **A script could not write into a folder named through `..`**, so the
+  playlist script was refused for `ren-cli preview ../music`; and two script
+  steps writing one file passed the preview and then stopped the run part-way.
+  A write is now checked against the folders as they were named, and a path
+  written twice blocks the run (**D242**).
 - **A script could write over a file that appeared after the preview**, and undo
   deleted a script-written file even after you had edited it (**D172**). A
   script's write aimed at a folder the run renames lands in that folder under
@@ -247,7 +263,8 @@ is cut (**P66**).
   the pre-processor's *Regular expression* switch can be unticked; a preset
   cannot be loaded, appended or run while a run or an undo is going (**D234**);
   deleting a row from Music Styles or a casing list no longer hands its undo
-  history to the row below; a missing or broken script is no longer also said
+  history to the row below, and *Restore defaults* no longer hands the old
+  rows' undo history to the restored ones; a missing or broken script is no longer also said
   to take no arguments; a failed right-click-menu install stays on screen.
 - The grid and the list: folders and files that are not pictures can be
   clicked, right-clicked and double-clicked in the grid; tiles sit on a fixed
@@ -548,8 +565,8 @@ journal open, which is the state P4 exists to keep the app out of.
 - **Batch Replace has column headings** — fifty-one rows of eight controls with
   nothing saying which was which.
 - **Row shading ships on** (**P91**): P70
-  waived "Show Guidelines" because shading is what makes a wide row readable,
-  and the rows are only now wide. **New installs only** — an existing settings
+  declined a grid-lines option because shading is what makes a wide row
+  readable, and the rows are only now wide. **New installs only** — an existing settings
   file already carries the old value, and "you never chose this" is not
   something the app can tell apart from "you chose it", so an upgrade leaves it
   alone. Settings ▸ Display switches it either way.

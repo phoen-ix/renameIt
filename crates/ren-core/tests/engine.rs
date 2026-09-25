@@ -2038,6 +2038,155 @@ fn remove_tags_strips_tags_and_leaves_the_audio_byte_identical() {
     );
 }
 
+/// **A tag write on a symbolic link is refused in the preview** (D241).
+///
+/// The executor refuses a link (D217: the swap would replace the link
+/// itself), and when that refusal came only at run time a playlist folder of
+/// linked MP3s previewed as executable, retagged the real files before the
+/// first link — which no undo can take back — and stopped there (P4). The link
+/// row is now a conflict, so nothing runs until it is dealt with.
+#[cfg(unix)]
+#[test]
+fn a_tag_write_on_a_symbolic_link_is_a_conflict_in_the_preview() {
+    use ren_core::meta::testing::Mp3;
+    use ren_core::ops::{MusicTagger, RemoveTags};
+    use ren_core::template::TextTemplate;
+
+    let library = TempDir::new().unwrap();
+    let fixture = Fixture::new(&[]);
+    Mp3::tagged("Old", "Old").write(library.path(), "target.mp3");
+    Mp3::tagged("Old", "Old").write(fixture.dir.path(), "a real.mp3");
+    std::os::unix::fs::symlink(
+        library.path().join("target.mp3"),
+        fixture.path("b link.mp3"),
+    )
+    .unwrap();
+    Mp3::tagged("Old", "Old").write(fixture.dir.path(), "c real.mp3");
+    ren_core::meta::audio::forget_all();
+    let before = std::fs::read(fixture.path("a real.mp3")).unwrap();
+
+    let platform = ren_platform::host();
+    let tagger = MusicTagger {
+        artist: Some(TextTemplate::new("New")),
+        ..Default::default()
+    };
+    let remover = RemoveTags {
+        id3v1: true,
+        id3v2: true,
+        lyrics: true,
+    };
+    let pipelines = [
+        tagger_pipeline(tagger),
+        Pipeline::new().with(Step::Action(Box::new(remover)), StepConfig::default()),
+    ];
+    for pipeline in &pipelines {
+        let plan = plan(&fixture.entries(), pipeline, platform.as_ref());
+        assert!(!plan.is_executable(), "{:?}", plan.items);
+        assert_eq!(plan.conflicts(), 1, "{:?}", plan.items);
+        let link = plan
+            .items
+            .iter()
+            .find(|i| i.source.ends_with("b link.mp3"))
+            .unwrap();
+        assert_eq!(
+            link.state,
+            RowState::Conflict(ConflictKind::TagsThroughLink),
+            "{link:?}"
+        );
+        assert!(
+            ConflictKind::TagsThroughLink
+                .to_string()
+                .contains("symbolic link")
+        );
+
+        let error = apply(
+            &plan,
+            platform.as_ref(),
+            &fixture.options_allowing_irreversible(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, ren_core::ExecError::Blocked { .. }),
+            "{error:?}"
+        );
+        assert_eq!(
+            std::fs::read(fixture.path("a real.mp3")).unwrap(),
+            before,
+            "nothing ran, so the file before the link is untouched"
+        );
+    }
+}
+
+/// Making a symbolic link read-only is refused in the preview where the
+/// platform cannot do it (D241). Linux has no `lchmod`, so the link has no
+/// read-only setting of its own, and changing its target would change a file
+/// no row is about (D205). Clearing read-only asks for nothing a link lacks —
+/// its mode always carries the write bits — so it still runs.
+#[cfg(unix)]
+#[test]
+fn making_a_symbolic_link_read_only_is_refused_in_the_preview_where_it_cannot_run() {
+    use ren_platform::Capability;
+
+    let fixture = Fixture::new(&["target.txt"]);
+    std::os::unix::fs::symlink(fixture.path("target.txt"), fixture.path("link.txt")).unwrap();
+    let platform = ren_platform::host();
+    let set = |read_only| {
+        Pipeline::new().with(
+            Step::Action(Box::new(ren_core::ops::SetAttributes {
+                read_only: Some(read_only),
+                ..Default::default()
+            })),
+            StepConfig::default(),
+        )
+    };
+
+    let planned = plan(&fixture.entries(), &set(true), platform.as_ref());
+    let link = planned
+        .items
+        .iter()
+        .find(|i| i.source.ends_with("link.txt"))
+        .unwrap();
+    if platform.supports(Capability::LinkReadOnly) {
+        assert!(planned.is_executable(), "{:?}", planned.items);
+    } else {
+        assert!(!planned.is_executable());
+        assert_eq!(planned.conflicts(), 1, "{:?}", planned.items);
+        assert!(
+            matches!(
+                &link.state,
+                RowState::Conflict(ConflictKind::Unsupported {
+                    capability: Capability::LinkReadOnly,
+                    ..
+                })
+            ),
+            "{link:?}"
+        );
+        // And the setter says the same thing the preview did, word for word.
+        let refused = platform.set_attributes(
+            &fixture.path("link.txt"),
+            ren_platform::AttributeChange {
+                read_only: Some(true),
+                ..Default::default()
+            },
+        );
+        assert!(
+            matches!(
+                refused,
+                Err(ren_platform::PlatformError::CapabilityUnsupported {
+                    capability: Capability::LinkReadOnly,
+                    ..
+                })
+            ),
+            "{refused:?}"
+        );
+    }
+
+    let planned = plan(&fixture.entries(), &set(false), platform.as_ref());
+    assert!(planned.is_executable(), "{:?}", planned.items);
+    let report = apply(&planned, platform.as_ref(), &fixture.options()).unwrap();
+    assert!(report.is_success(), "{:?}", report.failed);
+}
+
 /// **The crash guard.** An empty tag of a type a format cannot carry skips
 /// lofty's own writability check — that check is `!is_writable() &&
 /// !is_empty()`, so an empty tag sails past it — and reaches a writer which
@@ -3514,6 +3663,94 @@ fn a_script_write_into_a_folder_the_run_renames_lands_under_its_new_name() {
         .collect();
     left.sort();
     assert_eq!(left, ["track.mp3"]);
+}
+
+/// The folder a run lists may be named through `..` — `std::path::absolute`,
+/// which both front ends use, keeps it on Unix — and a script writing into
+/// that very folder (`fr.browser_path + …`) is writing where it may. The check
+/// compares like with like: the write's own parent against the listed
+/// folders as they were named. Climbing out through the same `..` is still
+/// refused.
+#[test]
+fn a_script_write_into_a_listed_folder_named_through_dotdot_is_allowed() {
+    let platform = ren_platform::host();
+    let root = TempDir::new().unwrap();
+    let music = root.path().join("music");
+    std::fs::create_dir_all(&music).unwrap();
+    std::fs::create_dir_all(root.path().join("other")).unwrap();
+    std::fs::write(music.join("a.mp3"), b"x").unwrap();
+    let dotted = root.path().join("other").join("..").join("music");
+    let entries = list(&dotted, ListOptions::default()).unwrap();
+    let scripts = TempDir::new().unwrap();
+
+    let into = script_in(
+        scripts.path(),
+        "IntoBrowsed",
+        "rename = || ''\ndone = || {path: fr.browser_path + 'list.m3u', contents: 'x'}\n",
+    );
+    let planned = plan(&entries, &Pipeline::new().then(into), platform.as_ref());
+    assert!(planned.blockers.is_empty(), "{:?}", planned.blockers);
+    assert!(planned.is_executable());
+    let journal = TempDir::new().unwrap();
+    let options = ApplyOptions {
+        journal_dir: journal.path().to_path_buf(),
+        ..Default::default()
+    };
+    let report = apply(&planned, platform.as_ref(), &options).unwrap();
+    assert!(report.is_success(), "{:?}", report.failed);
+    assert_eq!(
+        std::fs::read_to_string(music.join("list.m3u")).unwrap(),
+        "x"
+    );
+
+    let climbing = script_in(
+        scripts.path(),
+        "OutOfBrowsed",
+        "rename = || ''\ndone = || {path: fr.browser_path + '../escaped.txt', contents: 'x'}\n",
+    );
+    let planned = plan(&entries, &Pipeline::new().then(climbing), platform.as_ref());
+    assert!(!planned.is_executable(), "{:?}", planned.ops);
+    assert!(
+        planned.blockers[0].contains("outside the folders"),
+        "{:?}",
+        planned.blockers
+    );
+    assert!(!root.path().join("escaped.txt").exists());
+}
+
+/// Two script steps asking for the same new file would pass a preview that
+/// checks each against the disk alone, and then the second would find the
+/// file the first had just created — a run stopped part-way, blaming "another
+/// program". The plan refuses the run instead, naming the path.
+#[test]
+fn two_script_writes_to_one_file_block_the_run() {
+    let fixture = Fixture::new(&["a.mp3"]);
+    let platform = ren_platform::host();
+    let scripts = TempDir::new().unwrap();
+    let target = fixture.path("list.m3u");
+    let pipeline = Pipeline::new()
+        .then(writer(scripts.path(), "First", &target))
+        .then(writer(scripts.path(), "Second", &target));
+    let planned = plan(&fixture.entries(), &pipeline, platform.as_ref());
+    assert!(!planned.is_executable(), "{:?}", planned.ops);
+    assert_eq!(planned.blockers.len(), 1, "{:?}", planned.blockers);
+    assert!(
+        planned.blockers[0].contains("written twice by this run"),
+        "{:?}",
+        planned.blockers
+    );
+    let error = apply(&planned, platform.as_ref(), &fixture.options()).unwrap_err();
+    assert!(
+        matches!(error, ren_core::ExecError::Blocked { .. }),
+        "{error:?}"
+    );
+    assert!(!target.exists());
+
+    // An existing file named twice is refused the same way: the second write
+    // would silently replace the first.
+    std::fs::write(&target, b"old").unwrap();
+    let planned = plan(&fixture.entries(), &pipeline, platform.as_ref());
+    assert!(!planned.is_executable(), "{:?}", planned.ops);
 }
 
 /// A write planned as a *create* must stay one. The plan decided it replaced

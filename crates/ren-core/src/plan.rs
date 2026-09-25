@@ -98,6 +98,14 @@ pub enum ConflictKind {
         capability: ren_platform::Capability,
         platform: &'static str,
     },
+    /// A tag write or tag removal on a row that is a symbolic link (D241).
+    ///
+    /// The executor never retags through a link (D217: the swap would put a
+    /// plain file where the link was), and a refusal that waited for the run
+    /// stopped it part-way — after the rows before the link had been
+    /// retagged, which no undo can take back. Reported here instead, so the
+    /// preview shows it and the run does not start (P4).
+    TagsThroughLink,
 }
 
 impl fmt::Display for ConflictKind {
@@ -138,6 +146,11 @@ impl fmt::Display for ConflictKind {
                 capability,
                 platform,
             } => write!(f, "{capability} is not supported on {platform}"),
+            Self::TagsThroughLink => write!(
+                f,
+                "this is a symbolic link: its tags are in the file it points to, \
+                 which is not changed through a link"
+            ),
         }
     }
 }
@@ -500,7 +513,7 @@ pub fn plan(entries: &[FileEntry], pipeline: &Pipeline, platform: &dyn Platform)
     let mut notes = outcome.notes;
     let mut blockers = Vec::new();
     if !outcome.writes.is_empty() {
-        let check = WriteCheck::new(&items, &keys, &wanted_keys, platform, any_dir);
+        let mut check = WriteCheck::new(&items, &keys, &wanted_keys, platform, any_dir);
         for write in outcome.writes {
             match check.plan(write) {
                 Ok(op) => ops.push(op),
@@ -589,6 +602,12 @@ fn plan_item(
             platform: platform.name(),
         });
     }
+    if !state.is_conflict()
+        && entry.is_symlink
+        && let Some(conflict) = link_conflict(&actions, platform)
+    {
+        state = RowState::Conflict(conflict);
+    }
 
     // A name that does not validate has no target: `..` would otherwise
     // produce a path pointing at the parent directory, which nothing may
@@ -608,6 +627,37 @@ fn plan_item(
     }
 }
 
+/// What a row that is a symbolic link cannot have done to it (D241).
+///
+/// Both are refusals the executor makes as well — `meta::write` refuses a
+/// link, and the Unix attribute setter refuses read-only on one — but a
+/// refusal that waits for the run stops it part-way (P4). Asked only for a
+/// link row, so an ordinary listing pays nothing for it.
+///
+/// Read-only is asked for only when *setting* it: a link's own mode always
+/// carries the write bits, so clearing read-only on one is a change of
+/// nothing, and the setter lets it through.
+fn link_conflict(actions: &[PlannedAction], platform: &dyn Platform) -> Option<ConflictKind> {
+    use ren_platform::Capability;
+    if actions.iter().any(|a| {
+        matches!(
+            a.effect,
+            Effect::WriteTags { .. } | Effect::RemoveTags { .. }
+        )
+    }) {
+        return Some(ConflictKind::TagsThroughLink);
+    }
+    let sets_read_only = actions
+        .iter()
+        .any(|a| matches!(&a.effect, Effect::Attributes(change) if change.read_only == Some(true)));
+    (sets_read_only && !platform.supports(Capability::LinkReadOnly)).then(|| {
+        ConflictKind::Unsupported {
+            capability: Capability::LinkReadOnly,
+            platform: platform.name(),
+        }
+    })
+}
+
 /// Why a requested write did not become a planned one.
 enum Refused {
     /// Nothing was written and nothing else is affected — a script mistake,
@@ -624,15 +674,27 @@ enum Refused {
 /// the run lists (D108's `browser_path` is that folder by construction). A
 /// script's `done()` may be code somebody else wrote, and the sandbox removes
 /// `io.create` for exactly that reason; a write request that could name any
-/// absolute path gave it straight back. Compared after lexical normalisation,
-/// so `..` cannot climb out, and through the volume's naming rules, so a
-/// differently cased spelling of a listed folder is that folder.
+/// absolute path gave it straight back. Compared through the volume's naming
+/// rules, so a differently cased spelling of a listed folder is that folder.
+///
+/// **Like with like.** The listed folders are keyed as the listing named
+/// them, and a front end may name one through `..` (`std::path::absolute`
+/// keeps it on Unix, so `/w/other/../music` is what the rows and D108's
+/// `browser_path` carry). A write whose own parent is one of those folders,
+/// spelled the same way, and whose last component is a plain name, is in it:
+/// the OS resolves that spelling exactly as it resolved the listing, so the
+/// folder is kept as written. Anything else is compared after lexical
+/// normalisation, so `..` cannot climb out. Normalising the folders as well
+/// would not do: `/w/link/../music` is not `/w/music` when `link` is a
+/// symbolic link.
 ///
 /// Refused as well, because each would make the run fail part-way or undo
 /// lie: a path that is the new name of a row (the write would truncate the
 /// file just renamed there), a file the run renames away (undo could not put
-/// it back over the written one), a folder the run creates, and an existing
-/// folder or link.
+/// it back over the written one), a folder the run creates, an existing
+/// folder or link, and a path another write in the same run already names
+/// (the second would find the first's file and fail as though another
+/// program had put it there).
 ///
 /// Undoability is decided here, against the disk as it is *before* the run:
 /// a file already at the path is an overwrite (`Undoability::None`, P2's
@@ -653,6 +715,9 @@ struct WriteCheck<'a> {
     /// Where the run leaves each listed path that it moves, by the key of the
     /// path — so a write aimed at a folder the run renames lands in it.
     landings: HashMap<String, &'a Path>,
+    /// Every write planned so far, by the key of where it lands, lexically
+    /// normalised so two spellings of one file are one key.
+    planned: HashSet<String>,
 }
 
 impl<'a> WriteCheck<'a> {
@@ -706,10 +771,11 @@ impl<'a> WriteCheck<'a> {
                 .collect(),
             wanted,
             landings,
+            planned: HashSet::new(),
         }
     }
 
-    fn plan(&self, write: crate::ops::FileWrite) -> Result<PlannedOp, Refused> {
+    fn plan(&mut self, write: crate::ops::FileWrite) -> Result<PlannedOp, Refused> {
         // Absolute only (P60). A relative path would resolve against the
         // process's working directory, which is not a folder the user chose
         // and, for the GUI, is wherever the app happened to be launched from.
@@ -719,14 +785,34 @@ impl<'a> WriteCheck<'a> {
                 write.path.display()
             )));
         }
-        let path = normalize_lexically(&write.path);
+        let rules = self.platform.naming_rules(&write.path);
+        let in_listed = |path: &Path| {
+            matches!(path.components().next_back(), Some(Component::Normal(_)))
+                && path
+                    .parent()
+                    .is_some_and(|folder| self.folders.contains(&path_key(folder, rules)))
+        };
+        // As named first — the folder spelled as written, then the file's own
+        // name — so a listing named through `..` is compared with a write
+        // named the same way; normalised only when that fails.
+        let as_named = write
+            .path
+            .parent()
+            .zip(write.path.file_name())
+            .map(|(folder, name)| folder.join(name))
+            .filter(|path| in_listed(path));
+        let (path, in_listed_folder) = match as_named {
+            Some(path) => (path, true),
+            None => {
+                let path = normalize_lexically(&write.path);
+                let inside = in_listed(&path);
+                (path, inside)
+            }
+        };
         let rules = self.platform.naming_rules(&path);
         let shown = path.display();
         let blocked = |why: &str| Err(Refused::Blocked(format!("script: {shown} {why}")));
 
-        let in_listed_folder = path
-            .parent()
-            .is_some_and(|folder| self.folders.contains(&path_key(folder, rules)));
         if !in_listed_folder {
             // The one way a well-meaning script ends up here: `fr.path` of a
             // folder whose name is not text carries U+FFFD (D159), and the
@@ -760,8 +846,15 @@ impl<'a> WriteCheck<'a> {
             Err(_) => Undoability::Full,
         };
 
+        let landing = self.landing(path.clone(), rules);
+        if !self
+            .planned
+            .insert(path_key(&normalize_lexically(&landing), rules))
+        {
+            return blocked("is written twice by this run");
+        }
         Ok(PlannedOp::WriteFile {
-            path: self.landing(path, rules),
+            path: landing,
             contents: write.contents,
             undoability,
         })

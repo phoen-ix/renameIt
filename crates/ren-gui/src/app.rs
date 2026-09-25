@@ -2325,6 +2325,18 @@ impl RenameItApp {
         self.rename_file(&path, new_name);
     }
 
+    /// Whether the listing is out of date — a run, an F2 rename or an undo
+    /// has just moved files and the relist it asked for has not landed — and
+    /// if so says that F2 has to wait for it. The rows in hand name files
+    /// that may be gone, the rule `run` applies to the Rename button.
+    fn list_is_updating(&mut self) -> bool {
+        let updating = self.session.relist_wanted || self.listing.is_listing();
+        if updating {
+            self.status = Some("The file list is updating — press F2 again in a moment".to_owned());
+        }
+        updating
+    }
+
     /// F2's one-off rename. Journalled like any other batch, so Undo covers it.
     ///
     /// **By path**: the editor belongs to the file it was opened on, and a
@@ -2336,6 +2348,11 @@ impl RenameItApp {
         // would land on the Undo list ahead of the run it came after.
         if self.jobs.is_busy() {
             self.status = Some("A run is still going — rename it when that is done".to_owned());
+            return;
+        }
+        // The same gap `run` refuses in: straight after a run or an undo the
+        // row this editor was opened on may name a file that run replaced.
+        if self.list_is_updating() {
             return;
         }
         let Some(index) = self
@@ -2420,11 +2437,24 @@ impl RenameItApp {
         // disk, and an F2 rename is a run of one; a user dry-running a
         // pipeline who presses Enter in the editor has not stopped meaning it.
         let simulate = self.simulate;
-        match self
-            .history
-            .run(&plan, self.platform.as_ref(), simulate, false)
-        {
-            Ok(_) if simulate => {
+        let options = self.history.run_options(simulate, false);
+        match ren_core::apply(&plan, self.platform.as_ref(), &options) {
+            // Nothing was renamed, so neither the log nor the Undo list has
+            // anything new to hold: the last run's log stays on screen, the
+            // status says what went wrong, and the editor does not move on as
+            // though it had worked.
+            Ok(report) if !report.failed.is_empty() => {
+                let why = report
+                    .failed
+                    .first()
+                    .map_or("", |(_, error)| error.as_str());
+                self.status = Some(format!(
+                    "Could not rename {} to {new_name}: {why}",
+                    entry.file_name
+                ));
+            }
+            Ok(report) if simulate => {
+                self.history.record_run(&report, simulate);
                 self.status = Some(format!(
                     "Simulated: renamed to {new_name} — nothing was written"
                 ));
@@ -2432,6 +2462,7 @@ impl RenameItApp {
                 self.open_editor_on_the_next_row(successor);
             }
             Ok(report) => {
+                self.history.record_run(&report, simulate);
                 self.status = Some(format!("Renamed to {new_name}"));
                 self.thumbs.renamed(&report.renamed);
                 // Through the report, like a run's: Free Select follows the
@@ -2781,8 +2812,8 @@ impl RenameItApp {
         if f9 {
             self.forget_and_relist();
         }
-        // Both are shortcuts for the Undo button: Ctrl+Z is the modern
-        // spelling, and F4 the one long-time renaming tools trained people on.
+        // Both are shortcuts for the Undo button: Ctrl+Z, and F4 beside F5
+        // (Rename).
         if undo || f4 {
             self.undo();
         }
@@ -2793,6 +2824,9 @@ impl RenameItApp {
     fn open_inline_rename(&mut self, index: usize) {
         if self.jobs.is_busy() {
             self.status = Some("A run is still going — rename it when that is done".to_owned());
+            return;
+        }
+        if self.list_is_updating() {
             return;
         }
         if let Some(entry) = self.session.entries().get(index) {
@@ -3202,12 +3236,41 @@ impl eframe::App for RenameItApp {
         eframe::set_value(storage, STORAGE_KEY, &self.persisted());
     }
 
+    /// Called before every ui pass, and on its own while the window is
+    /// minimised or hidden — when eframe runs no ui pass at all.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.logic_pass(ctx);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.show(ui);
     }
 }
 
 impl RenameItApp {
+    /// What must happen whether or not the window is drawn: a job landing,
+    /// and a close request held back while one is out.
+    ///
+    /// **Here, not only in [`Self::show`].** eframe does not call `ui` for a
+    /// minimised window, only `logic` — and a close from the taskbar arrives
+    /// exactly then. A close held back in `ui` alone was granted there, and
+    /// killed an undo part-way; and a job landing while the window stayed
+    /// hidden never reached `close_if_idle`, so a held close waited for the
+    /// window to be restored. Nothing here draws. `show` calls it too, so a
+    /// test driving `show` alone sees the same, and a second call in one frame
+    /// changes nothing.
+    fn logic_pass(&mut self, ctx: &egui::Context) {
+        self.handle_close_request(ctx);
+        // A job that finished since the last frame, first: what it did asks
+        // for a relist, and the request goes out straight away (in `show`) —
+        // before any listing is installed — so an older walk that finished
+        // in the meantime is dropped rather than handed what the job left
+        // waiting for this one (a hand-set order, the Free Select set's new
+        // paths).
+        self.poll_jobs();
+        self.close_if_idle(Some(ctx));
+    }
+
     /// The whole window, independent of eframe so tests can drive it.
     pub fn show(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
@@ -3222,20 +3285,16 @@ impl RenameItApp {
             self.instant = false;
             ctx.all_styles_mut(|style| style.animation_time = 0.0);
         }
-        self.handle_close_request(&ctx);
-
         // Last frame's drawer action, applied now that its borrow is gone.
         if std::mem::take(&mut self.needs_menu_rewrite) {
             self.rewrite_menu();
         }
 
-        // A job that finished since the last frame, first: what it did asks
-        // for a relist, and the request goes out straight away — before any
-        // listing is installed — so an older walk that finished in the
-        // meantime is dropped rather than handed what the job left waiting
-        // for this one (a hand-set order, the Free Select set's new paths).
-        self.poll_jobs();
-        self.close_if_idle(Some(&ctx));
+        // The close request and the job that landed: already done by eframe's
+        // `logic` this frame, and done here again for whoever drives `show`
+        // alone. Then the relist the job asked for, before any listing is
+        // installed.
+        self.logic_pass(&ctx);
         self.drain_listing_request();
         self.poll_listing();
 
@@ -4544,6 +4603,70 @@ mod tests {
         assert!(!commands.contains(&egui::ViewportCommand::CancelClose));
     }
 
+    /// **The same while the window is minimised.** eframe runs no ui pass for
+    /// a hidden window, only `App::logic` — and a close from the taskbar
+    /// arrives exactly then. Held there too, and the job landing while the
+    /// window is still hidden closes it.
+    #[test]
+    fn a_close_while_minimised_waits_for_the_job_that_is_out() {
+        let dir = tempfile::TempDir::new().unwrap();
+        for name in ["a_1.txt", "a_2.txt"] {
+            std::fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        let journal = tempfile::TempDir::new().unwrap();
+        let gate = Arc::new((
+            std::sync::Mutex::new((false, false)),
+            std::sync::Condvar::new(),
+        ));
+        let mut app = RenameItApp::headless_with_platform(
+            dir.path().to_path_buf(),
+            journal.path().to_path_buf(),
+            Arc::new(GatedPlatform {
+                inner: ren_platform::host(),
+                gate: gate.clone(),
+                first: std::sync::atomic::AtomicBool::new(true),
+            }),
+        );
+        *app.operation_mut() = OpKind::Replace(ren_core::ops::Replace::new("_", "-"));
+        app.settle();
+        app.run();
+        assert!(app.is_running());
+
+        // What eframe does for a hidden window: `run_logic`, no ui pass.
+        let ctx = egui::Context::default();
+        let hidden = |app: &mut RenameItApp, close: bool| {
+            let mut input = egui::RawInput::default();
+            let viewport = input.viewports.entry(egui::ViewportId::ROOT).or_default();
+            viewport.minimized = Some(true);
+            if close {
+                viewport.events.push(egui::ViewportEvent::Close);
+            }
+            ctx.run_logic(&input, |ctx| app.logic_pass(ctx))
+                .viewport_commands
+                .get(&egui::ViewportId::ROOT)
+                .cloned()
+                .unwrap_or_default()
+        };
+
+        let commands = hidden(&mut app, true);
+        assert!(
+            commands.contains(&egui::ViewportCommand::CancelClose),
+            "{commands:?}"
+        );
+
+        let (state, signal) = &*gate;
+        state.lock().unwrap().0 = true;
+        signal.notify_all();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut closed = false;
+        while !closed && std::time::Instant::now() < deadline {
+            closed = hidden(&mut app, false).contains(&egui::ViewportCommand::Close);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(closed, "the job landed and the window stayed open");
+        assert_eq!(names_on_disk(dir.path()), ["a-1.txt", "a-2.txt"]);
+    }
+
     /// The host, with two switches a test can throw: a folder it calls the
     /// operating system's, and a rename that panics.
     struct Hooked {
@@ -4669,6 +4792,153 @@ mod tests {
         );
     }
 
+    /// F2 is a run of one, and the same gap applies: straight after a run
+    /// the row under the editor names a file that run replaced. Refused like
+    /// a press of Rename, both when opening the editor and on Enter, and the
+    /// run's log stays the one on screen.
+    #[test]
+    fn f2_before_the_relist_lands_is_refused() {
+        let (dir, mut app) = listing(&["a_1.txt", "b.txt"]);
+        app.run();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !app.poll_jobs() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(names_on_disk(dir.path()), ["a 1.txt", "b.txt"]);
+        assert!(app.session.relist_wanted);
+
+        app.open_inline_rename(0);
+        assert!(app.inline_rename.is_none());
+        assert!(
+            app.status
+                .as_deref()
+                .unwrap_or_default()
+                .contains("updating"),
+            "{:?}",
+            app.status
+        );
+
+        app.rename_one(0, "z.txt".to_owned());
+        let status = app.status.clone().unwrap_or_default();
+        assert!(status.contains("updating"), "{status}");
+        assert!(!status.contains("Renamed to"), "{status}");
+        assert_eq!(names_on_disk(dir.path()), ["a 1.txt", "b.txt"]);
+        assert_eq!(app.history.batches.len(), 1);
+        assert!(
+            app.history
+                .log
+                .iter()
+                .any(|line| matches!(line, crate::viewmodel::LogLine::Renamed { .. })),
+            "the run's log is still the one on screen"
+        );
+    }
+
+    /// An F2 rename that fails says so. It used to report "Renamed to …",
+    /// replace the last run's log with the failure, and jump the editor to
+    /// the next row as though it had worked.
+    #[test]
+    fn a_failed_f2_says_so_and_keeps_the_log() {
+        let (dir, mut app) = listing(&["a_1.txt", "b.txt", "c.txt"]);
+        app.run();
+        app.settle();
+        assert_eq!(names_on_disk(dir.path()), ["a 1.txt", "b.txt", "c.txt"]);
+        let log = app.history.log.clone();
+        assert!(!log.is_empty());
+
+        // Gone behind the listing's back, so the rename fails in the engine.
+        std::fs::remove_file(dir.path().join("b.txt")).unwrap();
+        let row = app
+            .session
+            .entries()
+            .iter()
+            .position(|e| e.file_name == "b.txt")
+            .unwrap();
+        app.rename_one(row, "z.txt".to_owned());
+
+        let status = app.status.clone().unwrap_or_default();
+        assert!(!status.contains("Renamed to"), "{status}");
+        assert!(status.contains("b.txt"), "{status}");
+        assert_eq!(app.history.log, log, "the last run's log was replaced");
+        assert_eq!(app.history.batches.len(), 1);
+        assert!(
+            app.after_listing.is_none(),
+            "the editor moves on as if it worked"
+        );
+        assert_eq!(names_on_disk(dir.path()), ["a 1.txt", "c.txt"]);
+    }
+
+    /// Free Select holds a folder and a file inside it, both renamed by the
+    /// run: they are followed through the run and back through its undo,
+    /// which reverses the folder before the file.
+    #[test]
+    fn free_select_follows_a_folder_and_its_file_through_a_run_and_its_undo() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir(dir.path().join("x")).unwrap();
+        std::fs::write(dir.path().join("x/f.txt"), b"x").unwrap();
+        let journal = tempfile::TempDir::new().unwrap();
+        let mut app = RenameItApp::headless(dir.path().to_path_buf(), journal.path().to_path_buf());
+        app.settle();
+        app.session_mut()
+            .add_to_free_select(vec![dir.path().join("x"), dir.path().join("x/f.txt")]);
+        *app.operation_mut() = OpKind::Casing(Casing::new(CaseMode::Upper));
+        app.settle();
+
+        app.run();
+        app.settle();
+        assert_eq!(
+            app.session.free_select,
+            [dir.path().join("X"), dir.path().join("X/F.txt")]
+        );
+
+        app.undo();
+        app.settle();
+        assert_eq!(
+            app.session.free_select,
+            [dir.path().join("x"), dir.path().join("x/f.txt")]
+        );
+        assert!(
+            app.session.problems.is_empty(),
+            "{:?}",
+            app.session.problems
+        );
+        assert_eq!(app.session.entries().len(), 2);
+    }
+
+    /// A file under two folders the same run renames is followed through
+    /// both.
+    #[test]
+    fn free_select_follows_a_file_through_two_renamed_folders() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("x/sub")).unwrap();
+        std::fs::write(dir.path().join("x/sub/f.txt"), b"x").unwrap();
+        let journal = tempfile::TempDir::new().unwrap();
+        let mut app = RenameItApp::headless(dir.path().to_path_buf(), journal.path().to_path_buf());
+        app.settle();
+        app.session_mut().add_to_free_select(vec![
+            dir.path().join("x"),
+            dir.path().join("x/sub"),
+            dir.path().join("x/sub/f.txt"),
+        ]);
+        *app.operation_mut() = OpKind::Casing(Casing::new(CaseMode::Upper));
+        app.settle();
+
+        app.run();
+        app.settle();
+        assert_eq!(
+            app.session.free_select,
+            [
+                dir.path().join("X"),
+                dir.path().join("X/SUB"),
+                dir.path().join("X/SUB/F.txt"),
+            ]
+        );
+        assert!(
+            app.session.problems.is_empty(),
+            "{:?}",
+            app.session.problems
+        );
+    }
+
     /// An undo that panics is an undo that failed, said out loud — it used to
     /// come back labelled as a run, find no run out, and vanish.
     #[test]
@@ -4776,7 +5046,7 @@ mod tests {
     /// F2 is not a second job beside the one that is out: it would rename a
     /// file the run may still reach, and land on the undo stack out of order.
     #[test]
-    fn f2_waits_for_the_run_that_is_out() {
+    fn f2_is_refused_while_a_run_is_out() {
         let dir = tempfile::TempDir::new().unwrap();
         for name in ["a_1.txt", "a_2.txt"] {
             std::fs::write(dir.path().join(name), b"x").unwrap();

@@ -612,15 +612,14 @@ impl Platform for UnixPlatform {
         }
         // `chmod` follows a link to its target, and Linux has no `lchmod`:
         // the link's own mode is fixed and ignored. Changing the target
-        // instead would change a file no row is about.
+        // instead would change a file no row is about. Refused as the
+        // capability this platform does not advertise, so the words match
+        // the conflict the preview already showed for the row (D241).
         if md.file_type().is_symlink() {
-            return Err(PlatformError::io(
-                path,
-                std::io::Error::new(
-                    std::io::ErrorKind::Unsupported,
-                    "a symbolic link has no read-only setting of its own here",
-                ),
-            ));
+            return Err(PlatformError::CapabilityUnsupported {
+                capability: Capability::LinkReadOnly,
+                platform: PLATFORM,
+            });
         }
         std::fs::set_permissions(path, PermissionsExt::from_mode(next))
             .map_err(|e| PlatformError::io(path, e))

@@ -753,21 +753,24 @@ impl Journal {
     /// A journal this build does not fully understand is skipped rather than
     /// offered: the Undo button must never propose something `undo_transaction`
     /// will then refuse. It is skipped rather than fatal for the same reason —
-    /// one file from a newer build must not make the older build unusable. A
-    /// journal a run in another window is still writing is skipped too: it is
-    /// not a finished batch, and `undo_transaction` would refuse it.
+    /// one file from a newer build must not make the older build unusable.
     ///
-    /// A journal that cannot be *read* is still an error, deliberately. It
-    /// may be the newest batch, and skipping it would undo the one beneath —
-    /// an older batch reverted while the newer one stays applied, which is
-    /// worse than a refusal that names the file. A torn last line no longer
-    /// makes a journal unreadable ([`Self::read`]).
+    /// Two kinds of journal stop the walk instead, deliberately, because
+    /// either may be the newest batch and skipping it would undo the one
+    /// beneath — an older batch reverted while the newer one stays applied,
+    /// which is worse than a refusal that names the file:
+    ///
+    /// - one that cannot be *read* (a torn last line no longer makes a journal
+    ///   unreadable, [`Self::read`]);
+    /// - one a run in another window is still writing
+    ///   ([`ExecError::JournalInUse`]). That run may be moving the very files
+    ///   the older batch would put back, and it is refused until it is over.
+    ///
+    /// The list is walked newest first and the first candidate returns, so
+    /// either stop is always newer than anything this call could offer.
     pub fn latest_undoable(dir: &Path) -> Result<Option<PathBuf>, ExecError> {
         for path in Self::list(dir)? {
-            let mut file = match Self::open_idle(&path) {
-                Err(ExecError::JournalInUse { .. }) => continue,
-                other => other?,
-            };
+            let mut file = Self::open_idle(&path)?;
             let lines = Self::read_from(&mut file, &path)?;
             if !lines.iter().all(Line::understood) {
                 continue;
@@ -914,6 +917,61 @@ mod tests {
         )
         .unwrap();
         assert_eq!(Journal::latest_undoable(dir.path()).unwrap(), None);
+    }
+
+    /// A run still going on in another window is the newest batch. Offering
+    /// the finished one beneath it would revert an older batch while the newer
+    /// one is still moving files — possibly the same files — so the answer is
+    /// a refusal until that run is over, the same rule as for a journal that
+    /// cannot be read.
+    #[test]
+    fn a_live_journal_newer_than_every_finished_one_refuses_undo() {
+        let dir = TempDir::new().unwrap();
+        let mut first = Journal::create(dir.path()).unwrap();
+        first
+            .write(Record::PlanRename {
+                seq: 0,
+                from: "/x/a".into(),
+                to: "/x/b".into(),
+            })
+            .unwrap();
+        first.write(Record::Completed { seq: 0 }).unwrap();
+        first
+            .write(Record::Commit {
+                renamed: 1,
+                failed: 0,
+            })
+            .unwrap();
+        let first_path = first.path().to_path_buf();
+        drop(first);
+
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let mut live = Journal::create(dir.path()).unwrap();
+        live.write(Record::PlanRename {
+            seq: 0,
+            from: "/x/b".into(),
+            to: "/x/c".into(),
+        })
+        .unwrap();
+        live.write(Record::Completed { seq: 0 }).unwrap();
+
+        let offered = Journal::latest_undoable(dir.path());
+        assert!(
+            matches!(offered, Err(ExecError::JournalInUse { ref path }) if path == live.path()),
+            "{offered:?}"
+        );
+
+        // Once the run is over it is the newest batch, and the one offered.
+        let live_path = live.path().to_path_buf();
+        drop(live);
+        assert_eq!(
+            Journal::latest_undoable(dir.path()).unwrap(),
+            Some(live_path)
+        );
+        assert_ne!(
+            Journal::latest_undoable(dir.path()).unwrap(),
+            Some(first_path)
+        );
     }
 
     /// Every journal M1–M4 wrote lacks a `v` field entirely.

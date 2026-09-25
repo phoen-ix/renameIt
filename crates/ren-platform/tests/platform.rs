@@ -400,6 +400,33 @@ fn every_capability_the_platform_claims_it_can_do_it_actually_does() {
                     ..Default::default()
                 },
             ),
+            // On a link to the fixture, which is what the capability is about.
+            // A Windows account without the right to create links skips it.
+            Capability::LinkReadOnly => {
+                let link = file.with_file_name("link.txt");
+                #[cfg(unix)]
+                let made = std::os::unix::fs::symlink(&file, &link);
+                #[cfg(windows)]
+                let made = std::os::windows::fs::symlink_file(&file, &link);
+                if made.is_err() {
+                    continue;
+                }
+                let attempt = platform.set_attributes(
+                    &link,
+                    AttributeChange {
+                        read_only: Some(true),
+                        ..Default::default()
+                    },
+                );
+                let _ = platform.set_attributes(
+                    &link,
+                    AttributeChange {
+                        read_only: Some(false),
+                        ..Default::default()
+                    },
+                );
+                attempt
+            }
             // Spawning a file manager in CI is not something a test should do.
             Capability::RevealInFileManager => continue,
             // Covered by `shell::tests`, which round-trips the real keys under

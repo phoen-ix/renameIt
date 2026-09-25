@@ -66,6 +66,11 @@ impl UndoReport {
 }
 
 /// Undoes the newest transaction in `journal_dir` that has not been undone yet.
+///
+/// Refused with [`ExecError::JournalInUse`] while a run in another window is
+/// still writing a newer journal: that run is the newest batch, and undoing
+/// the one beneath it would move files underneath it
+/// ([`Journal::latest_undoable`]).
 pub fn undo_last(platform: &dyn Platform, journal_dir: &Path) -> Result<UndoReport, ExecError> {
     let path = Journal::latest_undoable(journal_dir)?
         .ok_or_else(|| ExecError::NothingToUndo(journal_dir.to_path_buf()))?;

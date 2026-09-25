@@ -19,6 +19,10 @@ pub(crate) struct Spy {
     pub inner: Arc<dyn Platform>,
     /// `replace_file` fails.
     pub fail_swap: bool,
+    /// `replace_file` fails the way Windows' `ERROR_UNABLE_TO_MOVE_REPLACEMENT`
+    /// does when the move back fails too: the target is removed and the new
+    /// contents are left at `temp` alone (`PlatformError::ReplacedButNotMoved`).
+    pub strand_swap: bool,
     /// `set_times` fails.
     pub fail_dates: bool,
     /// How many times `replace_file` was called, failures included.
@@ -32,6 +36,7 @@ impl Default for Spy {
         Self {
             inner: ren_platform::host(),
             fail_swap: false,
+            strand_swap: false,
             fail_dates: false,
             swaps: AtomicUsize::new(0),
             notified: Mutex::new(Vec::new()),
@@ -70,6 +75,17 @@ impl Platform for Spy {
         self.swaps.fetch_add(1, Ordering::SeqCst);
         if self.fail_swap {
             return Err(Self::refuse(target, "the swap"));
+        }
+        if self.strand_swap {
+            std::fs::remove_file(target).map_err(|e| PlatformError::Io {
+                path: target.to_path_buf(),
+                source: e,
+            })?;
+            return Err(PlatformError::ReplacedButNotMoved {
+                temp: temp.to_path_buf(),
+                target: target.to_path_buf(),
+                source: std::io::Error::other("the move back failed, as the test asked"),
+            });
         }
         self.inner.replace_file(temp, target)
     }
