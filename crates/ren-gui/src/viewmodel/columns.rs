@@ -17,8 +17,8 @@ use serde::{Deserialize, Serialize};
 
 use super::SortColumn;
 
-/// The two things about the table that are not columns — the Display page's
-/// Display page has both.
+/// The two things about the table that are not columns. Settings ▸ Display
+/// has both.
 ///
 /// Here rather than in a module of their own: this file is already what the
 /// table's appearance is decided in, and two booleans do not need a third file
@@ -26,7 +26,7 @@ use super::SortColumn;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TableStyle {
-    /// > *"Draw gray background on every other row"*
+    /// A grey background on every other row.
     ///
     /// **On by default** (P91). P70 already
     /// waived "Show Guidelines" on the grounds that this is "the thing that
@@ -34,8 +34,7 @@ pub struct TableStyle {
     /// take the window's spare width instead of collapsing to their content,
     /// every row is a wide row.
     pub stripes: bool,
-    /// > *"Full Row Select - Normally you must click on the filename to select
-    /// > it. This option allows you to click anywhere on the row."*
+    /// A click anywhere on a row selects it, not only a click on the name.
     ///
     /// Off by default — and it was the only behaviour until now, since only
     /// the Name cell ever sensed a click.
@@ -56,11 +55,8 @@ impl Default for TableStyle {
 pub enum ColumnKind {
     /// A small picture of the file, for the formats `image` can decode.
     ///
-    /// > *"In thumbnail mode image files will show as a small preview of the
-    /// > image."*
-    ///
-    /// A column as well as a view (D133): which of the two a single checkbox
-    /// ought to mean is genuinely ambiguous, so it is offered as a preference
+    /// A column as well as a view (D133): a grid of pictures and a picture
+    /// beside each name are both useful, so it is offered as a preference
     /// rather than settled by fiat. Turning it on makes every
     /// row in the table taller, because a row is as tall as its tallest cell.
     Thumbnail,

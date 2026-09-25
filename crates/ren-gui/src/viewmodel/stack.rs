@@ -225,10 +225,12 @@ impl CardStack {
 
     /// The runnable pipeline.
     ///
-    /// Always through `OpKind::to_transform()`, which clones — and a clone
-    /// resets the operation's compiled cache (D21). That is the only reason
-    /// editing a `Replace`'s pattern takes effect at all, so this must never
-    /// become a partial rebuild that reuses transforms across edits.
+    /// Always through `OpKind::to_step()`, which clones — and a clone resets
+    /// the operation's compiled cache (D21). That is what makes an edited
+    /// `Replace` pattern take effect in the preview, so this must never become
+    /// a partial rebuild that reuses transforms across edits. (The card's own
+    /// copy is reset separately, by `OpKind::refresh` after each edit, for the
+    /// summary and the problem line it draws.)
     pub fn to_pipeline(
         &self,
         inherited: Option<&FilterForm>,

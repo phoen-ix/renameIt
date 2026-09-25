@@ -99,9 +99,23 @@ toml = "1.1.4"
 walkdir = "2.5.0"
 
 # GUI (D4). D14: glow backend only — the wgpu tree never enters the graph.
+#
+# `default-features = false` is for `wgpu`, and it takes two defaults with it
+# that are named back here, because nothing fails without them:
+# * `accesskit` — the OS accessibility adapter (UIA on Windows, AT-SPI on
+#   Linux). Without it the app builds its accessibility tree for the kittest
+#   suite and hands it to no screen reader at all, so every accessible name
+#   in the panels reached the tests and nobody else.
+# * `links` — `webbrowser`, which is how a hyperlink opens. Without it the
+#   About window's repository link logs a warning and does nothing.
+# Both trees are MIT/Apache-2.0 (`cargo deny` checks them). CI asserts the
+# `accesskit` feature is still on, since losing it again would pass every
+# test.
 eframe = { version = "0.36.1", default-features = false, features = [
+    "accesskit",
     "default_fonts",
     "glow",
+    "links",
     "persistence",
     "wayland",
     "x11",

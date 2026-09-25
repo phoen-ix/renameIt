@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use ren_core::{Counts, Plan};
+use ren_core::{Counts, Plan, PlannedOp};
 
 use crate::viewmodel::{History, RowFilter, Session};
 
@@ -33,6 +33,9 @@ pub struct PreviewState<'a> {
     pub job: Option<crate::viewmodel::InFlight>,
     /// The run out has been asked to stop and has not answered yet.
     pub cancelling: bool,
+    /// A relist is out, so the plan on screen is over rows that may be gone
+    /// — after a run, over the names it just replaced.
+    pub listing: bool,
 }
 
 pub fn ui(
@@ -50,14 +53,16 @@ pub fn ui(
         failure,
         job,
         cancelling,
+        listing,
     } = preview;
 
     // One pass over the plan for every number this bar shows, rather than
     // one pass per number per place it is shown.
     let counts = plan.map(Plan::counts);
+    let writes = plan.map_or(0, writes);
 
     ui.horizontal(|ui| {
-        ui.label(summary(session, counts));
+        ui.label(summary(session, counts, writes));
         if stale {
             // Deliberately not a spinner: an animated widget asks egui to
             // repaint forever, which never settles in a headless test and
@@ -78,6 +83,7 @@ pub fn ui(
                     format!("Renaming {} of {}…", job.done, job.total)
                 }
                 crate::viewmodel::JobKind::Undo => "Undoing…".to_owned(),
+                crate::viewmodel::JobKind::Rollback => "Rolling back…".to_owned(),
             };
             ui.label(egui::RichText::new(text).italics());
             if job.kind == crate::viewmodel::JobKind::Run {
@@ -123,8 +129,17 @@ pub fn ui(
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let blocked = if job.is_some() {
                 Some("A run is still going.".to_owned())
+            } else if listing {
+                Some("Listing… the preview is for the rows as they were.".to_owned())
             } else {
-                blocked_reason(counts, pipeline_empty, session.guarded.as_deref(), failure)
+                blocked_reason(
+                    counts,
+                    writes,
+                    plan.map_or(&[][..], |plan| &plan.blockers[..]),
+                    pipeline_empty,
+                    session.guarded.as_deref(),
+                    failure,
+                )
             };
             // "Run simulation", not "Simulate": the checkbox beside it is
             // already called Simulate, and two adjacent controls with the same
@@ -194,28 +209,46 @@ pub fn ui(
 /// either. The suppression rule is the same lesson `blocked_reason` learned —
 /// an action-only run changes no *names*, and saying "0 will be renamed" next
 /// to "2 will be modified" is noise.
+///
+/// A file a script writes is its own clause: it is not a row, so neither of
+/// the other two counts it, and it is the one thing a script does beyond
+/// renaming.
 pub(crate) fn plan_clauses(plan: &Plan) -> Vec<String> {
-    clauses(plan.counts())
+    clauses(plan.counts(), writes(plan))
 }
 
-fn clauses(counts: Counts) -> Vec<String> {
+/// How many files the plan asks to write — a script's `done()`, M7.
+pub(crate) fn writes(plan: &Plan) -> usize {
+    plan.ops
+        .iter()
+        .filter(|op| matches!(op, PlannedOp::WriteFile { .. }))
+        .count()
+}
+
+fn clauses(counts: Counts, writes: usize) -> Vec<String> {
     let mut parts = Vec::new();
-    if counts.changed > 0 || counts.acted == 0 {
+    if counts.changed > 0 || (counts.acted == 0 && writes == 0) {
         parts.push(format!("{} will be renamed", counts.changed));
     }
     if counts.acted > 0 {
         parts.push(format!("{} will be modified", counts.acted));
     }
+    if writes > 0 {
+        parts.push(format!(
+            "{} will be written",
+            ren_core::plural(writes, "file")
+        ));
+    }
     parts
 }
 
-fn summary(session: &Session, counts: Option<Counts>) -> String {
+fn summary(session: &Session, counts: Option<Counts>, writes: usize) -> String {
     let total = session.entries().len();
     let Some(counts) = counts else {
         return ren_core::plural(total, "item");
     };
     let mut parts = vec![ren_core::plural(total, "item")];
-    parts.extend(clauses(counts));
+    parts.extend(clauses(counts, writes));
     if counts.conflicts > 0 {
         parts.push(ren_core::plural(counts.conflicts, "conflict"));
     }
@@ -238,11 +271,20 @@ pub fn blocked_reason_for(
     guarded: Option<&Path>,
     failure: Option<&str>,
 ) -> Option<String> {
-    blocked_reason(plan.map(Plan::counts), pipeline_empty, guarded, failure)
+    blocked_reason(
+        plan.map(Plan::counts),
+        plan.map_or(0, writes),
+        plan.map_or(&[][..], |plan| &plan.blockers[..]),
+        pipeline_empty,
+        guarded,
+        failure,
+    )
 }
 
 fn blocked_reason(
     counts: Option<Counts>,
+    writes: usize,
+    blockers: &[String],
     pipeline_empty: bool,
     guarded: Option<&Path>,
     failure: Option<&str>,
@@ -282,10 +324,17 @@ fn blocked_reason(
             counts.conflicts
         ));
     }
+    // A reason that belongs to no row — a script write outside the listed
+    // folders. The engine refuses the plan for it (`Plan::is_executable`), so
+    // the button has to say it before the user presses.
+    if let Some(first) = blockers.first() {
+        return Some(first.clone());
+    }
     // `affected`, not `changed`: an action-only pipeline changes no *names*,
     // and reporting that as "nothing would change" disabled the button with a
-    // message that was simply false.
-    if counts.affected == 0 {
+    // message that was simply false. A script that only writes a file is the
+    // same case again.
+    if counts.affected == 0 && writes == 0 {
         return Some("Nothing would change.".to_owned());
     }
     None
@@ -342,7 +391,7 @@ mod tests {
     #[test]
     fn an_action_only_plan_does_not_claim_nothing_would_change() {
         assert_eq!(
-            blocked_reason(Some(acted_plan(3).counts()), false, None, None),
+            blocked_reason(Some(acted_plan(3).counts()), 0, &[], false, None, None),
             None
         );
     }
@@ -351,7 +400,7 @@ mod tests {
     /// rather than look like a folder with nothing listed.
     #[test]
     fn a_failed_preview_names_the_failure() {
-        let reason = blocked_reason(None, false, None, Some("boom")).expect("should block");
+        let reason = blocked_reason(None, 0, &[], false, None, Some("boom")).expect("should block");
         assert!(reason.contains("boom"), "{reason}");
     }
 
@@ -359,7 +408,7 @@ mod tests {
     fn a_plan_that_neither_renames_nor_acts_still_says_nothing_would_change() {
         let plan = plan_with(&[RowState::Unchanged, RowState::Unchanged]);
         assert_eq!(
-            blocked_reason(Some(plan.counts()), false, None, None).as_deref(),
+            blocked_reason(Some(plan.counts()), 0, &[], false, None, None).as_deref(),
             Some("Nothing would change.")
         );
     }
@@ -383,13 +432,17 @@ mod tests {
     #[test]
     fn a_clean_plan_does_not_block_the_button() {
         let plan = plan_with(&[RowState::Changed]);
-        assert_eq!(blocked_reason(Some(plan.counts()), false, None, None), None);
+        assert_eq!(
+            blocked_reason(Some(plan.counts()), 0, &[], false, None, None),
+            None
+        );
     }
 
     #[test]
     fn a_plan_with_nothing_to_do_says_so() {
         let plan = plan_with(&[RowState::Unchanged]);
-        let reason = blocked_reason(Some(plan.counts()), false, None, None).expect("should block");
+        let reason =
+            blocked_reason(Some(plan.counts()), 0, &[], false, None, None).expect("should block");
         assert!(reason.contains("Nothing"), "{reason}");
     }
 
@@ -400,7 +453,8 @@ mod tests {
             RowState::Changed,
             RowState::Conflict(ren_core::ConflictKind::TargetExists),
         ]);
-        let reason = blocked_reason(Some(plan.counts()), false, None, None).expect("should block");
+        let reason =
+            blocked_reason(Some(plan.counts()), 0, &[], false, None, None).expect("should block");
         assert!(reason.contains("collide"), "{reason}");
         assert!(reason.contains("overwrite"), "{reason}");
     }
@@ -408,7 +462,8 @@ mod tests {
     #[test]
     fn errors_block_the_run_too() {
         let plan = plan_with(&[RowState::Error("bad regex".into())]);
-        let reason = blocked_reason(Some(plan.counts()), false, None, None).expect("should block");
+        let reason =
+            blocked_reason(Some(plan.counts()), 0, &[], false, None, None).expect("should block");
         assert!(reason.contains("previewed"), "{reason}");
     }
 
@@ -417,17 +472,44 @@ mod tests {
     #[test]
     fn an_empty_pipeline_blocks_the_run_and_says_what_is_missing() {
         let plan = plan_with(&[RowState::Unchanged]);
-        let reason = blocked_reason(Some(plan.counts()), true, None, None).expect("should block");
+        let reason =
+            blocked_reason(Some(plan.counts()), 0, &[], true, None, None).expect("should block");
         assert!(reason.contains("empty"), "{reason}");
         assert!(reason.contains("add an operation"), "{reason}");
         // And it wins over the vaguer reason underneath it.
         assert!(!reason.contains("Nothing would change"), "{reason}");
     }
 
+    /// A plan the engine refuses for a reason no row carries — a script write
+    /// outside the listed folders — must not leave the button enabled, only
+    /// for the run to be refused after the press.
+    #[test]
+    fn a_plan_blocker_disables_the_button_with_its_reason() {
+        let mut plan = plan_with(&[RowState::Changed]);
+        plan.blockers
+            .push("a script asked to write outside the listed folders".into());
+        let reason = blocked_reason_for(Some(&plan), false, None, None).expect("should block");
+        assert!(reason.contains("outside the listed folders"), "{reason}");
+    }
+
+    /// A file a script writes is not a row, so the row counts cannot say it —
+    /// and a run that only writes one is not a run that changes nothing.
+    #[test]
+    fn a_script_write_is_its_own_clause() {
+        let mut plan = plan_with(&[RowState::Unchanged]);
+        plan.ops.push(PlannedOp::WriteFile {
+            path: "/tmp/list.m3u".into(),
+            contents: String::new(),
+            undoability: ren_core::Undoability::Journaled,
+        });
+        assert_eq!(plan_clauses(&plan), ["1 file will be written"]);
+        assert_eq!(blocked_reason_for(Some(&plan), false, None, None), None);
+    }
+
     #[test]
     fn without_a_plan_the_button_is_simply_unavailable() {
         assert_eq!(
-            blocked_reason(None, false, None, None),
+            blocked_reason(None, 0, &[], false, None, None),
             None,
             "no plan yet is not a conflict"
         );

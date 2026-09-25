@@ -7,7 +7,9 @@
 
 use std::path::PathBuf;
 
-use ren_core::exec::{ApplyOptions, ApplyReport, ExecError, Unfinished, default_journal_dir};
+use ren_core::exec::{
+    ApplyOptions, ApplyReport, ExecError, UndoReport, Unfinished, default_journal_dir,
+};
 use ren_core::{Plan, apply};
 use ren_platform::Platform;
 
@@ -34,9 +36,9 @@ impl Batch {
     }
 }
 
-/// *"Renamed 3 item(s)"*, *"Modified 2 item(s)"*, *"Renamed 3 and modified 2
-/// item(s)"* — the past tense of `status_bar::plan_clauses`, with the same
-/// suppression rule.
+/// "Renamed 3 items", "Modified 2 items", "Renamed 3 and modified 2 items" —
+/// the past tense of `status_bar::plan_clauses`, with the same suppression
+/// rule.
 ///
 /// A tag-only run used to report *"Renamed 0 item(s)"*, which is the exact
 /// failure `blocked_reason` was fixed for one milestone earlier: an action-only
@@ -94,7 +96,32 @@ pub enum LogLine {
     CreatedDir {
         path: String,
     },
+    /// A file a script wrote, which the undo deleted again.
+    RemovedFile {
+        path: String,
+    },
+    /// A folder the run created, which the undo removed again.
+    RemovedDir {
+        path: String,
+    },
+    /// A folder the run created and the undo left, because something else is
+    /// in it now (D31's safety half). Not a failure, but not nothing either:
+    /// the user expected it to go.
+    KeptDir {
+        path: String,
+    },
     Note(String),
+}
+
+/// A journal the startup scan could not judge, for the recovery banner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JournalProblem {
+    pub path: PathBuf,
+    /// True when a run in another window holds it (`ExecError::JournalInUse`)
+    /// — a batch in progress, not a damaged file, and never one to roll back.
+    pub live: bool,
+    /// What went wrong, for a journal that is not live.
+    pub message: String,
 }
 
 #[derive(Debug)]
@@ -109,6 +136,11 @@ pub struct History {
     last_restored: Vec<(PathBuf, PathBuf)>,
     /// Transactions that never finished, found at startup.
     pub unfinished: Vec<Unfinished>,
+    /// Journals the same scan could not read, or that another window is
+    /// still writing. Kept apart from `unfinished` because neither can be
+    /// rolled back from here — and shown, because one of them used to hide
+    /// every other unfinished batch without a word.
+    pub problems: Vec<JournalProblem>,
 }
 
 impl Default for History {
@@ -119,24 +151,41 @@ impl Default for History {
 
 impl History {
     pub fn in_dir(journal_dir: PathBuf) -> Self {
-        // The journals that could not be read, or that a run in another
-        // window still holds, are the second half; not shown yet.
-        let (unfinished, _unreadable) = ren_core::exec::unfinished(&journal_dir);
-        Self {
+        let mut history = Self {
             journal_dir,
             batches: Vec::new(),
             log: Vec::new(),
             last_irreversible: 0,
             last_restored: Vec::new(),
-            unfinished,
-        }
+            unfinished: Vec::new(),
+            problems: Vec::new(),
+        };
+        history.rescan();
+        history
+    }
+
+    /// Looks for unfinished transactions again.
+    ///
+    /// At startup, and after a run that stopped part-way, so the banner
+    /// offers the rollback now rather than on the next start. Cheap: a
+    /// finished journal is judged by its last line.
+    pub fn rescan(&mut self) {
+        let (unfinished, problems) = ren_core::exec::unfinished(&self.journal_dir);
+        self.unfinished = unfinished;
+        self.problems = problems
+            .into_iter()
+            .map(|(path, error)| JournalProblem {
+                live: matches!(error, ExecError::JournalInUse { .. }),
+                message: error.to_string(),
+                path,
+            })
+            .collect();
     }
 
     pub fn can_undo(&self) -> bool {
         self.batches.iter().any(|b| !b.simulated)
     }
 
-    /// Runs a plan, recording what happened.
     /// Runs a plan and records the batch.
     ///
     /// Returns the report rather than `()`: `apply` stops at the first failure
@@ -162,8 +211,8 @@ impl History {
     /// What a run needs from here, for a worker that performs it elsewhere.
     ///
     /// The other half is [`Self::record_run`], with the report the worker
-    /// hands back. `run` is the two composed, for callers that have no frame
-    /// to wait in — a single inline rename, the tests.
+    /// hands back. `run` is the two composed, for the one caller with no
+    /// frame to wait in — a single inline rename.
     pub fn run_options(&self, simulate: bool, allow_irreversible: bool) -> ApplyOptions {
         ApplyOptions {
             simulate,
@@ -240,14 +289,6 @@ impl History {
         }
     }
 
-    /// Reverts the most recent real batch.
-    pub fn undo(&mut self, platform: &dyn Platform) -> Result<(), ExecError> {
-        let (position, batch) = self.undo_target()?;
-        let report = ren_core::exec::undo_transaction(&batch.journal, platform)?;
-        self.record_undo(position, &report);
-        Ok(())
-    }
-
     /// The batch Undo would revert, and where it sits: what a worker needs
     /// to perform the undo elsewhere. The batch is read, not removed — an
     /// engine error must leave it on the stack, or a failed undo silently
@@ -263,15 +304,44 @@ impl History {
     }
 
     /// Records a finished undo of the batch at `position`.
-    pub fn record_undo(&mut self, position: usize, report: &ren_core::exec::UndoReport) {
+    pub fn record_undo(&mut self, position: usize, report: &UndoReport) {
         if position < self.batches.len() {
             self.batches.remove(position);
         }
         self.log.clear();
+        self.log_undo(report);
+        self.last_irreversible = report.irreversible.len();
+        self.last_restored = report.restored.clone();
+    }
+
+    /// Everything an undo report has to say, in the log (D77: a field no
+    /// front end reads is a change the user is never told about).
+    fn log_undo(&mut self, report: &UndoReport) {
         for (from, to) in &report.restored {
             self.log.push(LogLine::Restored {
                 from: file_name(from),
                 to: file_name(to),
+            });
+        }
+        for (path, what) in &report.reverted {
+            self.log.push(LogLine::Modified {
+                path: file_name(path),
+                what: what.clone(),
+            });
+        }
+        for path in &report.removed_files {
+            self.log.push(LogLine::RemovedFile {
+                path: file_name(path),
+            });
+        }
+        for path in &report.removed_dirs {
+            self.log.push(LogLine::RemovedDir {
+                path: file_name(path),
+            });
+        }
+        for path in &report.kept_dirs {
+            self.log.push(LogLine::KeptDir {
+                path: file_name(path),
             });
         }
         // D54 built this bucket precisely so it could be said out loud. Undo
@@ -289,8 +359,40 @@ impl History {
                 reason: reason.clone(),
             });
         }
-        self.last_irreversible = report.irreversible.len();
-        self.last_restored = report.restored.clone();
+        // The files are back, and the journal does not know it: the next
+        // undo of this batch would find nothing where it expects it.
+        if let Some(reason) = &report.not_recorded {
+            self.log.push(LogLine::Note(format!(
+                "The undo happened, but it could not be written into the journal ({reason}). \
+                 The files are back; the journal still lists this batch as undoable."
+            )));
+        }
+    }
+
+    /// An undo of the batch at `position` failed before touching anything.
+    /// Returns what to tell the user when the batch left the stack.
+    ///
+    /// **Most failures keep the batch** — a failed attempt must not cost the
+    /// user the only handle they had on it. Two are permanent, and keeping
+    /// the batch then jams Undo on it for the rest of the session, with every
+    /// older batch out of reach behind it: the batch was undone somewhere
+    /// else (`ren-cli undo`, another window, which share this journal folder
+    /// by design, D131), or its journal is gone.
+    pub fn undo_failed(&mut self, position: usize, error: &ExecError) -> Option<String> {
+        let journal = &self.batches.get(position)?.journal;
+        let reason = match error {
+            ExecError::NothingToUndo(path) if path == journal => {
+                "That batch was already undone elsewhere, so it is off the Undo list"
+            }
+            ExecError::Io { path, source }
+                if path == journal && source.kind() == std::io::ErrorKind::NotFound =>
+            {
+                "That batch's journal is gone, so it cannot be undone and is off the Undo list"
+            }
+            _ => return None,
+        };
+        self.batches.remove(position);
+        Some(reason.to_owned())
     }
 
     /// How many changes the last undo could not take back.
@@ -308,42 +410,47 @@ impl History {
         &self.last_restored
     }
 
-    /// Rolls back everything the crash-recovery check found.
-    pub fn recover(&mut self, platform: &dyn Platform) -> Result<(), ExecError> {
+    /// Records a rollback of the unfinished transactions, as the worker
+    /// performed it: one result per transaction, in order, stopping at the
+    /// first failure.
+    ///
+    /// A transaction leaves the banner only once its own rollback succeeded,
+    /// so a failure part-way leaves the rest on offer rather than dropping
+    /// them where they would never be offered again. Returns the first
+    /// failure's words.
+    pub fn record_rollback(
+        &mut self,
+        results: Vec<(Unfinished, Result<UndoReport, ExecError>)>,
+    ) -> Result<(), String> {
         self.log.clear();
-        // Drained one at a time rather than `mem::take`n up front: with the
-        // whole list moved out, one failure and a `?` would drop every
-        // remaining transaction, the banner would vanish, and they would never
-        // be offered again.
-        while let Some(item) = self.unfinished.first().cloned() {
-            let report = ren_core::exec::rollback(&item, platform)?;
-            self.unfinished.remove(0);
+        let mut restored = Vec::new();
+        for (item, result) in results {
+            let report = match result {
+                Ok(report) => report,
+                Err(error) => {
+                    self.last_restored = restored;
+                    return Err(error.to_string());
+                }
+            };
+            self.unfinished.retain(|u| u.journal != item.journal);
             self.log.push(LogLine::Note(format!(
                 "recovered transaction {}: {} rolled back",
                 item.txn,
                 ren_core::plural(report.restored.len(), "change")
             )));
-            // D77's rule, on the other path: a change that could never be
-            // taken back is reported here too, not only by `undo`.
-            for (path, what) in &report.irreversible {
-                self.log.push(LogLine::Irreversible {
-                    path: file_name(path),
-                    what: what.clone(),
-                });
-            }
-            for (path, reason) in &report.skipped {
-                self.log.push(LogLine::Skipped {
-                    path: file_name(path),
-                    reason: reason.clone(),
-                });
-            }
+            // D77's rule, on the other path: whatever an undo reports is
+            // reported here too.
+            self.log_undo(&report);
+            restored.extend(report.restored);
         }
+        self.last_restored = restored;
         Ok(())
     }
 
     /// Dismisses the recovery offer without touching anything.
     pub fn dismiss_recovery(&mut self) {
         self.unfinished.clear();
+        self.problems.clear();
     }
 }
 
@@ -381,6 +488,49 @@ mod tests {
         let entries = list(fixture.dir.path(), ListOptions::default()).unwrap();
         let pipeline = Pipeline::new().then_scoped(Replace::new("_", "-"), Scope::Name);
         plan(&entries, &pipeline, ren_platform::host().as_ref())
+    }
+
+    /// Undo as the app does it: the target, the engine, the record.
+    fn undo(history: &mut History) -> Result<(), ExecError> {
+        let (position, batch) = history.undo_target()?;
+        let report =
+            ren_core::exec::undo_transaction(&batch.journal, ren_platform::host().as_ref());
+        match report {
+            Ok(report) => {
+                history.record_undo(position, &report);
+                Ok(())
+            }
+            Err(error) => {
+                history.undo_failed(position, &error);
+                Err(error)
+            }
+        }
+    }
+
+    /// Rollback as the app does it, on this thread.
+    fn recover(history: &mut History) -> Result<(), String> {
+        let results = history
+            .unfinished
+            .iter()
+            .map(|item| {
+                (
+                    item.clone(),
+                    ren_core::exec::rollback(item, ren_platform::host().as_ref()),
+                )
+            })
+            .collect();
+        history.record_rollback(results)
+    }
+
+    /// Strips the Commit so the batch looks as a crash would leave it.
+    fn crash(journal: &std::path::Path) {
+        let text = std::fs::read_to_string(journal).unwrap();
+        let truncated: String = text
+            .lines()
+            .filter(|l| !l.contains("\"commit\""))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        std::fs::write(journal, truncated).unwrap();
     }
 
     fn names(fixture: &Fixture) -> Vec<String> {
@@ -427,7 +577,7 @@ mod tests {
                 false,
             )
             .unwrap();
-        history.undo(ren_platform::host().as_ref()).unwrap();
+        undo(&mut history).unwrap();
 
         assert_eq!(names(&fixture), ["a_1.txt", "a_2.txt"]);
         assert!(!history.can_undo());
@@ -462,7 +612,7 @@ mod tests {
     fn undoing_with_no_batches_is_an_error_not_a_panic() {
         let fixture = fixture();
         let mut history = History::in_dir(fixture.journal.path().to_path_buf());
-        assert!(history.undo(ren_platform::host().as_ref()).is_err());
+        assert!(undo(&mut history).is_err());
     }
 
     #[test]
@@ -478,14 +628,7 @@ mod tests {
                 false,
             )
             .unwrap();
-        let journal = history.batches[0].journal.clone();
-        let text = std::fs::read_to_string(&journal).unwrap();
-        let truncated: String = text
-            .lines()
-            .filter(|l| !l.contains("\"commit\""))
-            .map(|l| format!("{l}\n"))
-            .collect();
-        std::fs::write(&journal, truncated).unwrap();
+        crash(&history.batches[0].journal);
 
         let mut restarted = History::in_dir(fixture.journal.path().to_path_buf());
         assert_eq!(restarted.unfinished.len(), 1);
@@ -511,17 +654,10 @@ mod tests {
                 false,
             )
             .unwrap();
-        let journal = history.batches[0].journal.clone();
-        let text = std::fs::read_to_string(&journal).unwrap();
-        let truncated: String = text
-            .lines()
-            .filter(|l| !l.contains("\"commit\""))
-            .map(|l| format!("{l}\n"))
-            .collect();
-        std::fs::write(&journal, truncated).unwrap();
+        crash(&history.batches[0].journal);
 
         let mut restarted = History::in_dir(fixture.journal.path().to_path_buf());
-        restarted.recover(ren_platform::host().as_ref()).unwrap();
+        recover(&mut restarted).unwrap();
 
         assert_eq!(names(&fixture), ["a_1.txt", "a_2.txt"]);
         assert!(restarted.unfinished.is_empty());
@@ -569,14 +705,108 @@ mod tests {
             .unwrap();
         assert!(history.can_undo());
 
-        // Make the engine fail: the journal it needs is gone.
+        // Make the engine fail for a while: another window holds the journal.
         let journal = history.batches.last().unwrap().journal.clone();
-        std::fs::remove_file(&journal).unwrap();
+        let held = std::fs::File::open(&journal).unwrap();
+        held.lock().unwrap();
 
-        assert!(history.undo(platform.as_ref()).is_err());
+        let error = undo(&mut history).unwrap_err();
+        assert!(matches!(error, ExecError::JournalInUse { .. }), "{error}");
         assert!(
             history.can_undo(),
             "a failed undo must not consume the batch"
+        );
+        drop(held);
+        undo(&mut history).unwrap();
+        assert_eq!(names(&fixture), ["a_1.txt", "a_2.txt"]);
+    }
+
+    /// **Two failures are permanent**, and a batch kept for them jams Undo on
+    /// itself with every older batch behind it: undone elsewhere, or its
+    /// journal gone.
+    #[test]
+    fn a_batch_that_can_never_be_undone_here_leaves_the_stack() {
+        let fixture = fixture();
+        let mut history = History::in_dir(fixture.journal.path().to_path_buf());
+        let platform = ren_platform::host();
+        history
+            .run(&planned(&fixture), platform.as_ref(), false, false)
+            .unwrap();
+        ren_core::exec::undo_last(platform.as_ref(), fixture.journal.path()).unwrap();
+
+        let error = undo(&mut history).unwrap_err();
+        assert!(matches!(error, ExecError::NothingToUndo(_)), "{error}");
+        assert!(!history.can_undo(), "undone elsewhere");
+
+        history
+            .run(&planned(&fixture), platform.as_ref(), false, false)
+            .unwrap();
+        std::fs::remove_file(&history.batches.last().unwrap().journal).unwrap();
+        undo(&mut history).unwrap_err();
+        assert!(!history.can_undo(), "journal gone");
+    }
+
+    /// A journal nobody can read, and one a run in another window still
+    /// holds, are both named — and neither hides the unfinished batch beside
+    /// them, which one unreadable file used to do.
+    #[test]
+    fn unreadable_and_live_journals_are_reported_beside_the_unfinished_ones() {
+        let fixture = fixture();
+        let mut history = History::in_dir(fixture.journal.path().to_path_buf());
+        history
+            .run(
+                &planned(&fixture),
+                ren_platform::host().as_ref(),
+                false,
+                false,
+            )
+            .unwrap();
+        crash(&history.batches[0].journal);
+        std::fs::write(
+            fixture.journal.path().join("broken.jsonl"),
+            "not json\n{}\n",
+        )
+        .unwrap();
+        let live = ren_core::exec::Journal::create(fixture.journal.path()).unwrap();
+
+        let restarted = History::in_dir(fixture.journal.path().to_path_buf());
+        assert_eq!(restarted.unfinished.len(), 1, "still offered");
+        assert_eq!(restarted.problems.len(), 2, "{:?}", restarted.problems);
+        assert_eq!(
+            restarted.problems.iter().filter(|p| p.live).count(),
+            1,
+            "{:?}",
+            restarted.problems
+        );
+        drop(live);
+    }
+
+    /// What an undo removed, and what it had to leave, reaches the log.
+    #[test]
+    fn an_undo_logs_the_folders_it_removed_and_kept() {
+        let mut history = History::in_dir(TempDir::new().unwrap().path().to_path_buf());
+        let report = UndoReport {
+            removed_files: vec![PathBuf::from("/p/list.m3u")],
+            removed_dirs: vec![PathBuf::from("/p/2019")],
+            kept_dirs: vec![PathBuf::from("/p/2020")],
+            not_recorded: Some("disk full".into()),
+            ..Default::default()
+        };
+        history.record_undo(0, &report);
+        assert!(history.log.contains(&LogLine::RemovedFile {
+            path: "list.m3u".into()
+        }));
+        assert!(history.log.contains(&LogLine::RemovedDir {
+            path: "2019".into()
+        }));
+        assert!(history.log.contains(&LogLine::KeptDir {
+            path: "2020".into()
+        }));
+        assert!(
+            history
+                .log
+                .iter()
+                .any(|l| matches!(l, LogLine::Note(n) if n.contains("disk full")))
         );
     }
 }

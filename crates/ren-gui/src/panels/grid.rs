@@ -52,7 +52,8 @@ pub struct Grid<'a> {
     /// An entry the keyboard reached, to bring into view once.
     pub scroll_to: Option<usize>,
     /// Set when an inline rename was confirmed with Enter.
-    pub rename_confirmed: Option<(usize, String)>,
+    /// The file the editor was opened on, and the name typed for it.
+    pub rename_confirmed: Option<(std::path::PathBuf, String)>,
     /// What the right-click menu asked for.
     pub row_action: Option<RowAction>,
     /// Tiles actually laid out on the last frame, for the performance harness.
@@ -203,7 +204,7 @@ impl<'a> Grid<'a> {
 
         ui.vertical(|ui| {
             let picture = tile::picture(ui, self.thumbs, entry, self.look);
-            self.caption(ui, index, entry, cell);
+            self.caption(ui, entry, cell);
 
             if picture.secondary_clicked() && !self.selection.contains(index) {
                 self.selection.set([index]);
@@ -231,7 +232,7 @@ impl<'a> Grid<'a> {
             // lit, which is worse than a feature left out.
             if picture.double_clicked() {
                 *self.inline_rename = Some(crate::panels::rows::InlineRename::opening(
-                    index,
+                    &entry.path,
                     &entry.file_name,
                 ));
             }
@@ -244,15 +245,17 @@ impl<'a> Grid<'a> {
     /// grid a viewer rather than a renamer — the whole point of the New name
     /// column is that you can see what the run is about to write before it
     /// writes it.
-    fn caption(&mut self, ui: &mut egui::Ui, index: usize, entry: &FileEntry, cell: Cell<'_>) {
+    fn caption(&mut self, ui: &mut egui::Ui, entry: &FileEntry, cell: Cell<'_>) {
         let width = self.look.size as f32;
         ui.set_max_width(width);
 
         if let Some(edit) = self.inline_rename.as_mut()
-            && edit.index == index
+            && edit.path == entry.path
         {
             match rows::inline_rename_field(ui, edit) {
-                RenameEdit::Confirmed => self.rename_confirmed = Some((index, edit.text.clone())),
+                RenameEdit::Confirmed => {
+                    self.rename_confirmed = Some((edit.path.clone(), edit.text.clone()));
+                }
                 RenameEdit::Cancelled => *self.inline_rename = None,
                 RenameEdit::Editing => {}
             }

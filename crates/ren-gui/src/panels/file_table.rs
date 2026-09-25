@@ -80,7 +80,8 @@ pub struct FileTable<'a> {
     /// A drag that landed: the entries to move, and where they go.
     pub move_request: Option<(Vec<usize>, usize)>,
     /// Set when an inline rename was confirmed with Enter.
-    pub rename_confirmed: Option<(usize, String)>,
+    /// The file the editor was opened on, and the name typed for it.
+    pub rename_confirmed: Option<(std::path::PathBuf, String)>,
     /// What the right-click menu asked for, read once the table is done.
     pub row_action: Option<RowAction>,
     /// Rows that pass `row_filter`, in display order.
@@ -503,7 +504,7 @@ impl egui_table::TableDelegate for FileTable<'_> {
                 }
                 if response.double_clicked() {
                     *self.inline_rename = Some(crate::panels::rows::InlineRename::opening(
-                        index,
+                        &entry.path,
                         &entry.file_name,
                     ));
                 }
@@ -553,10 +554,12 @@ impl FileTable<'_> {
     fn name_cell(&mut self, ui: &mut egui::Ui, index: usize, entry: &FileEntry) {
         // F2 turns this cell into a text box.
         if let Some(edit) = self.inline_rename.as_mut()
-            && edit.index == index
+            && edit.path == entry.path
         {
             match rows::inline_rename_field(ui, edit) {
-                RenameEdit::Confirmed => self.rename_confirmed = Some((index, edit.text.clone())),
+                RenameEdit::Confirmed => {
+                    self.rename_confirmed = Some((edit.path.clone(), edit.text.clone()));
+                }
                 RenameEdit::Cancelled => *self.inline_rename = None,
                 RenameEdit::Editing => {}
             }
@@ -593,7 +596,7 @@ impl FileTable<'_> {
         }
         if response.double_clicked() {
             *self.inline_rename = Some(crate::panels::rows::InlineRename::opening(
-                index,
+                &entry.path,
                 &entry.file_name,
             ));
         }

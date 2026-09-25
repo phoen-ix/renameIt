@@ -400,7 +400,7 @@ fn the_row_filter_chip_hides_unchanged_rows() {
     harness.get_by_label_contains("with-underscore.txt");
 }
 
-/// F9 is *"Refresh the file list."* — and a half-refresh is worse than none,
+/// F9 refreshes the file list — and a half-refresh is worse than none,
 /// because it looks like a second opinion and is only the first one repeated.
 ///
 /// The relist alone re-read names, sizes and dates, which come from the
@@ -455,8 +455,7 @@ fn refreshing_reads_the_files_again_rather_than_trusting_what_it_remembers() {
     assert_eq!(new_names(&harness), ["2021-06-06.jpg"]);
 }
 
-/// > *"In thumbnail mode image files will show as a small preview of the
-/// > image."*
+/// With the Thumbnail column on, a picture shows a small preview of itself.
 ///
 /// The picture itself cannot be asserted headlessly — there is no GPU and no
 /// snapshot testing (D24) — so what is asserted is the alt text, which is the
@@ -1487,8 +1486,8 @@ fn the_subfolder_tag_sorts_files_and_undo_puts_them_back() {
     assert!(!fixture.dir.path().join("A").exists());
 }
 
-/// *"the start value is updated after each rename operation"* — and only after
-/// a real one, never after a simulation.
+/// A running counter's start moves on after each rename — and only after a
+/// real one, never after a simulation.
 #[test]
 fn a_running_counter_picks_up_where_the_last_batch_left_off() {
     use ren_core::CounterSetup;
@@ -1622,8 +1621,10 @@ fn undo_and_run_hotkeys_stand_down_while_the_user_is_typing() {
 ///
 /// The guard's own reasoning is what decides the fix: it exists so that a
 /// keystroke the user meant for *text* is not also a command. A `DragValue` is
-/// a number, none of these keys types a digit, and F5 on a card you have just
-/// finished configuring is the single most likely moment to press it.
+/// a number, no function key types a digit, and F5 on a card you have just
+/// finished configuring is the single most likely moment to press it. Ctrl+Z
+/// is the box's own undo, and stays down — see
+/// `ctrl_z_in_a_number_box_undoes_the_digit_and_not_the_batch`.
 #[test]
 fn the_hotkeys_stay_live_while_a_number_box_has_focus() {
     let fixture = Fixture::new(&["one.txt", "two.txt"]);
@@ -2842,7 +2843,7 @@ fn a_set_attributes_card_shows_four_tri_state_boxes_that_all_start_grey() {
         assert_eq!(
             node.accesskit_node().toggled(),
             Some(Toggled::Mixed),
-            "{label} should start grey — the documented 'leave it unchanged' state"
+            "{label} should start grey — the 'leave it unchanged' state"
         );
     }
 }
@@ -2899,8 +2900,8 @@ fn each_attribute_box_writes_through_to_its_own_bit() {
     }
 }
 
-/// The worked example: *"simply uncheck the write protected
-/// checkbox"* — one click, from grey.
+/// Clearing write protection is one click on the grey box, not a cycle
+/// through every state.
 #[test]
 fn unchecking_write_protect_is_one_click_from_grey() {
     use egui::accesskit::Toggled;
@@ -3120,7 +3121,7 @@ fn f8_opens_the_settings_window() {
     harness.get_by_label_contains("rules, run top to bottom");
 }
 
-/// *"F4 — Shortcut for the Undo button."*
+/// F4 is a shortcut for the Undo button.
 ///
 /// Ctrl+Z stays what it always was; F4 is the muscle memory somebody arrives
 /// with. Both reach the same method, so the test that matters is that F4 does.
@@ -3140,7 +3141,7 @@ fn f4_undoes_the_last_batch() {
     assert_eq!(fixture.names(), ["one.txt", "two.txt"]);
 }
 
-/// *"F6 — Sets focus on the adress input box, so you can type a new path."*
+/// F6 puts the caret in the address box, so a new path can be typed.
 ///
 /// Asserted through focus rather than through what a keystroke lands in: the
 /// point of the key is where the caret goes.
@@ -3160,8 +3161,7 @@ fn f6_focuses_the_address_box() {
     );
 }
 
-/// *"F12 — Opens the folder browser so you can select a new working path.
-/// (Browser file mode only)"*
+/// F12 opens the folder picker to choose a new folder (Browser mode only).
 ///
 /// The picker is behind the `FileDialogs` trait, so this supplies one that
 /// answers — `NoDialogs` cancels everything, which would make a green test
@@ -3206,9 +3206,8 @@ fn f12_opens_the_folder_browser_and_lists_what_it_returns() {
 
 // --- M8: the file list's right-click menu ------------------------------------
 
-/// *"Right click on one or more files in file browser mode, and choose 'add to
-/// free select'"* — through the real menu, since a right-click is something the
-/// harness can actually do.
+/// The row menu's Add to Free Select — through the real menu, since a
+/// right-click is something the harness can actually do.
 #[test]
 fn the_row_menu_adds_files_to_free_select() {
     use ren_gui::viewmodel::SourceMode;
@@ -3248,8 +3247,8 @@ fn right_clicking_an_unselected_row_selects_it() {
     );
 }
 
-/// *"Copy to Clipboard ▸ All Previews"* — the worked example for
-/// getting a listing out of the app and into a text editor.
+/// Copy to clipboard ▸ New names — how a listing gets out of the app and into
+/// a text editor.
 ///
 /// The text, not the clipboard: `arboard` needs a display server, and CI has
 /// none. What is left to a human is `set_text`.
@@ -3624,8 +3623,8 @@ const GUARDED_DIR: &str = r"C:\Windows";
 
 /// Settings ▸ Casing Exceptions edits the list a *new* card copies, and never
 /// a card that already exists (D35).
-/// *"Exceptions are words that should always be spelled with a certain case…
-/// **Click on the button to edit the list of exceptions.**"*
+/// Exceptions are words that keep their own spelling, and the card has a link
+/// to edit them.
 ///
 /// The link edits **this card's** words. That is the whole reason it is not a
 /// jump to Settings ▸ Casing Exceptions the way Music Rename's *(edit styles)*
@@ -3702,7 +3701,8 @@ fn the_casing_exception_list_is_a_default_for_new_cards() {
     assert!(words > 1, "the shipped list survives a stray click");
 }
 
-/// Settings ▸ Problem Solver — *"as well as shortcuts to the settings folder"*.
+/// Settings ▸ Problem Solver has shortcuts to the folders the app keeps its
+/// data in.
 ///
 /// The shortcuts are the half that can go stale, so they are read from the same
 /// functions the app uses rather than typed out. That is what this checks: the
@@ -3751,18 +3751,17 @@ fn the_startup_page_stores_a_switch_that_a_later_start_obeys() {
     assert!(harness.state().startup().clear_pipeline);
 }
 
-/// The command line is *"a list of files … or a folder to start in"* — which is
+/// The command line is a list of files, or a folder to start in — which is
 /// how the Explorer entry invokes the app, and how a drop on the executable
-/// arrives.
-/// A folder on the command line browses **whatever the last session was**.
+/// arrives. A folder on the command line browses **whatever mode the session
+/// is in**.
 ///
-/// `SessionSettings.mode` is persisted and nothing resets it, and
-/// `Session::accept_dropped` only navigates when the mode is *already* Browser
-/// — so a user whose last session ended in Free Select got the folder added as
-/// a single **row** instead of a listing of what is in it. Every
-/// context-menu entry lands here, so the defect is one right-click from
-/// everyone; the existing tests miss it only because `RenameItApp::headless`
-/// always starts in the default mode.
+/// `Session::accept_dropped` only navigates when the mode is *already*
+/// Browser — so with a session in Free Select the folder was added as a
+/// single **row** instead of a listing of what is in it. A fresh session
+/// starts in Browser now (`Session::new`), but `start_at` is also reached with
+/// one already in Free Select; the existing tests miss it only because
+/// `RenameItApp::headless` always starts in the default mode.
 ///
 /// The rule belongs to `start_at`, not to `accept_dropped`: a *drag* of a
 /// folder into Free Select is genuinely "add this to the list", and that
@@ -3894,7 +3893,7 @@ fn a_drag_of_many_files_is_told_nothing_about_a_limit() {
     assert!(harness.query_by_label_contains("2000 characters").is_none());
 }
 
-/// > *"Navigate the file structure with these two and the arrow keys."*
+/// The arrow keys walk the file list.
 #[test]
 fn the_arrow_keys_walk_the_file_list() {
     let fixture = Fixture::new(&["a.txt", "b.txt", "c.txt"]);
@@ -3990,8 +3989,7 @@ fn ctrl_a_selects_every_row_the_list_is_showing() {
     );
 }
 
-/// > *"`Enter` & `Backspace` — Navigate the file structure with these two and
-/// > the arrow keys. (Browser file mode only)"*
+/// Enter and Backspace walk the folder tree in Browser mode.
 #[test]
 fn enter_walks_into_the_folder_under_the_keyboard() {
     let fixture = Fixture::new(&["a.txt"]);
@@ -4077,8 +4075,8 @@ fn enter_on_a_file_does_not_go_anywhere() {
     assert_eq!(harness.state().session().entries().len(), 2);
 }
 
-/// *"(Browser file mode only)"* — Free Select is a list of files from anywhere
-/// and has no working path to change.
+/// Browser mode only — Free Select is a list of files from anywhere and has
+/// no working path to change.
 #[test]
 fn neither_key_navigates_in_free_select() {
     let fixture = Fixture::new(&["a.txt"]);
@@ -4154,13 +4152,11 @@ fn a_settings_window_with_nothing_focused_still_keeps_backspace() {
     );
 }
 
-/// > *"It will figure out where the filename ends and the extension begins, and
-/// > place the cursor there."*
+/// F2 finds where the name ends and the extension begins.
 ///
 /// The stem is selected, so typing replaces the name and keeps the extension —
-/// what Explorer does, and what the documented behaviour describes once you
-/// notice that `CCursorRange::two(0, boundary)` puts the primary cursor *at*
-/// the boundary.
+/// what Explorer does. `CCursorRange::two(0, boundary)` puts the primary
+/// cursor *at* the boundary, so the caret is there too.
 #[test]
 fn f2_selects_the_name_so_typing_replaces_it_and_keeps_the_extension() {
     let fixture = Fixture::new(&["song.mp3"]);
@@ -4240,11 +4236,9 @@ fn the_last_row_has_nowhere_to_jump_to() {
     );
 }
 
-/// > *"You can drag files up and down in the listview to change the file order
-/// > and thus the enumeration index for the file."*
-///
-/// The documented behaviour end to end: the order **is** the run order, so a
-/// dragged row is numbered where it was dropped.
+/// Dragging a file up or down the list changes the number a counter gives it,
+/// end to end: the order **is** the run order, so a dragged row is numbered
+/// where it was dropped.
 #[test]
 fn dragging_a_file_up_the_list_changes_the_number_the_counter_gives_it() {
     use ren_core::ops::AddCounter;
@@ -4340,10 +4334,8 @@ fn the_new_name_header_keeps_its_arrow_to_itself() {
     );
 }
 
-/// > *"Keep file order after execution — If you want the program to remember
-/// > the order of the files after execution you can mark this option."*
-///
-/// Not an option here: the hand-set order **is** the run order, so losing it on
+/// A hand-set order survives the run that used it, always — not a setting:
+/// the hand-set order **is** the run order, so losing it on
 /// the run that used it would make dragging half a feature. A rename is not a
 /// re-listing — it is a set of known old→new paths, which is what **D139**
 /// already uses to rekey the pictures one line earlier.
@@ -4380,8 +4372,7 @@ fn a_dragged_order_survives_the_run_that_used_it() {
     assert!(harness.state().session().settings.sort.manual);
 }
 
-/// > *"The format field is a drop-down holding previously used format
-/// > strings"* — the Free Format box, and undocumented in the prose.
+/// The Free Format box is a drop-down holding the patterns run before.
 ///
 /// **Recorded when a run is committed, not per keystroke.** A history filled as
 /// you type holds the prefixes of one string and nothing you would ever pick.
@@ -4444,8 +4435,7 @@ fn the_history_holds_no_duplicates_and_stops_at_twelve() {
     );
 }
 
-/// > *"Probably to most useful tool is the reset to default settings button,
-/// > which usually fixes any problems you might have!"*
+/// Settings ▸ Problem Solver's reset puts every setting back.
 ///
 /// It asks first, and it asks because nothing puts a settings file back —
 /// **D156**, not P2, which is about tag writes and never reaches a settings
@@ -4617,8 +4607,8 @@ fn full_row_select_makes_the_whole_row_a_click_target() {
 
 // --- M8: the two Batch Replace additions -------------------------------------
 
-/// *"You can also add the current Replace function settings to the list by
-/// pressing the button."*
+/// A Replace card can add its settings to the Batch Replace list with one
+/// button.
 ///
 /// The **defaults** list, which is what Settings edits and what a *new* card
 /// copies (D35) — adding to a card that already exists would edit somebody's
@@ -4641,9 +4631,7 @@ fn a_replace_card_can_add_itself_to_the_batch_replace_list() {
     assert_eq!(added.replace.as_str(), " ");
 }
 
-/// *"You can also add the current Replace function **settings** to the list."*
-///
-/// The settings, plural — a rule carries seven of them. The
+/// Its **settings**, plural — a rule carries seven of them. The
 /// button has always sent all seven (it clones the whole operation) and nothing
 /// checked more than two of them, so a version that rebuilt the rule from the
 /// find and replace boxes would have passed the test above unchanged.
@@ -4702,8 +4690,8 @@ fn a_batch_rule_whose_hidden_settings_are_not_default_says_so_on_its_own_row() {
     );
 }
 
-/// The other half of that tip — *"use the add button here"* — with an empty
-/// box, which is what the button always did.
+/// The list's own add button, with an empty box, which is what the button
+/// always did.
 ///
 /// The colon-separated half is `rule_table::added_by`'s own test: this harness
 /// drives the accessibility tree and a hint is a placeholder rather than a
@@ -4733,8 +4721,8 @@ fn card_id(harness: &Harness<'_, RenameItApp>, index: usize) -> ren_gui::viewmod
     harness.state().stack().cards()[index].id
 }
 
-/// > *"Press the button with an eye icon (or hit F3) to open the Visual Assist
-/// > window that allows you to visually select the text you want to find!"*
+/// A card's ⌖ button (or F3) opens Visual Assist, to select the text to find
+/// by eye.
 ///
 /// No separate window: a ⌖ on the card opens a strip inside it, carrying all
 /// five controls.
@@ -5099,7 +5087,7 @@ fn a_caret_at_the_end_can_be_anchored_to_it() {
     );
 }
 
-/// > *"F3 — Opens the Visual Assist window where available."*
+/// F3 opens Visual Assist where the card has one.
 ///
 /// And **while a position box has focus**, which is the whole difficulty:
 /// `ctx.text_edit_focused()` is true for a focused `DragValue`, and true again
@@ -5174,8 +5162,8 @@ fn f3_cycles_the_two_targets_of_a_both_card() {
     }
 }
 
-/// *"Where available"* — and where it is not, F3 says so. A documented key that
-/// silently does nothing is what gets reported as a bug.
+/// Where the card has no Visual Assist, F3 says so. A key the user was told
+/// about that silently does nothing is what gets reported as a bug.
 #[test]
 fn f3_says_so_when_the_card_has_no_visual_assist() {
     let fixture = Fixture::new(&["my_holiday.jpg"]);
@@ -5407,7 +5395,7 @@ fn disabling_the_card_keeps_the_strip_and_explains() {
 
 // --- M8: the Explorer preset menu --------------------------------------------
 
-/// *"Start from this folder"* on a **file** browses the folder it is in.
+/// Start from this folder, on a **file**, browses the folder it is in.
 ///
 /// Resolved in our code rather than by asking Windows for `%W`, whose behaviour
 /// for a static registry verb no test of ours can reach — which is why the
@@ -5552,4 +5540,504 @@ fn the_menu_and_the_row_menu_copy_the_same_list() {
 
     assert_eq!(from_the_menu, from_the_table);
     assert_eq!(from_the_menu, "a_one.txt\nb_two.txt\nc_three.txt\n");
+}
+
+// --- The file list's state across runs, relists and modals --------------------
+
+fn listed(harness: &Harness<'_, RenameItApp>) -> Vec<String> {
+    let mut names: Vec<String> = harness
+        .state()
+        .session()
+        .entries()
+        .iter()
+        .map(|e| e.file_name.clone())
+        .collect();
+    names.sort();
+    names
+}
+
+/// **Free Select follows its files through a run.** The set is a list of
+/// paths, and a run renames them: relisting the old paths used to fail on the
+/// first one and empty the table with a bare OS error, after every run, F2 and
+/// undo in Free Select.
+#[test]
+fn a_free_select_run_keeps_its_rows() {
+    use ren_gui::viewmodel::SourceMode;
+
+    let fixture = Fixture::new(&["a_1.txt", "a_2.txt"]);
+    let mut app = fixture.app();
+    app.start_at(vec![
+        fixture.dir.path().join("a_1.txt"),
+        fixture.dir.path().join("a_2.txt"),
+    ]);
+    *app.operation_mut() = OpKind::Replace(Replace::new("_", "-"));
+    let mut harness = harness(app);
+    assert_eq!(
+        harness.state().session().settings.mode,
+        SourceMode::FreeSelect
+    );
+
+    harness.state_mut().run_now();
+    settle(&mut harness);
+    assert_eq!(fixture.names(), ["a-1.txt", "a-2.txt"]);
+    assert_eq!(harness.state().session().error, None);
+    assert_eq!(
+        listed(&harness),
+        ["a-1.txt", "a-2.txt"],
+        "the rows followed"
+    );
+
+    // And back again, through the undo report.
+    harness.state_mut().undo_now();
+    settle(&mut harness);
+    assert_eq!(fixture.names(), ["a_1.txt", "a_2.txt"]);
+    assert_eq!(listed(&harness), ["a_1.txt", "a_2.txt"]);
+
+    // F2 is a run of one.
+    harness.state_mut().rename_one(0, "solo.txt".to_owned());
+    settle(&mut harness);
+    assert_eq!(harness.state().session().error, None);
+    assert_eq!(listed(&harness), ["a_2.txt", "solo.txt"]);
+}
+
+/// P63 in Free Select: a file deleted outside the app costs its own row and
+/// no others.
+#[test]
+fn a_free_select_file_that_is_gone_costs_only_its_own_row() {
+    let fixture = Fixture::new(&["keep.txt", "gone.txt"]);
+    let mut app = fixture.app();
+    app.start_at(vec![
+        fixture.dir.path().join("keep.txt"),
+        fixture.dir.path().join("gone.txt"),
+    ]);
+    let mut harness = harness(app);
+    assert_eq!(listed(&harness), ["gone.txt", "keep.txt"]);
+
+    std::fs::remove_file(fixture.dir.path().join("gone.txt")).unwrap();
+    harness.state_mut().forget_and_relist();
+    settle(&mut harness);
+
+    let session = harness.state().session();
+    assert_eq!(
+        session.error, None,
+        "one missing file is not a failed listing"
+    );
+    assert_eq!(listed(&harness), ["keep.txt"]);
+    assert_eq!(
+        session.problems.len(),
+        1,
+        "and it is named rather than hidden"
+    );
+}
+
+/// **F2's editor belongs to a file, not a row number.** Opened on `a.txt`, then
+/// the list re-sorted underneath it: Enter must rename `a.txt`, not whatever
+/// the sort put in row 0.
+#[test]
+fn the_inline_editor_follows_its_file_through_a_sort() {
+    let fixture = Fixture::new(&["a.txt", "b.txt", "c.txt"]);
+    let mut harness = harness(fixture.app());
+    harness.state_mut().select(vec![0]);
+    settle(&mut harness);
+
+    harness.key_press(egui::Key::F2);
+    settle(&mut harness);
+    // Descending: c.txt is row 0 now.
+    harness
+        .state_mut()
+        .session_mut()
+        .set_sort(ren_gui::viewmodel::SortColumn::Name);
+    settle(&mut harness);
+
+    harness
+        .get_all_by_role(egui::accesskit::Role::TextInput)
+        .find(|n| n.value().as_deref() == Some("a.txt"))
+        .expect("the inline editor, still holding a.txt")
+        .type_text("x");
+    settle(&mut harness);
+    harness.key_press(egui::Key::Enter);
+    settle(&mut harness);
+    assert_eq!(fixture.names(), ["b.txt", "c.txt", "x.txt"]);
+}
+
+/// Ctrl+Shift+Z is redo almost everywhere. This app has no redo, and the key
+/// must not reach the batch undo instead.
+#[test]
+fn ctrl_shift_z_is_not_undo() {
+    let fixture = Fixture::new(&["one.txt", "two.txt"]);
+    let mut harness = harness(fixture.app());
+    *harness.state_mut().operation_mut() = OpKind::Replace(Replace::new("one", "1"));
+    settle(&mut harness);
+    harness.state_mut().run_now();
+    settle(&mut harness);
+    assert_eq!(fixture.names(), ["1.txt", "two.txt"]);
+
+    harness.key_press_modifiers(
+        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+        egui::Key::Z,
+    );
+    settle(&mut harness);
+    assert_eq!(fixture.names(), ["1.txt", "two.txt"], "no batch undo");
+}
+
+/// A number box being typed into is a `TextEdit`, and Ctrl+Z there undoes the
+/// digit. It must not also undo the last batch on disk.
+#[test]
+fn ctrl_z_in_a_number_box_undoes_the_digit_and_not_the_batch() {
+    let fixture = Fixture::new(&["one.txt", "two.txt"]);
+    let mut harness = harness(fixture.app());
+    *harness.state_mut().operation_mut() = OpKind::Replace(Replace::new("one", "1"));
+    harness
+        .state_mut()
+        .add_operation(OpKind::AddRemove(AddRemove::remove(0, 0)));
+    settle(&mut harness);
+    harness.state_mut().run_now();
+    settle(&mut harness);
+    assert_eq!(fixture.names(), ["1.txt", "two.txt"]);
+
+    harness
+        .get_all_by_role(egui::accesskit::Role::SpinButton)
+        .next()
+        .expect("a position box on the Add & Remove card")
+        .focus();
+    harness.run();
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    settle(&mut harness);
+    assert_eq!(fixture.names(), ["1.txt", "two.txt"], "no batch undo");
+}
+
+/// A modal owns the keyboard even when nothing inside it has focus: Ctrl+Z
+/// in Settings must not revert the last batch behind it, and F5 must not run.
+#[test]
+fn the_hotkeys_stand_down_behind_a_modal() {
+    let fixture = Fixture::new(&["one.txt", "two.txt"]);
+    let mut harness = harness(fixture.app());
+    *harness.state_mut().operation_mut() = OpKind::Replace(Replace::new("one", "1"));
+    settle(&mut harness);
+    harness.state_mut().run_now();
+    settle(&mut harness);
+    assert_eq!(fixture.names(), ["1.txt", "two.txt"]);
+
+    harness.key_press(egui::Key::F8);
+    settle(&mut harness);
+    harness.get_by_label_contains("rules, run top to bottom");
+
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    settle(&mut harness);
+    assert_eq!(
+        fixture.names(),
+        ["1.txt", "two.txt"],
+        "no undo behind Settings"
+    );
+
+    *harness.state_mut().operation_mut() = OpKind::Replace(Replace::new("two", "2"));
+    settle(&mut harness);
+    harness.key_press(egui::Key::F5);
+    settle(&mut harness);
+    assert_eq!(
+        fixture.names(),
+        ["1.txt", "two.txt"],
+        "no run behind Settings"
+    );
+}
+
+/// P65: Delete takes rows out of Free Select, and never touches the disk.
+#[test]
+fn delete_removes_rows_from_free_select_and_leaves_the_files() {
+    let fixture = Fixture::new(&["a.txt", "b.txt", "c.txt"]);
+    let mut app = fixture.app();
+    app.start_at(vec![
+        fixture.dir.path().join("a.txt"),
+        fixture.dir.path().join("b.txt"),
+        fixture.dir.path().join("c.txt"),
+    ]);
+    let mut harness = harness(app);
+    let b = harness
+        .state()
+        .session()
+        .entries()
+        .iter()
+        .position(|e| e.file_name == "b.txt")
+        .unwrap();
+    harness.state_mut().select(vec![b]);
+    settle(&mut harness);
+
+    harness.key_press(egui::Key::Delete);
+    settle(&mut harness);
+    assert_eq!(listed(&harness), ["a.txt", "c.txt"]);
+    assert_eq!(
+        fixture.names(),
+        ["a.txt", "b.txt", "c.txt"],
+        "nothing deleted"
+    );
+}
+
+/// "Add to Free Select" on one folder row adds that folder. The drag rule —
+/// one folder dropped in Browser mode navigates there — is for drags.
+#[test]
+fn adding_one_folder_row_to_free_select_does_not_browse_into_it() {
+    use ren_gui::viewmodel::SourceMode;
+
+    let fixture = Fixture::new(&["one.txt"]);
+    std::fs::create_dir(fixture.dir.path().join("2019")).unwrap();
+    std::fs::write(fixture.dir.path().join("2019").join("inside.txt"), b"x").unwrap();
+    let mut harness = harness(fixture.app());
+    harness.state_mut().session_mut().settings.folders = true;
+    harness.state_mut().session_mut().request_refresh();
+    settle(&mut harness);
+
+    harness.get_by_label_contains("2019").click_secondary();
+    settle(&mut harness);
+    harness.get_by_label("Add to Free Select").click();
+    settle(&mut harness);
+
+    let session = harness.state().session();
+    assert_eq!(session.settings.mode, SourceMode::FreeSelect);
+    assert_eq!(session.settings.dir, fixture.dir.path(), "did not browse");
+    assert_eq!(listed(&harness), ["2019"]);
+}
+
+/// Simulate means nothing touches the disk, and F2 is a run of one.
+#[test]
+fn f2_honours_simulate() {
+    let fixture = Fixture::new(&["before.txt"]);
+    let mut harness = harness(fixture.app());
+    harness.state_mut().set_simulate(true);
+
+    harness.state_mut().rename_one(0, "after.txt".to_owned());
+    settle(&mut harness);
+    assert_eq!(fixture.names(), ["before.txt"], "nothing was written");
+    assert!(
+        harness
+            .state()
+            .status()
+            .is_some_and(|s| s.contains("Simulated")),
+        "{:?}",
+        harness.state().status()
+    );
+}
+
+/// A run still going in another window holds its journal. It is not a batch
+/// that did not finish, and it must never be offered for rollback.
+#[test]
+fn a_run_in_another_window_is_named_and_not_offered_for_rollback() {
+    let fixture = Fixture::new(&["a.txt"]);
+    let live = ren_core::exec::Journal::create(fixture.journal.path()).unwrap();
+
+    let harness = harness(fixture.app());
+    harness.get_by_label_contains("another RenameIt window");
+    assert!(
+        harness.query_by_label("Roll back").is_none(),
+        "nothing here can be rolled back"
+    );
+    drop(live);
+}
+
+/// One journal that cannot be read used to hide every unfinished batch, and
+/// itself, without a word.
+#[test]
+fn an_unreadable_journal_is_named_in_the_banner() {
+    let fixture = Fixture::new(&["a.txt"]);
+    std::fs::write(
+        fixture.journal.path().join("broken.jsonl"),
+        "this is not json\n{}\n",
+    )
+    .unwrap();
+
+    let harness = harness(fixture.app());
+    harness.get_by_label_contains("could not be read");
+    harness.get_by_label_contains("broken.jsonl");
+}
+
+/// A folder named on the command line relative to where it was started is
+/// made absolute once, on the way in. A relative listing gave relative plan
+/// paths, which the executor refuses, and a guard that compared prefixes.
+#[cfg(unix)]
+#[test]
+fn a_relative_folder_on_the_command_line_is_made_absolute() {
+    let fixture = Fixture::new(&["a_1.txt"]);
+    let cwd = std::env::current_dir().unwrap();
+    let mut relative = std::path::PathBuf::new();
+    for _ in cwd.components().skip(1) {
+        relative.push("..");
+    }
+    relative.push(fixture.dir.path().strip_prefix("/").unwrap());
+    assert!(relative.is_relative() && relative.is_dir(), "{relative:?}");
+
+    let mut app = fixture.app();
+    app.start_at(vec![relative]);
+    *app.operation_mut() = OpKind::Replace(Replace::new("_", "-"));
+    let mut harness = harness(app);
+    assert!(harness.state().session().settings.dir.is_absolute());
+
+    harness.state_mut().run_now();
+    settle(&mut harness);
+    assert_eq!(
+        fixture.names(),
+        ["a-1.txt"],
+        "{:?}",
+        harness.state().status()
+    );
+}
+
+/// Roll back is a batch undo and runs off the frame like one: a rollback of a
+/// big batch on a share must not freeze the window.
+#[test]
+fn roll_back_runs_off_the_frame() {
+    let fixture = Fixture::new(&["a_1.txt", "a_2.txt"]);
+    let mut harness = harness(fixture.app());
+    *harness.state_mut().operation_mut() = OpKind::Replace(Replace::new("_", "-"));
+    settle(&mut harness);
+    harness.state_mut().run_now();
+    settle(&mut harness);
+    assert_eq!(fixture.names(), ["a-1.txt", "a-2.txt"]);
+
+    // Make it look crashed: no Commit.
+    let journal = harness.state().history().batches[0].journal.clone();
+    let text = std::fs::read_to_string(&journal).unwrap();
+    let crashed: String = text
+        .lines()
+        .filter(|l| !l.contains("\"commit\""))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    std::fs::write(&journal, crashed).unwrap();
+
+    let mut harness = harness_from(fixture.app());
+    harness.get_by_label_contains("1 batch did not finish");
+    harness.get_by_label("Roll back").click();
+    // One frame per queued event and no more: the click lands on the last,
+    // and nothing after it could have taken the job's delivery yet.
+    harness.step();
+    assert!(
+        harness.state().is_running(),
+        "the rollback is on the worker"
+    );
+    settle(&mut harness);
+    assert_eq!(fixture.names(), ["a_1.txt", "a_2.txt"]);
+    assert!(
+        harness
+            .state()
+            .status()
+            .is_some_and(|s| s.starts_with("Rolled back")),
+        "{:?}",
+        harness.state().status()
+    );
+    assert!(harness.query_by_label("Roll back").is_none(), "banner gone");
+}
+
+fn harness_from(app: RenameItApp) -> Harness<'static, RenameItApp> {
+    harness(app)
+}
+
+/// A script's write is shown before it happens, create or overwrite, and the
+/// status line counts it.
+#[test]
+fn a_script_write_is_confirmed_before_it_happens() {
+    let fixture = Fixture::new(&["a.txt"]);
+    let scripts = TempDir::new().unwrap();
+    let target = fixture.dir.path().join("list.m3u");
+    std::fs::write(
+        scripts.path().join("Writer.koto"),
+        format!(
+            "rename = || ''\ndone = ||\n  {{path: '{}', contents: 'x', log: 'wrote it'}}\n",
+            target.display().to_string().replace('\\', "\\\\")
+        ),
+    )
+    .unwrap();
+    ren_core::script::store::forget_all();
+
+    let mut harness = harness(fixture.app());
+    *harness.state_mut().operation_mut() =
+        OpKind::Script(ren_core::ops::Script::new("Writer").in_dir(scripts.path()));
+    settle(&mut harness);
+    harness.get_by_label_contains("1 file will be written");
+
+    harness.state_mut().run_now();
+    settle(&mut harness);
+    assert!(
+        !target.exists(),
+        "not before the user says so: {:?}",
+        harness.state().status()
+    );
+    harness.get_by_label_contains("list.m3u  —  create this file");
+
+    harness.get_by_label("Write 1 file").click();
+    settle(&mut harness);
+    assert!(target.exists());
+}
+
+/// A batch undone somewhere else — `ren-cli undo`, a second window — is gone
+/// from the Undo stack rather than jamming it.
+#[test]
+fn a_batch_undone_elsewhere_leaves_the_undo_stack() {
+    let fixture = Fixture::new(&["one.txt", "two.txt"]);
+    let mut harness = harness(fixture.app());
+    *harness.state_mut().operation_mut() = OpKind::Replace(Replace::new("one", "1"));
+    settle(&mut harness);
+    harness.state_mut().run_now();
+    settle(&mut harness);
+    *harness.state_mut().operation_mut() = OpKind::Replace(Replace::new("two", "2"));
+    settle(&mut harness);
+    harness.state_mut().run_now();
+    settle(&mut harness);
+    assert_eq!(fixture.names(), ["1.txt", "2.txt"]);
+
+    // What `ren-cli undo` does: the newest batch.
+    ren_core::exec::undo_last(ren_platform::host().as_ref(), fixture.journal.path()).unwrap();
+    assert_eq!(fixture.names(), ["1.txt", "two.txt"]);
+
+    harness.state_mut().undo_now();
+    settle(&mut harness);
+    assert!(
+        harness
+            .state()
+            .status()
+            .is_some_and(|s| s.contains("already undone")),
+        "{:?}",
+        harness.state().status()
+    );
+    harness.state_mut().undo_now();
+    settle(&mut harness);
+    assert_eq!(
+        fixture.names(),
+        ["one.txt", "two.txt"],
+        "the older batch is reachable"
+    );
+}
+
+/// A hand-set order survives a run whose renames form a cycle — the files
+/// swap names through a temporary one — and survives the undo of it.
+#[test]
+fn a_dragged_order_survives_a_swap_and_its_undo() {
+    let fixture = Fixture::new(&["a.txt", "b.txt", "c.txt"]);
+    let mut app = fixture.app();
+    *app.operation_mut() = OpKind::Replace(Replace::new("a", "X"));
+    app.add_operation(OpKind::Replace(Replace::new("b", "a")));
+    app.add_operation(OpKind::Replace(Replace::new("X", "b")));
+    let mut harness = harness(app);
+    assert_eq!(new_names(&harness), ["b.txt", "a.txt", "c.txt"]);
+
+    // c first by hand.
+    harness.state_mut().session_mut().move_rows(&[2], 0);
+    settle(&mut harness);
+    let order = |h: &Harness<'_, RenameItApp>| -> Vec<String> {
+        h.state()
+            .session()
+            .entries()
+            .iter()
+            .map(|e| e.file_name.clone())
+            .collect()
+    };
+    assert_eq!(order(&harness), ["c.txt", "a.txt", "b.txt"]);
+
+    harness.state_mut().run_now();
+    settle(&mut harness);
+    // The file that was a.txt is b.txt now, and it kept its slot.
+    assert_eq!(order(&harness), ["c.txt", "b.txt", "a.txt"]);
+    assert!(harness.state().session().settings.sort.manual);
+
+    harness.state_mut().undo_now();
+    settle(&mut harness);
+    assert_eq!(order(&harness), ["c.txt", "a.txt", "b.txt"], "and back");
+    assert!(harness.state().session().settings.sort.manual);
 }

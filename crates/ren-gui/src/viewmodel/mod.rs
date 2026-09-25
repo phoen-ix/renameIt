@@ -14,7 +14,7 @@ pub mod stack;
 
 pub use apply::{ApplyWorker, InFlight, JobKind, Outcome};
 pub use columns::{Column, ColumnKind, Columns, TableStyle};
-pub use history::{Batch, History, LogLine, describe_counts};
+pub use history::{Batch, History, JournalProblem, LogLine, describe_counts};
 pub use listing::{Listed, ListingWorker, Source};
 pub use preview::{PreviewWorker, Ready};
 pub use session::{

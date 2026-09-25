@@ -11,6 +11,9 @@
 //! Find box means 'undo that keystroke'"*. So tabbing onto **from pos:** — or
 //! clicking it, which is how anyone configures a card — silently disabled F2,
 //! F4, F5, F6, F8, F9, F12, Ctrl+Z and Ctrl+K until the user clicked elsewhere.
+//! [`has_focus`] brings the function keys back. Ctrl+Z and Ctrl+K stay down:
+//! the box's own `TextEdit` answers Ctrl+Z by undoing the digit, and that
+//! keystroke must not also undo the last batch on disk (P81).
 //!
 //! Nothing in egui distinguishes them: `WidgetRect` carries no role, and reading
 //! the accessibility tree would answer differently in the app (where AccessKit

@@ -9,14 +9,20 @@
 //! visible, not
 //! to make it recoverable.
 //!
-//! Shown **only** when the plan contains something irreversible. An ordinary
-//! rename stays one click; adding a step to every run would train the habit of
-//! clicking through, which is the one thing a confirmation cannot survive. The
-//! summary wording is borrowed from the status bar (DESIGN S7's *"N renames, M
-//! skipped, K conflicts"*), so widening the trigger later is a change of
-//! condition rather than a rewrite.
+//! Shown **only** when the plan contains something irreversible, or a file a
+//! script asked to write. An ordinary rename stays one click; adding a step to
+//! every run would train the habit of clicking through, which is the one thing
+//! a confirmation cannot survive. The summary wording is borrowed from the
+//! status bar (DESIGN S7's *"N renames, M skipped, K conflicts"*).
+//!
+//! **A script's write is always asked about**, even a new file that undo can
+//! remove again. A rename only ever moves files the user can see in the list;
+//! a write puts content in a file the list does not show, chosen by code the
+//! user may not have read. The plan already confines where it may go (a
+//! folder this run lists); the dialog is where the user sees each path, and
+//! whether it creates or replaces, before anything is written.
 
-use ren_core::Plan;
+use ren_core::{Plan, PlannedOp, Undoability};
 
 /// The dialog while it is up — a **snapshot** of the plan it was opened for.
 ///
@@ -34,6 +40,8 @@ pub struct Confirm {
     pub generation: u64,
     /// Rows changed irreversibly — `Plan::irreversible()`, which counts files.
     irreversible: usize,
+    /// Files a script asked to write, created or replaced.
+    writes: usize,
     /// The pre-run clauses, in the status bar's own words.
     clauses: Vec<String>,
     /// `("song.mp3", "Title → One, Artist → Metallica")`, capped.
@@ -49,10 +57,40 @@ pub struct Confirm {
 /// modal every frame, which is the settling hazard D26 forbids.
 const SHOWN: usize = 6;
 
+/// Whether a plan needs this dialog before it runs (P2, and the script-write
+/// rule in the module doc).
+pub fn needed(plan: &Plan) -> bool {
+    plan.irreversible() > 0 || crate::panels::status_bar::writes(plan) > 0
+}
+
 impl Confirm {
     pub fn new(plan: &Plan, generation: u64) -> Self {
         let mut lines = Vec::new();
         let mut more = 0;
+        // Writes first: a file a script is about to create or replace is not
+        // a row, so it has no badge in the table — and it is exactly the kind
+        // of thing this modal exists to name. By path, because "1 item" would
+        // tell the user nothing about which file.
+        for op in &plan.ops {
+            let PlannedOp::WriteFile {
+                path, undoability, ..
+            } = op
+            else {
+                continue;
+            };
+            if lines.len() < SHOWN {
+                lines.push((
+                    path.display().to_string(),
+                    if *undoability == Undoability::None {
+                        "replace this file's contents".to_owned()
+                    } else {
+                        "create this file".to_owned()
+                    },
+                ));
+            } else {
+                more += 1;
+            }
+        }
         for item in &plan.items {
             let irreversible: Vec<&str> = item
                 .actions
@@ -75,23 +113,10 @@ impl Confirm {
                 more += 1;
             }
         }
-        // A file a script is about to overwrite is not a row, so it has no
-        // entry above — and it is exactly the kind of thing this modal exists
-        // to name. Listed by path, because "1 item" would tell the user nothing
-        // about which of their files is about to be replaced.
-        for path in plan.overwrites() {
-            if lines.len() < SHOWN {
-                lines.push((
-                    path.display().to_string(),
-                    "replace this file's contents".to_owned(),
-                ));
-            } else {
-                more += 1;
-            }
-        }
         Self {
             generation,
             irreversible: plan.irreversible(),
+            writes: crate::panels::status_bar::writes(plan),
             clauses: crate::panels::status_bar::plan_clauses(plan),
             lines,
             more,
@@ -118,12 +143,26 @@ pub fn go_ahead_label(irreversible: usize) -> String {
     format!("Change {irreversible} item(s)")
 }
 
+/// The go-ahead for a run whose only reason for asking is a script's write,
+/// every one of which undo can take back. Named for what it does, like
+/// [`go_ahead_label`], and colliding with nothing else in the tree.
+pub fn write_label(writes: usize) -> String {
+    format!("Write {}", ren_core::plural(writes, "file"))
+}
+
 pub fn ui(ctx: &egui::Context, state: &Confirm) -> Outcome {
     let mut outcome = Outcome::Open;
 
     let modal = egui::Modal::new(egui::Id::new("confirm_modal")).show(ctx, |ui| {
         ui.set_width(460.0);
-        ui.heading(format!("This run {}", state.verdict));
+        ui.heading(if state.irreversible > 0 {
+            format!("This run {}", state.verdict)
+        } else {
+            format!(
+                "A script asks to write {}",
+                ren_core::plural(state.writes, "file")
+            )
+        });
         ui.add_space(6.0);
 
         if !state.clauses.is_empty() {
@@ -133,15 +172,23 @@ pub fn ui(ctx: &egui::Context, state: &Confirm) -> Outcome {
 
         // The engine's own sentence, one tense earlier. A user who ever sees
         // `ExecError::Irreversible` should recognise it.
-        ui.label(
-            egui::RichText::new(format!(
-                "⚠ {} item(s) will be changed in a way that {}. Undo puts names back; \
-                 it cannot put file contents back, because the old ones are not kept \
-                 anywhere.",
-                state.irreversible, state.verdict
-            ))
-            .color(ui.visuals().warn_fg_color),
-        );
+        if state.irreversible > 0 {
+            ui.label(
+                egui::RichText::new(format!(
+                    "⚠ {} item(s) will be changed in a way that {}. Undo puts names back; \
+                     it cannot put file contents back, because the old ones are not kept \
+                     anywhere.",
+                    state.irreversible, state.verdict
+                ))
+                .color(ui.visuals().warn_fg_color),
+            );
+        }
+        if state.writes > 0 {
+            ui.label(
+                "The script chose these files. Undo deletes a file this run created; a file \
+                 it replaced keeps the new contents.",
+            );
+        }
 
         ui.add_space(6.0);
         egui::ScrollArea::vertical()
@@ -171,7 +218,12 @@ pub fn ui(ctx: &egui::Context, state: &Confirm) -> Outcome {
             if ui.button("Leave everything alone").clicked() {
                 outcome = Outcome::Cancelled;
             }
-            if ui.button(go_ahead_label(state.irreversible)).clicked() {
+            let go_ahead = if state.irreversible > 0 {
+                go_ahead_label(state.irreversible)
+            } else {
+                write_label(state.writes)
+            };
+            if ui.button(go_ahead).clicked() {
                 outcome = Outcome::Confirmed;
             }
         });
@@ -363,6 +415,44 @@ mod tests {
         for taken in ["Rename", "Cancel", "OK", "Yes", "Simulate", "Close"] {
             assert_ne!(label, taken);
         }
+    }
+
+    /// Every write is listed and says which of the two it is; a plan whose
+    /// only reason for the dialog is a new file still gets one (the
+    /// script-write rule), with no "cannot be undone" warning it does not
+    /// deserve.
+    #[test]
+    fn every_script_write_is_listed_as_a_create_or_a_replace() {
+        let mut plan = Plan::default();
+        for (path, undoability) in [
+            ("/p/new.m3u", Undoability::Journaled),
+            ("/p/old.m3u", Undoability::None),
+        ] {
+            plan.ops.push(PlannedOp::WriteFile {
+                path: path.into(),
+                contents: String::new(),
+                undoability,
+            });
+        }
+        assert!(needed(&plan));
+        let confirm = Confirm::new(&plan, 0);
+        assert_eq!(confirm.writes, 2);
+        assert_eq!(
+            confirm.lines,
+            [
+                ("/p/new.m3u".to_owned(), "create this file".to_owned()),
+                (
+                    "/p/old.m3u".to_owned(),
+                    "replace this file's contents".to_owned()
+                ),
+            ]
+        );
+
+        let mut create_only = Plan::default();
+        create_only.ops.push(plan.ops[0].clone());
+        assert!(needed(&create_only), "a new file is asked about too");
+        assert_eq!(Confirm::new(&create_only, 0).irreversible, 0);
+        assert_eq!(write_label(1), "Write 1 file");
     }
 
     #[test]

@@ -239,23 +239,28 @@ pub(crate) enum RenameEdit {
     Cancelled,
 }
 
-/// F2's editor: which entry, the text, and whether the caret has been placed.
+/// F2's editor: which file, the text, and whether the caret has been placed.
 ///
 /// A struct rather than a `(usize, String)`, because the seed has to happen
 /// exactly **once** and two loose values that must agree is the shape this
 /// codebase avoids.
+///
+/// **Keyed by path, not by row.** A row number is only true until the next
+/// sort, drag or relist, and the editor stays open across all three — so an
+/// editor opened on one file and confirmed after a sort renamed whichever
+/// file had moved into its row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InlineRename {
-    pub index: usize,
+    pub path: std::path::PathBuf,
     pub text: String,
     /// Cleared the first frame the box actually has the keyboard.
     seed: bool,
 }
 
 impl InlineRename {
-    pub fn opening(index: usize, name: &str) -> Self {
+    pub fn opening(path: &std::path::Path, name: &str) -> Self {
         Self {
-            index,
+            path: path.to_path_buf(),
             text: name.to_owned(),
             seed: true,
         }

@@ -13,9 +13,10 @@
 //! ```
 //!
 //! The UI never blocks: it asks for a plan and keeps painting whatever it has.
-//! Spike B measured the work itself at 4 ms for 10 000 rows
-//! (`docs/spikes/preview-perf.md`), so this is about *never* stuttering rather
-//! than about the average case.
+//! The planner costs about 22 ms p95 over a 10 000-file preset listing on the
+//! reference machine (`ren-core/examples/plan_budget.rs`, the gated number of
+//! record since D165), which is more than a frame — so this is about *never*
+//! stuttering, not only about the average case.
 //!
 //! # A panic is an answer, not the end of the session
 //!

@@ -67,17 +67,18 @@ struct Persisted {
     columns: crate::viewmodel::Columns,
     /// What each drop-down field has been **run** with, newest first.
     ///
-    /// > *"The format field is a drop-down holding previously used format
-    /// > strings"* — evidenced by the Free Format box and its siblings, and
-    /// > undocumented in the prose.
-    ///
-    /// Keyed by the field's own id, so *"each DropDown control"* keeps its own
-    /// list, capped at `tag_field::HISTORY_ITEMS`.
+    /// The pattern boxes offer what was run before, so a pattern used last
+    /// week is one click away. Keyed by the field's own id, so each box keeps
+    /// its own list, capped at `tag_field::HISTORY_ITEMS`.
     field_history: std::collections::BTreeMap<String, Vec<String>>,
     theme: Theme,
     simulate: bool,
 
-    // --- Read from older blobs, never written again. Remove at M6. ---
+    // --- Read from older blobs, never written again. ---
+    //
+    // Kept for as long as an M3 blob may still be on someone's disk: removing
+    // them makes such a blob fail to parse, and a blob that fails to parse
+    // resets every setting (see `load_persisted`).
     /// M3 stored exactly one operation. Migrated into a one-card stack rather
     /// than dropped, so upgrading does not discard what the user had set up.
     ///
@@ -125,17 +126,17 @@ impl Default for Persisted {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Startup {
-    /// > *"Uncheck 'Subfolders' at startup … reducing the risk of painfully
-    /// > long startup times"*
+    /// Start with Subfolders off, so a start never begins with a deep walk
+    /// the user did not ask for this time (D128).
     pub clear_subfolders: bool,
-    /// > *"Reset pattern mask to \*.\* at startup"*
+    /// Start with the pattern box empty, so every file is listed.
     pub clear_pattern: bool,
-    /// > *"Clear function input fields on startup - … if you are concerned
-    /// > about privacy"*
+    /// Start with no pipeline, for privacy: nothing typed last time is on
+    /// screen.
     ///
-    /// Ours drops the whole card stack rather than blanking each field: a
-    /// pipeline of eight cards with every box emptied is not privacy, it is a
-    /// puzzle. A preset is how you get it back deliberately.
+    /// The whole card stack rather than each field blanked: a pipeline of
+    /// eight cards with every box emptied is not privacy, it is a puzzle. A
+    /// preset is how you get it back deliberately.
     pub clear_pipeline: bool,
 }
 
@@ -154,9 +155,9 @@ impl Startup {
             persisted.steps = Some(Vec::new());
             persisted.pipeline_name.clear();
             // **And the drop-down histories.** D128 justifies this switch with
-            // The documented *"if you are concerned about privacy"*, and a
-            // history that survived it would still hold every pattern the user
-            // had ever run — which would make that sentence untrue.
+            // privacy, and a history that survived it would still hold every
+            // pattern the user had ever run — which would make that reason
+            // untrue.
             persisted.field_history.clear();
         }
         persisted
@@ -199,12 +200,23 @@ struct Hotkeys {
 }
 
 /// A run that has been handed to the worker and not yet come back.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Everything the run's aftermath needs that describes **the run**, captured
+/// when it starts. Read when it lands instead, it described whatever the
+/// window had become meanwhile: a row clicked during a run re-scoped the
+/// preview, and the running counter advanced by that one row rather than by
+/// the rows that were renamed.
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct RunInFlight {
     simulate: bool,
     /// How many rows the plan would touch, for "N of M" when it stops
     /// short.
     affected: usize,
+    /// The running counter's next start, if it is on — over the scope and
+    /// settings the plan was built with.
+    next_start: Option<i64>,
+    /// The pattern fields to remember, as the stack was when it ran.
+    fields: Vec<(&'static str, String)>,
 }
 
 /// What a relist was asked for *for*, done once its rows exist.
@@ -236,6 +248,10 @@ pub struct RenameItApp {
     /// What the run that is out was started as, for the words the status
     /// line uses when it lands. `None` while nothing is out.
     running: Option<RunInFlight>,
+    /// The window was asked to close while a job was out, and will close
+    /// once it lands. Killing an undo part-way leaves a batch half reverted
+    /// with its `Commit` still in place, which no recovery path can see.
+    close_when_idle: bool,
     /// The decode threads and the texture cache. Owned here rather than by the
     /// table or the grid because both views draw from the one cache, and
     /// because a run, an undo and F9 all have to reach it.
@@ -361,11 +377,59 @@ pub struct RenameItApp {
     unstyled: bool,
 }
 
+/// The stored settings, or the defaults with the reason they are in use.
+///
+/// **A blob that does not parse is kept, not overwritten.** `get_value`
+/// answers `None` for it, and the defaults that replace it are saved over it
+/// on the next auto-save — so the user's Batch Replace list, casing words and
+/// field history were gone for good, silently. That happens on a downgrade:
+/// an operation or field this build does not know fails the whole blob
+/// (D75 keeps operation structs strict). The raw text goes into `backup_dir`
+/// first, under a name that never replaces an earlier copy, and the status
+/// line says where.
+fn load_persisted(
+    storage: Option<&dyn eframe::Storage>,
+    backup_dir: &Path,
+) -> (Persisted, Option<String>) {
+    let Some(storage) = storage else {
+        return (Persisted::default(), None);
+    };
+    if let Some(persisted) = eframe::get_value(storage, STORAGE_KEY) {
+        return (persisted, None);
+    }
+    let Some(raw) = storage.get_string(STORAGE_KEY) else {
+        return (Persisted::default(), None); // A first run.
+    };
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let backup = backup_dir.join(format!("app-state.unreadable-{stamp}.ron"));
+    let kept = std::fs::create_dir_all(backup_dir).and_then(|()| {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&backup)
+            .and_then(|mut file| std::io::Write::write_all(&mut file, raw.as_bytes()))
+    });
+    let status = match kept {
+        Ok(()) => format!(
+            "The saved settings could not be read by this version, so the defaults are in \
+             use. The old settings were kept in {}.",
+            backup.display()
+        ),
+        Err(error) => format!(
+            "The saved settings could not be read by this version, so the defaults are in \
+             use, and they could not be copied aside ({error})."
+        ),
+    };
+    (Persisted::default(), Some(status))
+}
+
 impl RenameItApp {
     pub fn new(ctx: &egui::Context, storage: Option<&dyn eframe::Storage>) -> Self {
-        let persisted: Persisted = storage
-            .and_then(|s| eframe::get_value(s, STORAGE_KEY))
-            .unwrap_or_default();
+        let journal_dir = ren_core::exec::default_journal_dir();
+        let (persisted, unreadable) =
+            load_persisted(storage, journal_dir.parent().unwrap_or(&journal_dir));
 
         // A first run seeds the script folder with the nine worked examples.
         // Never overwrites, so an edited script survives an upgrade — and a
@@ -373,11 +437,11 @@ impl RenameItApp {
         let _ = ren_core::script::ScriptStore::user().seed_defaults();
 
         // And the six presets, the same arrangement — except that this one
-        // seeds **only into a folder that does not exist**. A script the user
-        // deleted is a file they stopped using; a preset they deleted is a
-        // menu item they took out of their file manager (D-preset-menu), and
-        // putting it back every start is the app arguing about their own
-        // right-click menu.
+        // seeds **only into a folder that does not exist** (P84). A script
+        // the user deleted is a file they stopped using; a preset they deleted
+        // is a menu item they took out of their file manager, and putting it
+        // back every start is the app arguing about their own right-click
+        // menu.
         let _ = ren_core::PresetStore::user().seed_defaults();
 
         let repaint_ctx = ctx.clone();
@@ -399,6 +463,7 @@ impl RenameItApp {
         app.settings.reseed();
         ctx.set_theme(egui::ThemePreference::from(app.theme));
         app.session.request_refresh();
+        app.status = unreadable;
         app
     }
 
@@ -521,10 +586,11 @@ impl RenameItApp {
                 move || repaint()
             }),
             running: None,
+            close_when_idle: false,
             thumbs: Thumbs::new(move || repaint()),
-            platform,
             stack: Self::restore(&persisted),
-            session: Session::new(persisted.session),
+            session: Session::with_platform(persisted.session, platform.clone()),
+            platform,
             history,
             expanded: None,
             settings: persisted.settings,
@@ -595,6 +661,7 @@ impl RenameItApp {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         self.poll_jobs();
+        self.close_if_idle(None);
         // The listing next: it is what the preview is computed over, and a
         // listing landing asks for a preview, so waiting for the preview
         // first would wait for one that is about to be superseded.
@@ -630,11 +697,17 @@ impl RenameItApp {
 
     /// Turns the session's "a relist is wanted" into a request to the worker.
     ///
-    /// Once per frame, after everything that could have asked: the session
-    /// cannot send the request itself (it has no worker and no thread), and
-    /// several things in one frame asking for one relist should cost one.
+    /// The session cannot send the request itself (it has no worker and no
+    /// thread), and several things in one frame asking for one relist should
+    /// cost one. Drained **in the frame that asked**, straight after the job
+    /// poll and again at the end of the frame, because whatever waits for
+    /// the listing — a run's hand-set order, the row F2 jumps to — waits for
+    /// *this* request's answer: the worker drops any listing older than the
+    /// newest request, so an older walk that happened to finish first can no
+    /// longer take what was left for this one.
     fn drain_listing_request(&mut self) {
         if std::mem::take(&mut self.session.relist_wanted) {
+            self.session.make_paths_absolute();
             self.listing.request(self.session.source());
         }
     }
@@ -656,6 +729,17 @@ impl RenameItApp {
         // is drawn, but an empty index is the honest state until the next
         // plan lands.
         self.plan_index.clear();
+        // An editor opened on a file this listing no longer has would sit
+        // over nothing, and Enter would have nothing to rename.
+        if let Some(edit) = &self.inline_rename
+            && !self
+                .session
+                .entries()
+                .iter()
+                .any(|entry| entry.path == edit.path)
+        {
+            self.inline_rename = None;
+        }
         match self.after_listing.take() {
             Some(AfterListing::OpenEditorOn(path)) => {
                 self.open_editor_on_the_next_row(Some(path));
@@ -749,18 +833,27 @@ impl RenameItApp {
     /// **The mode is forced first, and that is not what `accept_dropped` does.**
     /// It navigates only when the mode is *already* Browser, because a drag of
     /// a folder into Free Select genuinely means "add this to the list". A
-    /// command line naming one folder has never meant that — but `mode` is
-    /// persisted and nothing resets it, so a user whose last session ended in
-    /// Free Select got the folder as a single row instead of a listing of what
-    /// is inside it.
+    /// command line naming one folder has never meant that. A fresh session
+    /// always starts in Browser (`Session::new`), but this is also reached
+    /// with a session already in Free Select, and then the folder would
+    /// arrive as a single row instead of a listing of what is inside it.
     ///
     /// The condition deliberately mirrors `accept_dropped`'s own, which
     /// re-checks it — so widening this to every path set changes nothing and
     /// no test catches that. What is load-bearing here is the *mode*, not the
     /// decision; the condition is written out so the next reader can see which
     /// case is being overridden rather than infer it.
+    ///
+    /// Relative paths are made absolute first, against the directory the app
+    /// was started in: every later step — the listing, the plan, the journal,
+    /// the D127 guard's prefix match — needs a full path, and nothing later
+    /// knows what the working directory was.
     pub fn start_at(&mut self, paths: Vec<std::path::PathBuf>) {
-        let real: Vec<_> = paths.into_iter().filter(|p| p.exists()).collect();
+        let real: Vec<_> = paths
+            .into_iter()
+            .filter(|p| p.exists())
+            .map(|p| std::path::absolute(&p).unwrap_or(p))
+            .collect();
         if real.is_empty() {
             return;
         }
@@ -774,9 +867,10 @@ impl RenameItApp {
     /// Opens on whatever the command line asked for.
     ///
     /// One place rather than four, because the order matters and is easy to get
-    /// wrong: the source is set **first**, so the preset loads against a
-    /// listing that already exists and the status line the user reads is the
-    /// preset's rather than the listing's.
+    /// wrong: the source is set **first**, so the one relist request this
+    /// frame drains already carries the final source. The preset loads
+    /// independently of the listing, and its status line is the one the user
+    /// reads.
     ///
     /// It never renames. A preset chosen from the Explorer menu loads, lists
     /// the selection and shows the preview — **P4** blocks a conflicting plan
@@ -789,10 +883,13 @@ impl RenameItApp {
             // than by asking Windows for `%W`, whose behaviour for a static
             // verb no test of ours can reach.
             if let Some(first) = launch.paths.iter().find(|p| p.exists()) {
+                // Absolute before `parent()`: the parent of a bare `a.txt` is
+                // an empty path, which is no folder at all.
+                let first = std::path::absolute(first).unwrap_or_else(|_| first.clone());
                 let dir = if first.is_dir() {
                     first.clone()
                 } else {
-                    first.parent().unwrap_or(first).to_path_buf()
+                    first.parent().unwrap_or(&first).to_path_buf()
                 };
                 self.session.settings.mode = crate::viewmodel::SourceMode::Browser;
                 self.set_dir(dir);
@@ -823,7 +920,8 @@ impl RenameItApp {
         self.rewrite_menu();
     }
 
-    /// The second half of *"jump to the next item in the file list"*.
+    /// The second half of F2's Enter: rename, then open the editor on the
+    /// next row, so a list can be renamed by hand one name after another.
     ///
     /// **Moves the lead, never the selection.** A rename is not the user
     /// choosing which files a run covers; silently narrowing the scope to one
@@ -840,7 +938,7 @@ impl RenameItApp {
         };
         let name = self.session.entries()[next].file_name.clone();
         self.session.selection.set_lead(Some(next));
-        self.inline_rename = Some(crate::panels::rows::InlineRename::opening(next, &name));
+        self.inline_rename = Some(crate::panels::rows::InlineRename::opening(&path, &name));
         self.scroll_to = Some(next);
     }
 
@@ -849,27 +947,33 @@ impl RenameItApp {
         self.field_history.get(id).map_or(&[], Vec::as_slice)
     }
 
+    /// The pattern fields a run would remember, as the stack is now.
+    ///
+    /// Walks the stack rather than the widgets, so a pattern on a *collapsed*
+    /// card is remembered too: the card is in the run whether or not it is on
+    /// screen. Taken when the run starts — the stack can be edited while it
+    /// is out, and what is remembered is what ran.
+    fn fields_to_remember(&self) -> Vec<(&'static str, String)> {
+        self.stack
+            .cards()
+            .iter()
+            .flat_map(|card| history_entries(&card.op))
+            .filter(|(_, text)| !text.trim().is_empty())
+            .collect()
+    }
+
     /// Records what this run's pattern fields were set to.
     ///
     /// **When the run is committed, not on every keystroke.** The combo holds
     /// *previously used* strings; recording as you type fills it with
     /// the prefixes of one string. A simulation counts — the user still said
     /// they meant it.
-    ///
-    /// Walks the stack rather than the widgets, so a pattern on a *collapsed*
-    /// card is remembered too: the card is in the run whether or not it is on
-    /// screen.
-    fn remember_fields(&mut self) {
-        for (op, _) in self.stack.to_steps() {
-            for (id, text) in history_entries(&op) {
-                if text.trim().is_empty() {
-                    continue;
-                }
-                let list = self.field_history.entry(id.to_owned()).or_default();
-                list.retain(|previous| *previous != text);
-                list.insert(0, text);
-                list.truncate(crate::widgets::tag_field::HISTORY_ITEMS);
-            }
+    fn remember_fields(&mut self, fields: Vec<(&'static str, String)>) {
+        for (id, text) in fields {
+            let list = self.field_history.entry(id.to_owned()).or_default();
+            list.retain(|previous| *previous != text);
+            list.insert(0, text);
+            list.truncate(crate::widgets::tag_field::HISTORY_ITEMS);
         }
     }
 
@@ -879,28 +983,29 @@ impl RenameItApp {
         self.session.request_refresh();
     }
 
-    /// F9: *"Refresh the file list."* — reads the folder again, and forgets
+    /// F9: refresh the file list — read the folder again, and forget
     /// everything that was read from the files themselves.
     ///
-    /// The relist alone was a half-refresh. `Session::refresh` re-reads names,
-    /// sizes and dates, because those come from the directory entry; every
-    /// *metadata* tag — the Exif date, the MP3 artist, the `<Width>` of a
-    /// picture, the thumbnail — comes from a process-wide cache keyed on path,
-    /// length and mtime, and none of those was touched. So a file edited in
-    /// another program by a tool that preserves its size and mtime kept showing
-    /// its old tags, and pressing Refresh confirmed the stale value rather than
-    /// correcting it.
+    /// The relist alone was a half-refresh. A relist re-reads names, sizes and
+    /// dates, because those come from the directory entry; every *metadata*
+    /// tag — the Exif date, the MP3 artist, the `<Width>` of a picture, the
+    /// `<Crc32>` of its contents, the thumbnail — comes from a process-wide
+    /// cache keyed on path, length and mtime, and none of those was touched.
+    /// So a file edited in another program by a tool that preserves its size
+    /// and mtime kept showing its old tags, and pressing Refresh confirmed the
+    /// stale value rather than correcting it.
     ///
-    /// The listing's own `refresh()` deliberately does **not** do this. It runs
-    /// after every rename and every undo, where forgetting would undo the
-    /// thumbnail cache's rekey and re-read the tags of every file in the folder
-    /// on the app's commonest workflow (D140).
+    /// The relist a run or an undo asks for deliberately does **not** do
+    /// this. Forgetting there would undo the thumbnail cache's rekey and
+    /// re-read the tags of every file in the folder on the app's commonest
+    /// workflow (D140).
     pub fn forget_and_relist(&mut self) {
         ren_core::meta::audio::forget_all();
         ren_core::meta::exif::forget_all();
         ren_core::meta::folder::forget_all();
         ren_core::meta::html::forget_all();
         ren_core::meta::image::forget_all();
+        ren_core::template::content::forget_all();
         self.thumbs.clear();
         self.session.request_refresh();
     }
@@ -1144,8 +1249,9 @@ impl RenameItApp {
         }
     }
 
-    /// > *"Probably to most useful tool is the reset to default settings
-    /// > button, which usually fixes any problems you might have!"*
+    /// Settings ▸ Problem Solver's reset: the one button that puts every
+    /// setting back, for a user whose app has got into a state they cannot
+    /// find their way out of.
     ///
     /// **The rule that makes the split decidable: it puts back exactly what a
     /// Settings page owns, and does not touch what the source bar and the table
@@ -1154,11 +1260,11 @@ impl RenameItApp {
     /// cannot be a wholesale `Persisted::default()`.
     ///
     /// **Deliberately narrow (D156).** A reset that emptied the whole settings
-    /// folder would take presets and scripts with it. Ours spares the undo
+    /// folder would take presets and scripts with it. This one spares the undo
     /// journal — a **safety** exclusion rather than a convenience one, because
     /// it is the only way back from the last run — and spares presets and
-    /// scripts, which the page above
-    /// this button already treats as the user's own files.
+    /// scripts, which the page above this button already treats as the user's
+    /// own files.
     fn reset_settings(&mut self, ctx: &egui::Context) {
         let fresh = Persisted::default();
 
@@ -1193,8 +1299,9 @@ impl RenameItApp {
         live.thumb_size = fresh.session.thumb_size;
         live.thumb_border = fresh.session.thumb_border;
 
-        // Not in `Persisted` and never saved, but a stray one is exactly the
-        // *"some files are missing from the list"* the page above answers.
+        // Not in `Persisted` and never saved, but a stray filter is the
+        // commonest reason files are missing from the list, which is the
+        // question the page above this button answers.
         self.filter = FilterForm::default();
 
         ctx.set_theme(egui::ThemePreference::from(self.theme));
@@ -1235,10 +1342,26 @@ impl RenameItApp {
     }
 
     /// Saves the current pipeline under a name.
+    ///
+    /// **A save over an existing preset keeps its description.** The app has
+    /// nowhere to type one — descriptions come with shipped and imported
+    /// presets — and the drawer seeds the name box with the loaded preset's
+    /// name, so load, tweak, save is a save over it. Writing an empty
+    /// description there erased the one line the drawer shows for it. Found
+    /// the way `PresetStore::save` finds the file it overwrites: by name,
+    /// ignoring case.
     pub fn save_preset(&mut self, name: &str) {
+        let description = self
+            .presets
+            .list()
+            .0
+            .into_iter()
+            .find(|entry| entry.name.eq_ignore_ascii_case(name))
+            .map(|entry| entry.description)
+            .unwrap_or_default();
         let preset = ren_core::Preset {
             name: name.to_owned(),
-            description: String::new(),
+            description,
             steps: self.stack.to_steps(),
             settings: self.settings.clone(),
         };
@@ -1314,15 +1437,35 @@ impl RenameItApp {
         }
     }
 
+    /// Renames a preset. A name another preset already has is allowed — the
+    /// file gets a free name beside it — so the status line says the two now
+    /// share it, since the drawer and the menu will show both.
     pub fn rename_preset(&mut self, path: &Path, new_name: &str) {
-        if let Err(e) = self.presets.rename(path, new_name) {
-            self.status = Some(e.to_string());
+        match self.presets.rename(path, new_name) {
+            Ok(_) => {
+                let sharing = self
+                    .presets
+                    .list()
+                    .0
+                    .iter()
+                    .filter(|entry| entry.name.eq_ignore_ascii_case(new_name))
+                    .count();
+                self.status = (sharing > 1)
+                    .then(|| format!("Renamed to “{new_name}” — another preset has that name too"));
+            }
+            Err(e) => self.status = Some(e.to_string()),
         }
     }
 
+    /// Copies a preset under the first free "(copy)" name, and says which.
     pub fn duplicate_preset(&mut self, path: &Path) {
-        if let Err(e) = self.presets.duplicate(path) {
-            self.status = Some(e.to_string());
+        match self
+            .presets
+            .duplicate(path)
+            .and_then(|copy| self.presets.load(&copy))
+        {
+            Ok((copy, _)) => self.status = Some(format!("Duplicated as “{}”", copy.name)),
+            Err(e) => self.status = Some(e.to_string()),
         }
     }
 
@@ -1626,6 +1769,9 @@ impl RenameItApp {
         if anchor {
             crate::editors::assist::anchor_to_end(&mut card.op, state.target, chars);
         }
+        // An in-place edit: the card's own compiled state (its summary, its
+        // problem line) is derived once and kept until reset (D21).
+        card.op.refresh();
         self.needs_preview = true;
     }
 
@@ -1640,17 +1786,17 @@ impl RenameItApp {
         }
     }
 
-    /// F3: *"Opens the Visual Assist window where available."*
+    /// F3: Visual Assist for the open card, where the card has one.
     ///
     /// Cycles the targets the expanded card offers, wrapping to closed — so on
     /// Replace or Move Section it is a toggle, and on an Add & Remove card in
     /// *Both* mode it goes Remove → Add → closed. One rule covers both, and the
     /// lit marker moves so the cycle is visible.
     ///
-    /// *"Where available"* is the documented phrase, and where it is not, this
-    /// says so: a silent no-op on a documented key is what a user reports as a
-    /// bug. It does **not** expand a card — moving the accordion from a key
-    /// someone may have hit by accident is worse than a sentence.
+    /// Where the card has none, this says so: a silent no-op on a key the user
+    /// was told about is what gets reported as a bug. It does **not** expand a
+    /// card — moving the accordion from a key someone may have hit by accident
+    /// is worse than a sentence.
     fn cycle_visual_assist(&mut self) {
         use crate::editors::assist::AssistTarget;
 
@@ -1796,12 +1942,36 @@ impl RenameItApp {
         }
     }
 
+    /// Every way a run starts comes through here — the button, F5, a
+    /// preset's Run, a run deferred until the preview caught up — so every
+    /// refusal is made here, not only on the button.
     fn run(&mut self) {
         // One dialog at a time. Without this, a held F5 or a stuck
         // `run_when_ready` rebuilds the confirmation every frame — cheap and
         // invisible in the paint, and exactly the never-settling loop D26
         // forbids, with duplicate nodes in the accessibility tree to match.
         if self.confirming.is_some() {
+            return;
+        }
+        // D127, ahead of every other reason. The button's disabled state was
+        // the only enforcement, so F5 and a preset's Run renamed inside a
+        // folder the operating system owns.
+        if self.session.guarded.is_some() {
+            self.status = self.blocked_reason();
+            self.run_when_ready = false;
+            return;
+        }
+        // **Not while the listing is out of date.** Straight after a run the
+        // plan in hand is over the names that run replaced, and nothing marks
+        // it stale — the pipeline did not change. Pressing again in that gap
+        // re-applied it: a swap swapped back, anything else failed at its
+        // first file and replaced the good run's report. Refused rather than
+        // deferred: a deferred run would wait for the new listing and apply
+        // the pipeline a second time to the renamed files.
+        if self.session.relist_wanted || self.listing.is_listing() {
+            self.status =
+                Some("The file list is updating — press Rename again in a moment".to_owned());
+            self.run_when_ready = false;
             return;
         }
         // Never against a plan older than the pipeline on screen. Pressing Run
@@ -1819,44 +1989,54 @@ impl RenameItApp {
             self.asking = Some(form);
             return;
         }
-        // One read, so the plan and the generation that produced it cannot
-        // disagree about which run this is.
-        let Some((generation, plan)) = self
+        // The button's own reasons, for the paths that have no button:
+        // conflicts, errors, a blocker, nothing to do, a failed preview.
+        if let Some(reason) = self.blocked_reason() {
+            self.status = Some(reason);
+            self.run_when_ready = false;
+            return;
+        }
+        // One read, so the plan, the generation that produced it and the rows
+        // it covers cannot disagree about which run this is.
+        let Some((generation, plan, scoped)) = self
             .preview
             .ready()
-            .map(|ready| (ready.generation, ready.plan.clone()))
+            .map(|ready| (ready.generation, ready.plan.clone(), ready.scoped.clone()))
         else {
             return;
         };
 
-        // P2's gate. Only for a run that really cannot be taken back, so an
-        // ordinary rename stays one click — a confirmation on every run is one
-        // the user learns to click through, which is the only way it can fail.
+        // P2's gate. Only for a run that really cannot be taken back, or one
+        // that writes a file a script chose (see `confirm`), so an ordinary
+        // rename stays one click — a confirmation on every run is one the user
+        // learns to click through, which is the only way it can fail.
         // Simulation is exempt for the reason the engine gives: it performs no
         // syscall, so there is nothing to consent to, and a dialog headed
         // "cannot be undone" would be false there.
         let consented = self.consented_for == Some(generation);
-        if !self.simulate && !consented && plan.irreversible() > 0 {
+        if !self.simulate && !consented && confirm::needed(&plan) {
             self.confirming = Some(confirm::Confirm::new(&plan, generation));
             return;
         }
         // One-shot, whatever happens below.
         self.consented_for = None;
 
+        let in_flight = RunInFlight {
+            simulate: self.simulate,
+            affected: plan.affected(),
+            next_start: self.next_counter_start(&scoped),
+            fields: self.fields_to_remember(),
+        };
         // Off the frame. One job at a time: a run pressed while one is out
         // is refused here rather than queued behind a batch that changes the
         // listing it was planned over — and the button is disabled while
         // one is out, so this is the keyboard's path.
-        let affected = plan.affected();
         let options = self.history.run_options(self.simulate, consented);
         if self.jobs.run(plan, options).is_err() {
             self.status = Some("A run is still going".to_owned());
             return;
         }
-        self.running = Some(RunInFlight {
-            simulate: self.simulate,
-            affected,
-        });
+        self.running = Some(in_flight);
     }
 
     /// Records a run the worker has finished: everything that used to
@@ -1865,7 +2045,13 @@ impl RenameItApp {
         &mut self,
         outcome: Result<ren_core::exec::ApplyReport, ren_core::exec::ExecError>,
     ) {
-        let Some(RunInFlight { simulate, affected }) = self.running.take() else {
+        let Some(RunInFlight {
+            simulate,
+            affected,
+            next_start,
+            fields,
+        }) = self.running.take()
+        else {
             return;
         };
         match outcome {
@@ -1877,9 +2063,18 @@ impl RenameItApp {
                 // Renames and metadata changes counted separately, in the
                 // status bar's own vocabulary. Saying "Renamed 0 item(s)" after
                 // a run that rewrote two files' tags is the same lie
-                // `blocked_reason` was fixed for a milestone ago.
-                let what =
+                // `blocked_reason` was fixed for a milestone ago — and a file a
+                // script wrote is a third thing again.
+                let mut what =
                     crate::viewmodel::describe_counts(report.renamed.len(), report.modified());
+                if !report.wrote.is_empty() {
+                    let wrote = ren_core::plural(report.wrote.len(), "file");
+                    what = if report.renamed.is_empty() && report.modified() == 0 {
+                        format!("Wrote {wrote}")
+                    } else {
+                        format!("{what}, and wrote {wrote}")
+                    };
+                }
                 self.status = Some(if simulate {
                     format!("Simulated: {what} — nothing was written")
                 } else if report.cancelled {
@@ -1895,20 +2090,22 @@ impl RenameItApp {
                 self.show_log = true;
                 // Outside the `!simulate` branch below: a simulation is still
                 // the user saying they meant that pattern.
-                self.remember_fields();
+                self.remember_fields(fields);
                 if !simulate {
                     // A running counter that advanced over renames which never
                     // happened would leave a gap in the next batch.
-                    if report.is_success() && !report.cancelled {
-                        self.advance_running_counter();
+                    if report.is_success()
+                        && !report.cancelled
+                        && let Some(start) = next_start
+                    {
+                        self.settings.counter.start = start;
                     }
                     // A rename is the commit point. The name the strip's
-                    // selection was measured against is gone, and `refresh()`
+                    // selection was measured against is gone, and the relist
                     // below invalidates the file it was pointing at — leaving
                     // it open is how a position measured against a dead name
                     // gets written into a card and run a second time. A
-                    // simulation renames nothing, so it does not close (this
-                    // branch is already inside `if !self.simulate`).
+                    // simulation renames nothing, so it does not close.
                     self.close_visual_assist();
                     // Before the relist, so the pictures are already under
                     // their new names when the next frame asks for them.
@@ -1921,36 +2118,70 @@ impl RenameItApp {
                     self.session.refresh_after_run(&report.renamed);
                 }
             }
-            // The journal died with files already moved. The listing on
-            // screen is wrong now, and the strip and the pictures are keyed
-            // to names that may be gone — everything a completed run does
-            // afterwards, this has to do too, minus the counter.
+            // The journal died with files already moved. There is no report
+            // of which, so this does what can be done without one: the
+            // listing is re-read, the strip closed (its file may be gone),
+            // and the journals re-scanned, so the banner offers the rollback
+            // now rather than on the next start. No counter, no batch: Undo
+            // has nothing exact to replay, and the banner does.
             Err(e @ ren_core::exec::ExecError::Interrupted { .. }) => {
                 self.status = Some(e.to_string());
-                self.show_log = true;
-                self.close_visual_assist();
-                self.session.request_refresh();
+                self.after_files_may_have_moved();
             }
+            // Refused before anything was touched — a blocked plan, a
+            // relative path, a journal that could not be created — so the
+            // listing and the selection stay as they are.
             Err(e) => self.status = Some(e.to_string()),
         }
     }
 
-    /// *"the start value is updated after each rename operation"* to *"the
-    /// number that would have been next in line if the counter had continued"*.
+    /// What follows a job that stopped part-way with no report of what it
+    /// did: an interrupted run, and any job the engine panicked in.
+    fn after_files_may_have_moved(&mut self) {
+        self.show_log = true;
+        self.close_visual_assist();
+        self.session.request_refresh();
+        self.history.rescan();
+    }
+
+    /// A job the engine panicked in. The journal was written ahead, so
+    /// nothing is lost — but what to do next depends on what the job was.
+    fn finish_panicked(&mut self, kind: crate::viewmodel::JobKind, message: &str) {
+        use crate::viewmodel::JobKind;
+        self.status = Some(match kind {
+            JobKind::Run => {
+                self.running = None;
+                format!(
+                    "The run stopped part-way: {message}. The journal records what happened, \
+                     and Roll back above takes it back."
+                )
+            }
+            JobKind::Undo => format!(
+                "The undo stopped part-way: {message}. The batch is still on the Undo list; \
+                 undo it again to finish."
+            ),
+            JobKind::Rollback => format!("The rollback stopped part-way: {message}."),
+        });
+        self.after_files_may_have_moved();
+    }
+
+    /// The running counter's next start after a run over `scoped`: the
+    /// number that would have come next had the counter carried on.
     ///
-    /// Only after a real rename: a simulation that moved the counter on would
-    /// make Simulate a destructive button.
-    fn advance_running_counter(&mut self) {
+    /// Worked out when the run starts, over the rows and settings its plan
+    /// was built with; applied only after a real, complete rename — a
+    /// simulation that moved the counter on would make Simulate a destructive
+    /// button.
+    fn next_counter_start(&self, scoped: &[usize]) -> Option<i64> {
         if !self.settings.counter.running {
-            return;
+            return None;
         }
-        let entries: Vec<FileEntry> = self
-            .scoped
+        let entries: Vec<FileEntry> = scoped
             .iter()
             .filter_map(|&i| self.session.entries().get(i).cloned())
             .collect();
         let run = ren_core::RunContext::build(&entries, &self.settings, self.answers.clone());
-        self.settings.counter.start = run.next_start(&self.settings.counter);
+        Some(run.next_start(&self.settings.counter))
     }
 
     fn undo(&mut self) {
@@ -1980,44 +2211,149 @@ impl RenameItApp {
                 // "Undone" on its own is a lie for a mixed batch: the renames
                 // came back and the tag writes did not, and the one the user
                 // cannot fix is the one that has to be said (D54).
-                self.status = Some(match self.history.last_irreversible() {
+                let mut status = match self.history.last_irreversible() {
                     0 => "Undone".to_owned(),
                     1 => "Undone — 1 change could not be taken back".to_owned(),
                     n => format!("Undone — {n} changes could not be taken back"),
-                });
+                };
+                if report.not_recorded.is_some() {
+                    status.push_str(" — but the journal could not be updated; see the log");
+                }
+                self.status = Some(status);
                 self.show_log = true;
                 // The same as a run, for the same reason.
                 self.close_visual_assist();
-                // The same move a run makes, in reverse; the pictures follow.
-                self.thumbs.renamed(self.history.last_restored());
-                self.session.request_refresh();
+                // The same move a run makes, in reverse: the pictures, the
+                // Free Select set and a hand-set order all follow it.
+                self.thumbs.renamed(&report.restored);
+                self.session.refresh_after_run(&report.restored);
             }
-            Err(e) => self.status = Some(e.to_string()),
+            // Nothing was touched; the only question is whether the batch
+            // stays on the stack (see `History::undo_failed`).
+            Err(e) => {
+                self.status = Some(
+                    self.history
+                        .undo_failed(position, &e)
+                        .unwrap_or_else(|| e.to_string()),
+                );
+            }
         }
     }
 
-    /// Takes delivery of a finished run or undo, if there is one.
+    /// Records the recovery banner's Roll back, which the worker has finished.
+    fn finish_rollback(
+        &mut self,
+        results: Vec<(
+            ren_core::exec::Unfinished,
+            Result<ren_core::exec::UndoReport, ren_core::exec::ExecError>,
+        )>,
+    ) {
+        let rolled = results.iter().filter(|(_, r)| r.is_ok()).count();
+        self.status = Some(match self.history.record_rollback(results) {
+            Ok(()) => format!("Rolled back {}", batches(rolled)),
+            Err(error) => error,
+        });
+        self.show_log = true;
+        self.close_visual_assist();
+        let restored = self.history.last_restored().to_vec();
+        self.thumbs.renamed(&restored);
+        self.session.refresh_after_run(&restored);
+    }
+
+    /// Takes delivery of a finished job, if there is one.
     fn poll_jobs(&mut self) -> bool {
         match self.jobs.poll() {
             Some(Outcome::Run(outcome)) => self.finish_run(outcome),
             Some(Outcome::Undo { position, report }) => self.finish_undo(position, report),
+            Some(Outcome::Rollback(results)) => self.finish_rollback(results),
+            Some(Outcome::Panicked { kind, message }) => self.finish_panicked(kind, &message),
             None => return false,
         }
         true
     }
 
-    /// F2's one-off rename. Journalled like any other batch, so Undo covers it.
-    pub fn rename_one(&mut self, index: usize, new_name: String) {
-        self.inline_rename = None;
-        let Some(entry) = self.session.entries().get(index).cloned() else {
+    /// The window asked to close. Refused while a job is out, and granted
+    /// once it lands.
+    ///
+    /// **An undo killed part-way cannot be found again.** Its journal still
+    /// has the run's `Commit`, so recovery never offers it, and the Undo list
+    /// dies with the process — a half-reverted batch nothing in the app can
+    /// see. A run killed part-way is recoverable, but a run the user merely
+    /// wanted to stop has a Cancel for that. So the close waits for the job,
+    /// and the status line says why the window is still there.
+    fn handle_close_request(&mut self, ctx: &egui::Context) {
+        use crate::viewmodel::JobKind;
+        if !ctx.input(|i| i.viewport().close_requested()) {
+            return;
+        }
+        let Some(job) = self.jobs.in_flight() else {
             return;
         };
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        self.close_when_idle = true;
+        self.status = Some(
+            match job.kind {
+                JobKind::Run => {
+                    "A run is still going — the window closes when it finishes. Cancel stops it \
+                     sooner."
+                }
+                JobKind::Undo => "Undo is finishing — the window closes when it is done.",
+                JobKind::Rollback => "Roll back is finishing — the window closes when it is done.",
+            }
+            .to_owned(),
+        );
+    }
+
+    /// Closes the window a close request was held back for, once nothing is
+    /// out. `None` from `settle`, which has no window.
+    fn close_if_idle(&mut self, ctx: Option<&egui::Context>) {
+        if self.close_when_idle && !self.jobs.is_busy() {
+            self.close_when_idle = false;
+            if let Some(ctx) = ctx {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+    }
+
+    /// F2's one-off rename of the file in row `index`, as the editor on that
+    /// row would confirm it now.
+    pub fn rename_one(&mut self, index: usize, new_name: String) {
+        let Some(path) = self.session.entries().get(index).map(|e| e.path.clone()) else {
+            return;
+        };
+        self.rename_file(&path, new_name);
+    }
+
+    /// F2's one-off rename. Journalled like any other batch, so Undo covers it.
+    ///
+    /// **By path**: the editor belongs to the file it was opened on, and a
+    /// sort or a relist since then must not point it at another one.
+    pub fn rename_file(&mut self, path: &Path, new_name: String) {
+        self.inline_rename = None;
+        // One job at a time (D169) covers this one too: an F2 rename of a
+        // file the run has not reached yet makes that op fail, and its batch
+        // would land on the Undo list ahead of the run it came after.
+        if self.jobs.is_busy() {
+            self.status = Some("A run is still going — rename it when that is done".to_owned());
+            return;
+        }
+        let Some(index) = self
+            .session
+            .entries()
+            .iter()
+            .position(|entry| entry.path == path)
+        else {
+            self.status =
+                Some("That file is no longer in the list, so nothing was renamed".to_owned());
+            return;
+        };
+        let entry = self.session.entries()[index].clone();
         // Enter renames the file and jumps to the next item in the list.
         //
         // Captured **by path**, before the rename, and looked up again after.
-        // `refresh()` re-lists and re-sorts, so the row that was next may be
-        // anywhere afterwards — and if the new name sorts past it, it is. An
-        // index taken now would open the editor on whatever landed there.
+        // The relist re-sorts, so the row that was next may be anywhere
+        // afterwards — and if the new name sorts past it, it is. An index
+        // taken now would open the editor on whatever landed there.
         //
         // The next row **on screen**: with the Changed chip on, the next entry
         // may be hidden, and "the next item in the file list" means the list
@@ -2032,6 +2368,12 @@ impl RenameItApp {
         if new_name == entry.file_name || new_name.is_empty() {
             return;
         }
+        // D127 for one file: the same refusal the run makes, asked of this
+        // file's folder rather than the whole listing's.
+        if let Some(folder) = self.session.guarded_for(&entry.path) {
+            self.status = status_bar::blocked_reason_for(None, false, Some(&folder), None);
+            return;
+        }
 
         let rules = self.platform.naming_rules(&entry.path);
         if let Err(problem) = rules.validate_component(&new_name) {
@@ -2042,10 +2384,10 @@ impl RenameItApp {
         // A case-only rename lands on *itself*. On a case-insensitive volume
         // `readme.txt` → `README.txt` resolves to the very file being renamed,
         // so a bare existence check refuses the single most common thing Set
-        // Casing does — and the engine and the platform both handle it (the
+        // Casing does — and the engine and the platform both handle it: the
         // planner's own folded-target detection treats it as one file, and
-        // `Platform::rename` is where the two-step dance lives if a filesystem
-        // needs one).
+        // `Platform::rename` takes a case-only rename through a temporary
+        // name where the volume needs one.
         let same_file_new_spelling = rules.fold(&new_name) == rules.fold(&entry.file_name);
         if !same_file_new_spelling && target.symlink_metadata().is_ok() {
             self.status = Some(format!("Cannot rename: {new_name} already exists"));
@@ -2072,14 +2414,28 @@ impl RenameItApp {
             blockers: Vec::new(),
         };
         // An inline rename of one file: a rename is always reversible.
+        //
+        // **Simulate covers it.** The switch promises that nothing touches the
+        // disk, and an F2 rename is a run of one; a user dry-running a
+        // pipeline who presses Enter in the editor has not stopped meaning it.
+        let simulate = self.simulate;
         match self
             .history
-            .run(&plan, self.platform.as_ref(), false, false)
+            .run(&plan, self.platform.as_ref(), simulate, false)
         {
+            Ok(_) if simulate => {
+                self.status = Some(format!(
+                    "Simulated: renamed to {new_name} — nothing was written"
+                ));
+                // Nothing moved, so the rows are where they were.
+                self.open_editor_on_the_next_row(successor);
+            }
             Ok(report) => {
                 self.status = Some(format!("Renamed to {new_name}"));
                 self.thumbs.renamed(&report.renamed);
-                self.session.request_refresh();
+                // Through the report, like a run's: Free Select follows the
+                // file, and a hand-set order keeps its place.
+                self.session.refresh_after_run(&report.renamed);
                 // Once the rows exist again: the successor is looked up by
                 // path in the listing that has not landed yet.
                 self.after_listing = successor.map(AfterListing::OpenEditorOn);
@@ -2105,9 +2461,8 @@ impl RenameItApp {
         }
     }
 
-    /// The keys the **file list** owns: the arrows, Home, End and `Ctrl+A`.
-    ///
-    /// > *"Navigate the file structure with these two and the arrow keys."*
+    /// The keys the **file list** owns: the arrows, Home, End, `Ctrl+A`, and
+    /// in Browser mode Enter and Backspace to walk the folder tree.
     ///
     /// Split out from `handle_hotkeys` rather than added to it, because the
     /// guard has to be **stricter in two ways**.
@@ -2140,11 +2495,13 @@ impl RenameItApp {
             return;
         }
 
-        // *"(Browser file mode only)"* — Free Select has no working path to
-        // change, which is why F6 and F12 are gated the same way.
+        // Browser mode only — Free Select has no working path to change,
+        // which is why F6 and F12 are gated the same way.
         let browsing = self.session.settings.mode == crate::viewmodel::SourceMode::Browser;
         if browsing {
             self.walk_the_folder_tree(ctx);
+        } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Delete)) {
+            self.remove_from_free_select();
         }
 
         // The keys first, the row list second: the list is a walk over the
@@ -2196,8 +2553,8 @@ impl RenameItApp {
         }
     }
 
-    /// > *"`Enter` & `Backspace` — Navigate the file structure with these two
-    /// > and the arrow keys. (Browser file mode only)"*
+    /// Enter goes into the folder under the keyboard, Backspace up to the
+    /// parent — Browser mode only, since Free Select has no folder to walk.
     ///
     /// **P77 is not reopened.** That policy refused *double-click* meaning two
     /// things depending on which view is lit; these are keys, they mean the
@@ -2207,8 +2564,8 @@ impl RenameItApp {
     /// The two directions are deliberately asymmetric in what they need:
     /// **Backspace works whatever the Folders chip says**, because a parent
     /// folder is not a row; **Enter needs a folder row to act on**, so it needs
-    /// the chip. That asymmetry is why the *"always show folder icons"* row is
-    /// waived rather than blocking this one.
+    /// the chip. That asymmetry is why "always show folder icons" is waived
+    /// rather than blocking this one.
     fn walk_the_folder_tree(&mut self, ctx: &egui::Context) {
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
             // A **folder** row descends into it. A file row does nothing, and
@@ -2238,6 +2595,24 @@ impl RenameItApp {
             // listed at all, which is when the Folders chip is on. Once the
             // parent's rows exist, which is not yet.
             self.after_listing = Some(AfterListing::LandOn(leaving));
+        }
+    }
+
+    /// P65: Delete takes the selected rows — or the one under the keyboard
+    /// when nothing is selected — out of Free Select. Never off the disk.
+    fn remove_from_free_select(&mut self) {
+        let rows: Vec<usize> = if self.session.selection.is_empty() {
+            self.session.selection.lead.into_iter().collect()
+        } else {
+            self.session.selection.iter().collect()
+        };
+        let removed = self.session.remove_from_free_select(&rows);
+        if removed > 0 {
+            self.needs_preview = true;
+            self.status = Some(format!(
+                "Took {} out of Free Select — the files themselves are untouched",
+                ren_core::plural(removed, "item")
+            ));
         }
     }
 
@@ -2274,7 +2649,18 @@ impl RenameItApp {
     }
 
     fn handle_hotkeys(&mut self, ctx: &egui::Context) {
-        // **F3 sits above the guard below, and it is the only key that does.**
+        // **Nothing behind a modal.** A window owns the keyboard even when
+        // nothing inside it has focus — clicking a button does not focus it —
+        // and `ctx.input` is global: a modal blocks the pointer, not the keys.
+        // So Ctrl+Z in Settings, after deleting a rule, reverted the last
+        // batch on disk behind it, and F5 under the `<Ask>` form replaced the
+        // answer being typed. `handle_list_keys` already stood down here.
+        if self.modal_is_up() {
+            return;
+        }
+
+        // **F3 sits above the typing guard below, and it is the only key that
+        // does.**
         //
         // The field Visual Assist puts on screen *is* a text edit — read-only,
         // so there is nothing to type into it and no keystroke of the user's to
@@ -2286,7 +2672,7 @@ impl RenameItApp {
         // Nothing else moves. F5 and Ctrl+Z keep the reasoning in the comment
         // below: a run started mid-word, or an undo that reaches past the text
         // the user is editing, are exactly what that guard is for.
-        if ctx.input(|i| i.key_pressed(egui::Key::F3)) {
+        if ctx.input(|i| i.modifiers.is_none() && i.key_pressed(egui::Key::F3)) {
             self.cycle_visual_assist();
         }
 
@@ -2296,34 +2682,51 @@ impl RenameItApp {
         // as the app having the keyboard, so the shortcuts stay live where they
         // are useful.
         //
-        // **A number box is not typing.** `text_edit_focused()` asks whether the
-        // focused widget has a `TextEditState`, and a focused `DragValue` builds
-        // a real `TextEdit` under its own id — so every position and count box
-        // on every card answered yes, and clicking *from pos:* disabled all nine
-        // shortcuts until the user clicked elsewhere. The reasoning above is
-        // about prose the user is composing: a spinner holds a handful of digits
-        // it commits on every keystroke, none of these keys types one, and a
-        // card you have just finished configuring is the likeliest moment to
-        // press F5. See `widgets::number` for why egui cannot tell them apart.
-        if ctx.text_edit_focused() && !crate::widgets::number::has_focus(ctx) {
+        // **A number box is not typing — for the function keys.**
+        // `text_edit_focused()` asks whether the focused widget has a
+        // `TextEditState`, and a focused `DragValue` builds a real `TextEdit`
+        // under its own id — so every position and count box on every card
+        // answered yes, and clicking *from pos:* disabled every shortcut until
+        // the user clicked elsewhere. A spinner holds a handful of digits it
+        // commits on every keystroke, no F-key types one, and a card you have
+        // just finished configuring is the likeliest moment to press F5. See
+        // `widgets::number` for why egui cannot tell them apart.
+        //
+        // **But Ctrl+Z and Ctrl+K are not F-keys** (P81 narrowed): that box's
+        // `TextEdit` answers Ctrl+Z itself, by undoing the digit, and one
+        // keystroke must not also undo the last batch on disk.
+        let in_number_box = crate::widgets::number::has_focus(ctx);
+        if ctx.text_edit_focused() && !in_number_box {
             return;
         }
 
         // The hotkeys, in order: F2 rename, F4 undo,
         // F5 run, F6 focus the address box, F8 settings, F9 refresh, F12 folder
-        // browser. F3 is Visual Assist and is handled above, outside this
-        // guard. F1 is P64 and Delete is P65.
-        // Ctrl+Z and Ctrl+K are ours.
-        let keys = ctx.input(|i| Hotkeys {
-            f2: i.key_pressed(egui::Key::F2),
-            f4: i.key_pressed(egui::Key::F4),
-            f5: i.key_pressed(egui::Key::F5),
-            f6: i.key_pressed(egui::Key::F6),
-            f8: i.key_pressed(egui::Key::F8),
-            f9: i.key_pressed(egui::Key::F9),
-            f12: i.key_pressed(egui::Key::F12),
-            undo: i.modifiers.command && i.key_pressed(egui::Key::Z),
-            palette: i.modifiers.command && i.key_pressed(egui::Key::K),
+        // browser. F3 is Visual Assist and is handled above, outside the
+        // typing guard. F1 is P64; Delete is P65, and the file list's
+        // (`handle_list_keys`). Ctrl+Z and Ctrl+K are ours.
+        //
+        // **Exact modifiers.** Ctrl+Shift+Z is redo nearly everywhere, and this
+        // app has none, so it must not reach the batch undo; Alt+F4 closes the
+        // window on Windows, and must not start an undo on its way out.
+        let keys = ctx.input(|i| {
+            let plain = |key| i.modifiers.is_none() && i.key_pressed(key);
+            let command = |key| {
+                !in_number_box
+                    && i.modifiers.matches_exact(egui::Modifiers::COMMAND)
+                    && i.key_pressed(key)
+            };
+            Hotkeys {
+                f2: plain(egui::Key::F2),
+                f4: plain(egui::Key::F4),
+                f5: plain(egui::Key::F5),
+                f6: plain(egui::Key::F6),
+                f8: plain(egui::Key::F8),
+                f9: plain(egui::Key::F9),
+                f12: plain(egui::Key::F12),
+                undo: command(egui::Key::Z),
+                palette: command(egui::Key::K),
+            }
         });
         let Hotkeys {
             f2,
@@ -2343,8 +2746,8 @@ impl RenameItApp {
         if f8 {
             self.open_settings();
         }
-        // *"(Browser file mode only)"* for both: in Free Select there is no
-        // address box to focus and no working path to change.
+        // Browser mode only, both: in Free Select there is no address box to
+        // focus and no working path to change.
         let browsing = self.session.settings.mode == crate::viewmodel::SourceMode::Browser;
         if f6 && browsing {
             ctx.memory_mut(|m| m.request_focus(crate::panels::source_bar::address_box()));
@@ -2363,12 +2766,8 @@ impl RenameItApp {
                 .selection
                 .lead
                 .or_else(|| self.session.selection.iter().next())
-            && let Some(entry) = self.session.entries().get(index)
         {
-            self.inline_rename = Some(crate::panels::rows::InlineRename::opening(
-                index,
-                &entry.file_name,
-            ));
+            self.open_inline_rename(index);
         }
         if f5 {
             self.run();
@@ -2377,9 +2776,24 @@ impl RenameItApp {
             self.forget_and_relist();
         }
         // Both are shortcuts for the Undo button: Ctrl+Z is the modern
-        // spelling, F4 the one long-time renaming tools trained people on.
+        // spelling, and F4 the one long-time renaming tools trained people on.
         if undo || f4 {
             self.undo();
+        }
+    }
+
+    /// Opens F2's editor on row `index` — unless a job is out, when the
+    /// rename it would lead to is refused anyway (D169).
+    fn open_inline_rename(&mut self, index: usize) {
+        if self.jobs.is_busy() {
+            self.status = Some("A run is still going — rename it when that is done".to_owned());
+            return;
+        }
+        if let Some(entry) = self.session.entries().get(index) {
+            self.inline_rename = Some(crate::panels::rows::InlineRename::opening(
+                &entry.path,
+                &entry.file_name,
+            ));
         }
     }
 
@@ -2391,14 +2805,7 @@ impl RenameItApp {
         use crate::panels::rows::RowAction;
 
         match action {
-            RowAction::Rename(index) => {
-                if let Some(entry) = self.session.entries().get(index) {
-                    self.inline_rename = Some(crate::panels::rows::InlineRename::opening(
-                        index,
-                        &entry.file_name,
-                    ));
-                }
-            }
+            RowAction::Rename(index) => self.open_inline_rename(index),
             RowAction::Reveal(index) => {
                 if let Some(entry) = self.session.entries().get(index) {
                     // Best effort: there may be no file manager, and failing to
@@ -2406,12 +2813,14 @@ impl RenameItApp {
                     let _ = self.platform.reveal_in_file_manager(&entry.path);
                 }
             }
+            // Not `accept_dropped`: its one-folder rule is for a drag, and
+            // made this item browse into a folder row instead of adding it.
             RowAction::AddToFreeSelect(rows) => {
                 let paths: Vec<_> = self
                     .rows_or_all(&rows)
                     .filter_map(|i| self.session.entries().get(i).map(|e| e.path.clone()))
                     .collect();
-                self.session.accept_dropped(paths);
+                self.session.add_to_free_select(paths);
                 self.needs_preview = true;
             }
             RowAction::Copy { what, rows } => {
@@ -2432,11 +2841,9 @@ impl RenameItApp {
         }
     }
 
-    /// The rows a menu item applies to.
-    ///
-    /// *"However, if no items are selected, all items will be renamed"* — the
-    /// same rule `scoped_indices` follows, so *Copy* covers exactly what
-    /// *Rename* would.
+    /// The rows a menu item applies to: the selection, or every row when
+    /// nothing is selected — the rule `scoped_indices` follows (P22), so
+    /// *Copy* covers exactly what *Rename* would.
     fn rows_or_all(&self, rows: &[usize]) -> impl Iterator<Item = usize> + use<'_> {
         let all: Vec<usize> = if rows.is_empty() {
             (0..self.session.entries().len()).collect()
@@ -2446,8 +2853,8 @@ impl RenameItApp {
         all.into_iter()
     }
 
-    /// *"Copy to Clipboard ▸ All Previews"*, and the three neighbours worth
-    /// having: one row per line, in the order the table shows them.
+    /// *Copy to clipboard*: the names, the new names, the paths or both, one
+    /// row per line, in the order the table shows them.
     /// Public because the clipboard is not: `arboard` needs a display server,
     /// so a headless test drives the text and leaves `set_text` — the one line
     /// with nothing in it to get wrong — to a human.
@@ -2530,11 +2937,20 @@ impl RenameItApp {
             });
     }
 
+    /// What the startup scan found: batches that did not finish, and
+    /// journals it could not judge.
+    ///
+    /// The second kind is named rather than swallowed. One unreadable journal
+    /// used to fail the whole scan, which hid every unfinished batch beside it
+    /// too; and a journal another window is still writing is a run in
+    /// progress, which must never be offered for rollback — rolling it back
+    /// would reverse renames while that run carries on.
     fn recovery_banner(&mut self, ui: &mut egui::Ui) {
-        if self.history.unfinished.is_empty() {
+        if self.history.unfinished.is_empty() && self.history.problems.is_empty() {
             return;
         }
         let count = self.history.unfinished.len();
+        let busy = self.jobs.is_busy();
         egui::Frame::new()
             .fill(ui.visuals().warn_fg_color.gamma_multiply(0.15))
             .inner_margin(6.0)
@@ -2543,25 +2959,30 @@ impl RenameItApp {
                     // "rename" was the wrong noun for a batch that wrote
                     // tags, and a count on its own says nothing about the one
                     // thing that matters: which file might be damaged.
-                    ui.label(format!(
-                        "⚠ {count} batch(es) did not finish — the app or the machine \
-                         stopped part-way."
-                    ));
-                    if ui.button("Roll back").clicked() {
-                        if let Err(e) = self.history.recover(self.platform.as_ref()) {
-                            self.status = Some(e.to_string());
+                    if count > 0 {
+                        ui.label(format!(
+                            "⚠ {} did not finish — the app or the machine stopped part-way.",
+                            batches(count)
+                        ));
+                        // A job, like the undo it is: off the frame, and not
+                        // beside a run over the same files.
+                        let roll_back = ui.add_enabled(!busy, egui::Button::new("Roll back"));
+                        if busy {
+                            roll_back.on_disabled_hover_text("A run is still going");
+                        } else if roll_back.clicked()
+                            && !self.jobs.rollback(self.history.unfinished.clone())
+                        {
+                            self.status = Some("A run is still going".to_owned());
                         }
-                        self.session.request_refresh();
+                    } else {
+                        ui.label("⚠ Some undo journals need a look.");
                     }
                     if ui.button("Leave as is").clicked() {
                         self.history.dismiss_recovery();
                     }
                 });
-                // The files that were being written when it stopped. A tag
-                // write is rewritten in place, so one of these may be
-                // half-written — and until now it was the only thing the
-                // banner did not say, while the path was in the journal all
-                // along.
+                // The files that were being written when it stopped, and the
+                // path was in the journal all along.
                 for item in &self.history.unfinished {
                     for flight in &item.in_flight {
                         let name = flight
@@ -2569,11 +2990,17 @@ impl RenameItApp {
                             .file_name()
                             .map(|n| n.to_string_lossy().into_owned())
                             .unwrap_or_default();
+                        // A write now goes into a copy that is swapped in
+                        // whole, so the file is old or new, never torn — but
+                        // a journal cannot say which build wrote it, and one
+                        // from an earlier build describes a write in place.
                         ui.label(
                             egui::RichText::new(if flight.rewrote_contents {
                                 format!(
-                                    "{name} — {} was interrupted, so it may be half-written",
-                                    flight.op
+                                    "{name} — {} was interrupted, so it may be half-written, \
+                                     or have a {}… copy beside it",
+                                    flight.op,
+                                    ren_core::meta::write::SCRATCH_PREFIX
                                 )
                             } else {
                                 format!(
@@ -2584,6 +3011,23 @@ impl RenameItApp {
                             .small(),
                         );
                     }
+                }
+                for problem in &self.history.problems {
+                    let name = problem
+                        .path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| problem.path.display().to_string());
+                    let line = if problem.live {
+                        format!(
+                            "{name} — a run is still going on in another RenameIt window; it \
+                             is not offered here"
+                        )
+                    } else {
+                        format!("{name} could not be read: {}", problem.message)
+                    };
+                    ui.label(egui::RichText::new(line).small())
+                        .on_hover_text(problem.path.display().to_string());
                 }
             });
     }
@@ -2623,6 +3067,16 @@ impl RenameItApp {
                             format!("replaced {path}, which cannot be undone"),
                         ),
                         LogLine::Wrote { path, .. } => ui.label(format!("wrote {path}")),
+                        LogLine::RemovedFile { path } => {
+                            ui.label(format!("deleted {path}, which the run had written"))
+                        }
+                        LogLine::RemovedDir { path } => {
+                            ui.label(egui::RichText::new(format!("removed folder {path}")).weak())
+                        }
+                        LogLine::KeptDir { path } => ui.colored_label(
+                            ui.visuals().warn_fg_color,
+                            format!("kept folder {path}: something else is in it now"),
+                        ),
                         LogLine::Note(text) => ui.label(egui::RichText::new(text).strong()),
                     };
                 }
@@ -2681,6 +3135,15 @@ impl SelectionCaveat {
                 }
             }),
         })
+    }
+}
+
+/// "1 batch", "2 batches" — `ren_core::plural` only knows the `-s` plural.
+fn batches(n: usize) -> String {
+    if n == 1 {
+        "1 batch".to_owned()
+    } else {
+        format!("{n} batches")
     }
 }
 
@@ -2755,28 +3218,31 @@ impl RenameItApp {
             self.instant = false;
             ctx.all_styles_mut(|style| style.animation_time = 0.0);
         }
-        self.handle_drops(&ctx);
-        self.handle_hotkeys(&ctx);
-        self.handle_list_keys(&ctx);
+        self.handle_close_request(&ctx);
 
         // Last frame's drawer action, applied now that its borrow is gone.
         if std::mem::take(&mut self.needs_menu_rewrite) {
             self.rewrite_menu();
         }
 
-        // A run or an undo that finished since the last frame, first: what
-        // it did asks for a relist, which the two lines below then carry.
+        // A job that finished since the last frame, first: what it did asks
+        // for a relist, and the request goes out straight away — before any
+        // listing is installed — so an older walk that finished in the
+        // meantime is dropped rather than handed what the job left waiting
+        // for this one (a hand-set order, the Free Select set's new paths).
         self.poll_jobs();
-        // A listing that landed since the last frame, then anything drawn
-        // last frame that asked for one. The order matters: a request made
-        // after the poll is the newest wish, and a listing installed after
-        // the request would be answered by a stale generation.
-        self.poll_listing();
+        self.close_if_idle(Some(&ctx));
         self.drain_listing_request();
+        self.poll_listing();
 
         if self.preview.poll() {
             self.rebuild_plan_index();
         }
+        // The keys after the polls, so F5 and F2 act on the rows and the plan
+        // this frame draws — and before anything is drawn from them.
+        self.handle_drops(&ctx);
+        self.handle_hotkeys(&ctx);
+        self.handle_list_keys(&ctx);
         // Before anything draws: what is on screen now must not be evictable,
         // and a tile that arrived since the last frame must reach the cache
         // before the visible set is worked out again — or it counts as missing
@@ -2974,6 +3440,7 @@ impl RenameItApp {
                     failure: self.preview.failure(),
                     job: self.jobs.in_flight(),
                     cancelling: self.jobs.cancelling(),
+                    listing: self.session.relist_wanted || self.listing.is_listing(),
                 },
                 &self.history,
                 &mut self.simulate,
@@ -3073,9 +3540,6 @@ impl RenameItApp {
                     self.settings.parts = ren_core::PartsSpec::new(parts);
                     self.needs_preview = true;
                 }
-                // *"You can also add the current Replace function settings to
-                // the list."* The defaults list, so nothing already built
-                // changes under the user (D35).
                 // Visual Assist. Drained here, after the stack is drawn, so a
                 // click never mutates a card mid-frame — and so a Select can
                 // safely close the strip that raised it.
@@ -3083,6 +3547,8 @@ impl RenameItApp {
                 if let Some(request) = assist_request {
                     self.apply_assist_request(request);
                 }
+                // A Replace card's "add to Batch Replace": the defaults list,
+                // so nothing already built changes under the user (D35).
                 if let Some(rule) = self.requests.add_batch_rule.borrow_mut().take() {
                     self.batch_replace.push(rule);
                 }
@@ -3220,8 +3686,6 @@ impl RenameItApp {
                 self.session.set_sort(column);
                 self.needs_preview = true;
             }
-            // A command, not a mode (D119): it needs the plan whose names it
-            // orders by, and does nothing without one.
             // A drag that landed. The order is the run order, so a moved row
             // is numbered where it was dropped.
             if let Some((rows, before)) = move_request
@@ -3229,18 +3693,34 @@ impl RenameItApp {
             {
                 self.needs_preview = true;
             }
-            if reorder_request && let Some(plan) = self.preview.plan() {
-                self.session.reorder_by_new_names(plan);
-                self.needs_preview = true;
+            // A command, not a mode (D119): it needs the plan whose names it
+            // orders by — the *current* one. A plan still being computed
+            // would order the rows by names the pipeline no longer produces.
+            if reorder_request {
+                match self.preview.plan() {
+                    Some(plan) if !self.needs_preview && !self.preview.is_stale() => {
+                        self.session.reorder_by_new_names(plan);
+                        self.needs_preview = true;
+                    }
+                    _ => {
+                        self.status = Some(
+                            "The preview is still updating — click New name again in a moment"
+                                .to_owned(),
+                        );
+                    }
+                }
             }
             if let Some(action) = row_action {
                 self.row_action(action);
             }
-            if let Some((index, name)) = rename_confirmed {
-                self.rename_one(index, name);
+            if let Some((path, name)) = rename_confirmed {
+                self.rename_file(&path, name);
             }
         });
 
+        // Anything drawn this frame that asked for a relist gets it now, in
+        // the frame it asked — see `drain_listing_request`.
+        self.drain_listing_request();
         if self.needs_preview {
             self.request_preview();
         }
@@ -3740,12 +4220,9 @@ mod tests {
         assert!(!app.session.settings.subfolders);
         assert!(app.session.settings.pattern.is_empty());
         assert!(app.stack.is_empty());
-        // > *"Clear function input fields on startup — … if you are concerned
-        // > about privacy"*
-        //
-        // **D128** answers that with the whole card stack, and justifies it with
-        // that sentence — so a history holding every pattern the user has run
-        // has to go with it, or the sentence stops being true.
+        // **D128** clears the whole card stack for privacy — so a history
+        // holding every pattern the user has run has to go with it, or the
+        // reason stops being true.
         assert!(
             app.field_history.is_empty(),
             "privacy means the drop-down histories too"
@@ -3927,11 +4404,404 @@ mod tests {
         assert!(RenameItApp::restore(&back).is_empty());
     }
 
+    /// Each theme to its own preference — a mapping, not merely a match that
+    /// compiles.
     #[test]
-    fn every_theme_maps_onto_an_egui_preference() {
-        for theme in [Theme::System, Theme::Light, Theme::Dark] {
-            let _: egui::ThemePreference = theme.into();
+    fn every_theme_maps_onto_its_egui_preference() {
+        for (theme, preference) in [
+            (Theme::System, egui::ThemePreference::System),
+            (Theme::Light, egui::ThemePreference::Light),
+            (Theme::Dark, egui::ThemePreference::Dark),
+        ] {
+            assert_eq!(egui::ThemePreference::from(theme), preference);
         }
+    }
+
+    /// A blob this build cannot read is copied aside before the defaults
+    /// replace it — the next auto-save would otherwise overwrite the user's
+    /// lists for good — and the status line says where it went.
+    #[test]
+    fn a_blob_that_does_not_parse_is_kept_and_said() {
+        let backup = tempfile::TempDir::new().unwrap();
+        let mut storage = MapStorage::default();
+        let from_the_future = "(steps: Some([(op: \"teleport\")]))";
+        eframe::Storage::set_string(&mut storage, STORAGE_KEY, from_the_future.to_owned());
+
+        let (persisted, status) = load_persisted(Some(&storage), backup.path());
+        assert_eq!(persisted.steps, None, "the defaults");
+        let status = status.expect("a word about it");
+        assert!(status.contains("could not be read"), "{status}");
+
+        let kept: Vec<_> = std::fs::read_dir(backup.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+        assert_eq!(kept.len(), 1);
+        assert!(
+            status.contains(&kept[0].path().display().to_string()),
+            "{status}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(kept[0].path()).unwrap(),
+            from_the_future
+        );
+
+        // A readable blob, and no blob at all, say nothing.
+        eframe::set_value(&mut storage, STORAGE_KEY, &Persisted::default());
+        assert!(load_persisted(Some(&storage), backup.path()).1.is_none());
+        assert!(load_persisted(None, backup.path()).1.is_none());
+    }
+
+    /// **Closing the window does not kill a job part-way.** An undo killed
+    /// mid-way leaves a batch half reverted with its `Commit` still in the
+    /// journal, which nothing can find again; so the close waits, and happens
+    /// when the job lands.
+    #[test]
+    fn a_close_waits_for_the_job_that_is_out() {
+        let dir = tempfile::TempDir::new().unwrap();
+        for name in ["a_1.txt", "a_2.txt"] {
+            std::fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        let journal = tempfile::TempDir::new().unwrap();
+        let gate = Arc::new((
+            std::sync::Mutex::new((false, false)),
+            std::sync::Condvar::new(),
+        ));
+        // Held on its first rename: this run is the one the close meets.
+        let mut app = RenameItApp::headless_with_platform(
+            dir.path().to_path_buf(),
+            journal.path().to_path_buf(),
+            Arc::new(GatedPlatform {
+                inner: ren_platform::host(),
+                gate: gate.clone(),
+                first: std::sync::atomic::AtomicBool::new(true),
+            }),
+        );
+        *app.operation_mut() = OpKind::Replace(ren_core::ops::Replace::new("_", "-"));
+        app.settle();
+        app.run();
+        assert!(app.is_running());
+
+        let ctx = egui::Context::default();
+        let frame = |app: &mut RenameItApp, close: bool| {
+            let mut input = egui::RawInput::default();
+            if close {
+                input
+                    .viewports
+                    .entry(egui::ViewportId::ROOT)
+                    .or_default()
+                    .events
+                    .push(egui::ViewportEvent::Close);
+            }
+            let mut output = ctx.run_ui(input, |ui| app.show(ui));
+            // No renderer here to hand the font atlas to.
+            output.textures_delta.clear();
+            output
+                .viewport_output
+                .get(&egui::ViewportId::ROOT)
+                .map(|viewport| viewport.commands.clone())
+                .unwrap_or_default()
+        };
+
+        let commands = frame(&mut app, true);
+        assert!(
+            commands.contains(&egui::ViewportCommand::CancelClose),
+            "{commands:?}"
+        );
+        assert!(app.status.as_deref().unwrap_or_default().contains("closes"));
+
+        let (state, signal) = &*gate;
+        state.lock().unwrap().0 = true;
+        signal.notify_all();
+        while app.is_running() {
+            app.poll_jobs();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let commands = frame(&mut app, false);
+        assert!(
+            commands.contains(&egui::ViewportCommand::Close),
+            "{commands:?}"
+        );
+        assert_eq!(names_on_disk(dir.path()), ["a-1.txt", "a-2.txt"]);
+
+        // With nothing out, a close is a close.
+        let commands = frame(&mut app, true);
+        assert!(!commands.contains(&egui::ViewportCommand::CancelClose));
+    }
+
+    /// The host, with two switches a test can throw: a folder it calls the
+    /// operating system's, and a rename that panics.
+    struct Hooked {
+        inner: Arc<dyn Platform>,
+        guarded: Option<PathBuf>,
+        panic_on_rename: std::sync::atomic::AtomicBool,
+    }
+
+    impl Hooked {
+        fn new(guarded: Option<PathBuf>) -> Arc<Self> {
+            Arc::new(Self {
+                inner: ren_platform::host(),
+                guarded,
+                panic_on_rename: std::sync::atomic::AtomicBool::new(false),
+            })
+        }
+    }
+
+    impl std::fmt::Debug for Hooked {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("Hooked")
+                .field("guarded", &self.guarded)
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl Platform for Hooked {
+        fn name(&self) -> &'static str {
+            self.inner.name()
+        }
+        fn capabilities(&self) -> &'static [ren_platform::Capability] {
+            self.inner.capabilities()
+        }
+        fn rename(&self, from: &Path, to: &Path) -> ren_platform::Result<()> {
+            if self
+                .panic_on_rename
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                panic!("a rename that panics");
+            }
+            self.inner.rename(from, to)
+        }
+        fn replace_file(&self, temp: &Path, target: &Path) -> ren_platform::Result<()> {
+            self.inner.replace_file(temp, target)
+        }
+        fn get_attributes(
+            &self,
+            path: &Path,
+        ) -> ren_platform::Result<ren_platform::FileAttributes> {
+            self.inner.get_attributes(path)
+        }
+        fn set_attributes(
+            &self,
+            path: &Path,
+            change: ren_platform::AttributeChange,
+        ) -> ren_platform::Result<()> {
+            self.inner.set_attributes(path, change)
+        }
+        fn get_times(&self, path: &Path) -> ren_platform::Result<ren_platform::FileTimes> {
+            self.inner.get_times(path)
+        }
+        fn set_times(
+            &self,
+            path: &Path,
+            change: ren_platform::TimeChange,
+        ) -> ren_platform::Result<()> {
+            self.inner.set_times(path, change)
+        }
+        fn naming_rules(&self, path: &Path) -> &'static ren_platform::NamingRules {
+            self.inner.naming_rules(path)
+        }
+        fn is_system_folder(&self, path: &Path) -> bool {
+            self.guarded.as_deref() == Some(path) || self.inner.is_system_folder(path)
+        }
+        fn case_sensitivity(&self, dir: &Path) -> ren_platform::CaseSensitivity {
+            self.inner.case_sensitivity(dir)
+        }
+        fn reveal_in_file_manager(&self, path: &Path) -> ren_platform::Result<()> {
+            self.inner.reveal_in_file_manager(path)
+        }
+        fn notify_shell_changed(&self, path: &Path) {
+            self.inner.notify_shell_changed(path);
+        }
+    }
+
+    fn names_on_disk(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// **The run lands, the relist has not yet: the plan on screen is over
+    /// names that are gone.** A second press in that gap re-applied it — a
+    /// swap swapped back, anything else failed at its first file and replaced
+    /// the successful run's report with "1 failed".
+    #[test]
+    fn a_second_press_before_the_relist_lands_is_refused() {
+        let (dir, mut app) = listing(&["a_1.txt"]);
+        app.run();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !app.poll_jobs() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(names_on_disk(dir.path()), ["a 1.txt"]);
+
+        // The relist is wanted and not yet drained, so the old plan is the
+        // one `ready()` still holds.
+        app.run();
+        app.settle();
+        assert_eq!(app.history.batches.len(), 1);
+        let status = app.status.clone().unwrap_or_default();
+        assert!(!status.contains("failed"), "{status}");
+        assert!(
+            app.history
+                .log
+                .iter()
+                .any(|line| matches!(line, crate::viewmodel::LogLine::Renamed { .. })),
+            "the first run's log is still the one on screen"
+        );
+    }
+
+    /// An undo that panics is an undo that failed, said out loud — it used to
+    /// come back labelled as a run, find no run out, and vanish.
+    #[test]
+    fn an_undo_that_panics_says_so() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("a_1.txt"), b"x").unwrap();
+        let journal = tempfile::TempDir::new().unwrap();
+        let platform = Hooked::new(None);
+        let mut app = RenameItApp::headless_with_platform(
+            dir.path().to_path_buf(),
+            journal.path().to_path_buf(),
+            platform.clone(),
+        );
+        *app.operation_mut() = OpKind::Replace(ren_core::ops::Replace::new("_", "-"));
+        app.settle();
+        app.run();
+        app.settle();
+        assert_eq!(names_on_disk(dir.path()), ["a-1.txt"]);
+
+        platform
+            .panic_on_rename
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        app.status = None;
+        app.undo();
+        app.settle();
+        let status = app.status.clone().unwrap_or_default();
+        assert!(status.contains("undo"), "{status:?}");
+        assert!(app.history.can_undo(), "the batch is still there to retry");
+    }
+
+    /// The running counter advances by the rows **that ran**, not by whatever
+    /// the selection became while they did.
+    #[test]
+    fn the_running_counter_advances_by_the_scope_that_ran() {
+        let (_dir, mut app) = listing(&["a.txt", "b.txt", "c.txt"]);
+        *app.operation_mut() = OpKind::AddCounter(ren_core::ops::AddCounter::new(
+            ren_core::ops::CounterPlacement::First,
+            "-",
+        ));
+        app.settings_mut().counter = ren_core::CounterSetup {
+            auto_pad: false,
+            running: true,
+            ..Default::default()
+        };
+        app.settle();
+
+        app.run();
+        // A click on one row while the run is out re-plans over that row.
+        app.select([0]);
+        app.request_preview();
+        app.settle();
+        assert_eq!(app.settings.counter.start, 4, "three rows ran");
+    }
+
+    /// **D127 is enforced where the run starts, not only on the button.** F5,
+    /// a deferred run and a preset's Run all come through here.
+    #[test]
+    fn a_run_in_a_guarded_folder_is_refused_whatever_started_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("a_1.txt"), b"x").unwrap();
+        let journal = tempfile::TempDir::new().unwrap();
+        let mut app = RenameItApp::headless_with_platform(
+            dir.path().to_path_buf(),
+            journal.path().to_path_buf(),
+            Hooked::new(Some(dir.path().to_path_buf())),
+        );
+        *app.operation_mut() = OpKind::Replace(ren_core::ops::Replace::new("_", "-"));
+        app.settle();
+        assert!(app.session.guarded.is_some(), "the listing found the guard");
+
+        app.run();
+        app.settle();
+        assert_eq!(names_on_disk(dir.path()), ["a_1.txt"]);
+        let status = app.status.clone().unwrap_or_default();
+        assert!(status.contains("operating system"), "{status}");
+
+        // F2 is a run too.
+        app.rename_one(0, "b.txt".to_owned());
+        app.settle();
+        assert_eq!(names_on_disk(dir.path()), ["a_1.txt"]);
+    }
+
+    /// The Save box is seeded with the loaded preset's name, so load → tweak →
+    /// save is a save over it — and there is nowhere in the app to type a
+    /// description back in.
+    #[test]
+    fn saving_over_a_preset_keeps_its_description() {
+        let (_dir, mut app) = listing(&["a.txt"]);
+        app.presets.seed_defaults().unwrap();
+        let (entries, _) = app.presets.list();
+        let shipped = entries
+            .iter()
+            .find(|e| !e.description.is_empty())
+            .expect("a shipped preset with a description")
+            .clone();
+
+        app.load_preset(&shipped.path);
+        app.save_preset(&shipped.name);
+
+        let (entries, _) = app.presets.list();
+        let saved = entries.iter().find(|e| e.name == shipped.name).unwrap();
+        assert_eq!(saved.description, shipped.description);
+    }
+
+    /// F2 is not a second job beside the one that is out: it would rename a
+    /// file the run may still reach, and land on the undo stack out of order.
+    #[test]
+    fn f2_waits_for_the_run_that_is_out() {
+        let dir = tempfile::TempDir::new().unwrap();
+        for name in ["a_1.txt", "a_2.txt"] {
+            std::fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        let journal = tempfile::TempDir::new().unwrap();
+        let gate = Arc::new((
+            std::sync::Mutex::new((false, false)),
+            std::sync::Condvar::new(),
+        ));
+        let mut app = RenameItApp::headless_with_platform(
+            dir.path().to_path_buf(),
+            journal.path().to_path_buf(),
+            Arc::new(GatedPlatform {
+                inner: ren_platform::host(),
+                gate: gate.clone(),
+                first: std::sync::atomic::AtomicBool::new(true),
+            }),
+        );
+        *app.operation_mut() = OpKind::Replace(ren_core::ops::Replace::new("_", "-"));
+        app.settle();
+        app.run();
+        assert!(app.is_running());
+        // The worker is inside its first rename, so the gate is spent and a
+        // rename from this thread would not wait on it.
+        let (state, signal) = &*gate;
+        {
+            let mut held = state.lock().unwrap();
+            while !held.1 {
+                held = signal.wait(held).unwrap();
+            }
+        }
+
+        app.rename_one(1, "other.txt".to_owned());
+        let refused = !dir.path().join("other.txt").exists();
+
+        state.lock().unwrap().0 = true;
+        signal.notify_all();
+        app.settle();
+        assert!(refused, "refused while the run was out");
+        assert_eq!(names_on_disk(dir.path()), ["a-1.txt", "a-2.txt"]);
     }
 }
 
@@ -4201,7 +5071,7 @@ mod menu_tests {
                 "{chars}"
             );
         }
-        // 1600 is four fifths of the documented 2000.
+        // 1600 is four fifths of the 2000-character limit.
         assert!(
             SelectionCaveat::for_launch(&crate::launch::Launch {
                 paths: vec![PathBuf::from("/tmp/a.jpg")],

@@ -13,14 +13,17 @@ use std::sync::Arc;
 use ren_core::listing::PatternScope;
 use ren_core::model::FileEntry;
 use ren_core::{ListOptions, PlanItem, RowState};
+use ren_platform::Platform;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SourceMode {
-    /// *"Renames an entire folder. Base path textbox + pattern textbox"*
+    /// One folder, with the address box and the pattern box narrowing what
+    /// is listed from it.
     #[default]
     Browser,
-    /// *"Files from different locations."*
+    /// Files and folders collected from anywhere, by drag, by the command
+    /// line or by the row menu.
     FreeSelect,
 }
 
@@ -88,9 +91,10 @@ pub struct Sort {
     ///
     /// It stops `sort_entries` from re-deriving an order the user set by hand,
     /// and it moves the arrow to the New name header. Cleared by any real sort
-    /// and by `refresh`, which rebuilds the listing and so has no hand-set
-    /// order left to preserve. `#[serde(default)]` on the struct is what keeps
-    /// a settings file written before M8 parsing.
+    /// and by a relist (`install_listing`), which rebuilds the listing and so
+    /// has no hand-set order left to preserve — except the one a run hands on
+    /// through `refresh_after_run`. `#[serde(default)]` on the struct is what
+    /// keeps a settings file written before M8 parsing.
     pub manual: bool,
     /// True when the hand-set order came from a **row drag** rather than the
     /// New-name command.
@@ -128,15 +132,18 @@ pub struct SessionSettings {
     pub subfolders: bool,
     pub sort: Sort,
     pub row_filter: RowFilter,
-    /// *"Hide System Folders"* — ours refuses rather than hides (D127). On by
-    /// default, and off is a decision the user makes in Settings ▸ File System.
+    /// Refuse to run inside a folder the operating system owns (D127). A
+    /// refusal rather than a filter, because hiding the folder would hide the
+    /// reason nothing happens. On by default, and off is a decision the user
+    /// makes in Settings ▸ File System.
     pub guard_system_folders: bool,
     /// Show write-protected, hidden and system files and folders. All three
     /// default to showing (D126).
     pub show_hidden: bool,
     pub show_system: bool,
     pub show_read_only: bool,
-    /// *"If both files & folders are displayed, apply pattern mask to"*.
+    /// With both files and folders listed, which of the two the pattern box
+    /// narrows.
     pub pattern_applies: PatternScope,
     /// Rows or tiles.
     pub view: ViewMode,
@@ -147,18 +154,17 @@ pub struct SessionSettings {
     /// derives `Eq`, and because a thumbnail size in fractions of a point is a
     /// distinction nobody can see.
     pub thumb_size: u32,
-    /// > *"Draw a black border around thumbnails"*
+    /// A thin border around each thumbnail, so a picture with a white edge
+    /// does not dissolve into the background.
     pub thumb_border: bool,
 }
 
 /// Whether the listing is drawn as rows or as tiles.
 ///
 /// Whether thumbnails are a *mode* or a *column* is genuinely ambiguous: a
-/// checkbox reads as a mode, but a failure showing a blank file icon in a row
-/// reads as a column, and settings pages tend to bundle it as *"icons and
-/// Thumbnails**"*, both of which read as a row icon. The evidence cuts both
-/// ways, so this is a preference rather than a fact to recover: the app ships
-/// both, and the user picks (D133).
+/// grid of pictures is a way of looking at a folder, and a small picture
+/// beside each name is a column like any other. Both are useful for different
+/// folders, so the app ships both and the user picks (D133).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ViewMode {
     #[default]
@@ -212,11 +218,11 @@ impl Default for SessionSettings {
 /// follow a permutation together — and three loose fields is the shape where a
 /// remap updates one and quietly skips the others.
 ///
-/// `rows` is the run's **scope**: *"Only the items that are selected will be
-/// renamed […] if no items are selected, all items will be renamed."* `lead`
-/// deliberately is not — it is where the next arrow key starts from and what F2
-/// opens, so moving it must never re-plan. `anchor` is what a Shift-extend
-/// measures from: the last row picked *without* Shift.
+/// `rows` is the run's **scope** (P22): only the selected rows are renamed,
+/// and with nothing selected every row is. `lead` deliberately is not — it is
+/// where the next arrow key starts from and what F2 opens, so moving it must
+/// never re-plan. `anchor` is what a Shift-extend measures from: the last row
+/// picked *without* Shift.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Selection {
     /// Indices into `entries`.
@@ -371,6 +377,10 @@ impl Selection {
 pub struct Session {
     pub settings: SessionSettings,
     /// Free Select's collected paths, in the order they were added.
+    ///
+    /// Always absolute, and kept up to date by [`Self::follow_renames`]: a
+    /// run renames these files, and a relist of the old paths found none of
+    /// them.
     pub free_select: Vec<PathBuf>,
     entries: Arc<Vec<FileEntry>>,
     /// What the run covers, and where the keyboard is.
@@ -393,6 +403,9 @@ pub struct Session {
     /// (D157): the paths in the order the user had them, as the run left
     /// them. Consumed by `install_listing`.
     pending_order: Option<Vec<PathBuf>>,
+    /// Who decides which folders are the operating system's (D127): the
+    /// app's own platform, so the guard and the run ask the same one.
+    platform: Arc<dyn Platform>,
 }
 
 impl Default for Session {
@@ -407,15 +420,29 @@ impl Default for Session {
             guarded: None,
             relist_wanted: false,
             pending_order: None,
+            platform: ren_platform::host(),
         }
     }
 }
 
 impl Session {
-    /// A session over `settings`, listing nothing until `refresh` is called.
+    /// A session over `settings`, listing nothing until a relist is asked
+    /// for and lands.
+    ///
+    /// **A stored Free Select opens as Browser.** The mode is remembered and
+    /// the set is not, so a session that ended in Free Select would otherwise
+    /// start on an empty table with the saved folder unused. A launch that
+    /// names files sets the mode again itself (`RenameItApp::start_at`).
     pub fn new(settings: SessionSettings) -> Self {
+        Self::with_platform(settings, ren_platform::host())
+    }
+
+    /// The same, with the platform the D127 guard should ask.
+    pub fn with_platform(mut settings: SessionSettings, platform: Arc<dyn Platform>) -> Self {
+        settings.mode = SourceMode::Browser;
         Self {
             settings,
+            platform,
             ..Default::default()
         }
     }
@@ -471,8 +498,34 @@ impl Session {
     /// [`Self::install_listing`].
     pub fn refresh_now(&mut self) {
         self.relist_wanted = false;
+        self.make_paths_absolute();
         let listed = self.source().list(&|| false);
         self.install_listing(listed);
+    }
+
+    /// Makes the folder and the Free Select set absolute, before they are
+    /// listed.
+    ///
+    /// Every path in a plan comes from here, and the executor refuses a
+    /// relative one: a journal would record it as given, and an undo run
+    /// from another working directory would replay it somewhere else. It
+    /// also keeps Backspace honest (the parent of `.` is an empty path) and
+    /// keeps a relative folder out of the saved settings, where the next
+    /// launch would read it against a different working directory.
+    ///
+    /// `std::path::absolute` is lexical: it joins the working directory and
+    /// resolves no links, so a folder is still called what the user called
+    /// it. Called for every relist rather than at each place a path comes
+    /// in, because the address box writes `settings.dir` directly.
+    pub fn make_paths_absolute(&mut self) {
+        if let Ok(dir) = std::path::absolute(&self.settings.dir) {
+            self.settings.dir = dir;
+        }
+        for path in &mut self.free_select {
+            if let Ok(absolute) = std::path::absolute(&*path) {
+                *path = absolute;
+            }
+        }
     }
 
     /// Takes a finished listing, then sorts it.
@@ -530,16 +583,27 @@ impl Session {
         let dir =
             (self.settings.mode == SourceMode::Browser).then_some(self.settings.dir.as_path());
         ren_platform::guarded::first_guarded(
-            ren_platform::host().as_ref(),
+            self.platform.as_ref(),
             dir,
             self.entries.iter().map(|entry| entry.path.as_path()),
         )
     }
 
+    /// The folder `path` would be renamed in, if the operating system owns
+    /// it and the guard is on (D127) — the same question as
+    /// [`Self::guarded`], for one file rather than the listing.
+    pub fn guarded_for(&self, path: &Path) -> Option<PathBuf> {
+        if !self.settings.guard_system_folders {
+            return None;
+        }
+        ren_platform::guarded::first_guarded(self.platform.as_ref(), None, [path])
+    }
+
     /// Adds paths dropped from the file manager, switching to Free Select.
     ///
     /// A single folder dropped in Browser mode navigates there instead, which
-    /// is what people expect.
+    /// is what people expect of a drag. The row menu's *Add to Free Select*
+    /// is not a drag and goes through [`Self::add_to_free_select`].
     pub fn accept_dropped(&mut self, paths: Vec<PathBuf>) {
         if paths.is_empty() {
             return;
@@ -549,13 +613,21 @@ impl Session {
             self.request_refresh();
             return;
         }
+        self.add_to_free_select(paths);
+    }
 
+    /// Adds paths to Free Select and switches to it, whatever they are.
+    pub fn add_to_free_select(&mut self, paths: Vec<PathBuf>) {
+        if paths.is_empty() {
+            return;
+        }
         self.settings.mode = SourceMode::FreeSelect;
         // A set, so a large drop is not quadratic: `contains` on the list per
         // dropped path was ten thousand times ten thousand for a folder's
         // worth of files dragged in at once.
         let mut known: HashSet<PathBuf> = self.free_select.iter().cloned().collect();
         for path in paths {
+            let path = std::path::absolute(&path).unwrap_or(path);
             if known.insert(path.clone()) {
                 self.free_select.push(path);
             }
@@ -566,6 +638,41 @@ impl Session {
     pub fn clear_free_select(&mut self) {
         self.free_select.clear();
         self.request_refresh();
+    }
+
+    /// Takes rows out of Free Select (P65). The files stay where they are:
+    /// this edits a list, and nothing in the app deletes from disk.
+    ///
+    /// Returns how many left the list.
+    pub fn remove_from_free_select(&mut self, rows: &[usize]) -> usize {
+        let leaving: HashSet<&Path> = rows
+            .iter()
+            .filter_map(|&i| self.entries.get(i))
+            .map(|entry| entry.path.as_path())
+            .collect();
+        let before = self.free_select.len();
+        self.free_select
+            .retain(|path| !leaving.contains(path.as_path()));
+        let removed = before - self.free_select.len();
+        if removed > 0 {
+            self.request_refresh();
+        }
+        removed
+    }
+
+    /// Carries Free Select's paths through a set of renames, `(from, to)`.
+    ///
+    /// A run, an F2 rename and an undo all move files the set names, and the
+    /// set is only paths — so without this the relist that follows asked for
+    /// files that no longer existed under those names.
+    pub fn follow_renames(&mut self, renamed: &[(PathBuf, PathBuf)]) {
+        if renamed.is_empty() || self.free_select.is_empty() {
+            return;
+        }
+        let moved = moves(renamed);
+        for path in &mut self.free_select {
+            *path = followed(&moved, path);
+        }
     }
 
     /// How many distinct folders Free Select is drawing from, for its label.
@@ -598,9 +705,10 @@ impl Session {
 
     /// Orders the listing by the names the plan is *currently* producing, once.
     ///
-    /// > *"Now you can change to the Add Counter function"* — the documented
-    /// > worked example only works if the new order **is** the run order, and
-    /// > from M3 the listing order is what numbers the counter (D28).
+    /// The point is to number files in the order of their new names: order
+    /// by New name, then add a counter. That only works because the listing
+    /// order **is** the run order, which from M3 is what numbers the counter
+    /// (D28).
     ///
     /// A command rather than a sort mode, because a mode does not converge. The
     /// counter is a function of the input order, so re-sorting rewrites its own
@@ -618,18 +726,31 @@ impl Session {
             true
         };
 
+        // **By file, not by `PlanItem::index`.** That index counts the
+        // entries the plan was *handed*, which with a selection is the
+        // scoped subset, not the listing — so the selected row's new name
+        // was filed under whichever row happened to be first. Mapping by
+        // source is right for a scoped plan and for one built before a sort
+        // alike, because sources are unique.
+        //
         // A row the plan does not cover — filtered out of the run — sorts under
         // the name it already has, which is the name the column shows for it.
-        let mut keys: Vec<String> = self
+        let new_names: HashMap<&Path, &str> = plan
+            .items
+            .iter()
+            .map(|item| (item.source.as_path(), item.new_name.as_str()))
+            .collect();
+        let keys: Vec<String> = self
             .entries
             .iter()
-            .map(|e| e.file_name.to_lowercase())
+            .map(|e| {
+                new_names
+                    .get(e.path.as_path())
+                    .copied()
+                    .unwrap_or(&e.file_name)
+                    .to_lowercase()
+            })
             .collect();
-        for item in &plan.items {
-            if let Some(slot) = keys.get_mut(item.index) {
-                *slot = item.new_name.to_lowercase();
-            }
-        }
 
         let mut order: Vec<usize> = (0..self.entries.len()).collect();
         order.sort_by(|&a, &b| {
@@ -650,44 +771,30 @@ impl Session {
         self.settings.sort.ascending = ascending;
     }
 
-    /// Permutes the listing, carrying the selection with it.
+    /// Re-lists after a run, an F2 rename or an undo, keeping a hand-set
+    /// order and the Free Select set by following the rename report.
     ///
-    /// Carried rather than cleared, unlike `refresh`: there the indices pointed
-    /// into a listing that no longer exists, here the permutation is known
-    /// exactly, so the same files stay selected.
-    /// Re-lists after a run, keeping a hand-set order by following the rename
-    /// report.
-    ///
-    /// > *"Keep file order after execution — If you want the program to
-    /// > remember the order of the files after execution you can mark this
-    /// > option."*
-    ///
-    /// Not an option here: a hand-set order is the run order, so losing it on
-    /// the run that used it would make dragging half a feature. `refresh`
-    /// clears `manual` because a *re-listing* has no hand-set order left to
-    /// preserve — but a rename is not a re-listing, it is a set of known
-    /// old→new paths, which is exactly what **D139** already uses to rekey the
-    /// texture cache two lines above the caller.
+    /// Always, never a setting: a hand-set order is the run order, so losing
+    /// it on the run that used it would make dragging half a feature. A
+    /// relist clears `manual` because a *re-listing* has no hand-set order
+    /// left to preserve — but a rename is not a re-listing, it is a set of
+    /// known old→new paths, which is exactly what **D139** already uses to
+    /// rekey the texture cache beside the caller. An undo's report is the same
+    /// shape in the other direction, so it keeps the order too.
     ///
     /// Anything the run did not touch keeps its name, so `renamed` only has to
     /// cover what moved.
     pub fn refresh_after_run(&mut self, renamed: &[(PathBuf, PathBuf)]) {
+        self.follow_renames(renamed);
         if self.settings.sort.manual {
             // A map, not `find` per entry: ten thousand dragged rows renamed
             // meant a hundred million path comparisons here, and as many
             // again in the rank below.
-            let moved: HashMap<&Path, &Path> = renamed
-                .iter()
-                .map(|(from, to)| (from.as_path(), to.as_path()))
-                .collect();
+            let moved = moves(renamed);
             let order: Vec<PathBuf> = self
                 .entries
                 .iter()
-                .map(|entry| {
-                    moved
-                        .get(entry.path.as_path())
-                        .map_or_else(|| entry.path.clone(), |to| to.to_path_buf())
-                })
+                .map(|entry| followed(&moved, &entry.path))
                 .collect();
             self.pending_order = Some(order);
         }
@@ -718,8 +825,8 @@ impl Session {
 
     /// Moves `rows` so they land in front of the entry now at `before`.
     ///
-    /// > *"You can drag files up and down in the listview to change the file
-    /// > order and thus the enumeration index for the file."*
+    /// A drag in the list. The order is the run order, so this is also how a
+    /// user decides which number a counter gives each file.
     ///
     /// `before` is an index into the **current** listing, and
     /// `entries().len()` means "at the end". The moved rows are taken out
@@ -766,6 +873,11 @@ impl Session {
         true
     }
 
+    /// Permutes the listing, carrying the selection with it.
+    ///
+    /// Carried rather than cleared, unlike a relist: there the indices
+    /// pointed into a listing that no longer exists, here the permutation is
+    /// known exactly, so the same files stay selected.
     fn apply_order(&mut self, order: &[usize]) {
         let mut moved_to = vec![0usize; order.len()];
         for (position, &old) in order.iter().enumerate() {
@@ -832,12 +944,10 @@ impl Session {
             SortColumn::Created => order.sort_by_key(|&i| entries[i].created),
             // Folded, like the name above it: `.JPG` beside `.jpg` is what a
             // user means by "sorted by extension".
-            SortColumn::Extension => order.sort_by_cached_key(|&i| {
-                ren_core::split_file_name(&entries[i].file_name)
-                    .1
-                    .unwrap_or_default()
-                    .to_lowercase()
-            }),
+            // A folder has no extension (`FileEntry::split`), so `2019.06`
+            // sorts with the folders rather than among the `.06` files.
+            SortColumn::Extension => order
+                .sort_by_cached_key(|&i| entries[i].split().1.unwrap_or_default().to_lowercase()),
             // By folder, then by name inside it, or the rows of one folder
             // arrive in whatever order the walk found them.
             SortColumn::Folder => order.sort_by_cached_key(|&i| {
@@ -857,16 +967,47 @@ impl Session {
         self.apply_order(&order);
     }
 
-    /// Which rows the run applies to.
-    ///
-    /// *"Only Rename Selected — […] However, if no items are selected, all
-    /// items will be renamed."*
+    /// Which rows the run applies to: the selection, or every row when
+    /// nothing is selected (P22).
     pub fn scoped_indices(&self) -> Vec<usize> {
         if self.selection.is_empty() {
             (0..self.entries.len()).collect()
         } else {
             self.selection.iter().collect()
         }
+    }
+}
+
+/// `(from, to)` pairs as a map from each `from`.
+fn moves(renamed: &[(PathBuf, PathBuf)]) -> HashMap<&Path, &Path> {
+    renamed
+        .iter()
+        .map(|(from, to)| (from.as_path(), to.as_path()))
+        .collect()
+}
+
+/// Where `path` is after the moves: its own new name if it has one, then
+/// carried along by the nearest folder above it that moved.
+///
+/// In that order because the planner renames deepest first
+/// (`order_renames`): a file inside a renamed folder is renamed while the
+/// folder still has its old name, so its pair names the old folder, and the
+/// folder's own pair then takes it along. One step up, never repeated — a
+/// repeated walk could chase two folders that swapped names round forever.
+fn followed(moved: &HashMap<&Path, &Path>, path: &Path) -> PathBuf {
+    let own = moved
+        .get(path)
+        .map_or_else(|| path.to_path_buf(), |to| to.to_path_buf());
+    let above = own
+        .ancestors()
+        .skip(1)
+        .find_map(|ancestor| moved.get(ancestor).map(|to| (ancestor, *to)));
+    match above {
+        Some((ancestor, to)) => match own.strip_prefix(ancestor) {
+            Ok(rest) => to.join(rest),
+            Err(_) => own.clone(),
+        },
+        None => own,
     }
 }
 
@@ -1046,7 +1187,7 @@ mod tests {
     }
 
     /// The permutation is known exactly, so the same files stay selected —
-    /// unlike `refresh`, where the indices point into a listing that is gone.
+    /// unlike a relist, where the indices point into a listing that is gone.
     #[test]
     fn a_reorder_carries_the_selection_with_it() {
         let dir = tree();
@@ -1134,7 +1275,7 @@ mod tests {
         assert_eq!(selection.iter().collect::<Vec<_>>(), [0, 3, 7]);
     }
 
-    /// > *"Navigate the file structure with these two **and the arrow keys**."*
+    /// The arrow keys walk the rows on screen, in the order they are drawn.
     #[test]
     fn the_down_arrow_lands_on_the_next_row_the_filter_shows() {
         // Entries 0, 3 and 7 are on screen; 1, 2, 4, 5 and 6 are hidden. A
@@ -1267,11 +1408,7 @@ mod tests {
         let extensions: Vec<&str> = session
             .entries()
             .iter()
-            .map(|e| {
-                ren_core::split_file_name(&e.file_name)
-                    .1
-                    .unwrap_or_default()
-            })
+            .map(|e| e.split().1.unwrap_or_default())
             .collect();
         assert_eq!(extensions, ["mp3", "txt", "txt"]);
 
@@ -1279,8 +1416,8 @@ mod tests {
         assert_eq!(session.entries().len(), 3, "every row survives a sort");
     }
 
-    /// > *"You can drag files up and down in the listview to change the file
-    /// > order and thus the enumeration index for the file."*
+    /// A dragged row lands where it was dropped, and so takes that place in
+    /// the run order.
     #[test]
     fn dragging_a_row_down_puts_it_where_it_was_dropped() {
         let dir = tree();
@@ -1385,6 +1522,150 @@ mod tests {
         assert_eq!(names_of(&session), ["a.txt", "b.txt", "c.mp3"]);
     }
 
+    /// A folder has no extension, so a dot in its name does not file it among
+    /// the files that share the text after the dot.
+    #[test]
+    fn sorting_by_extension_puts_a_dotted_folder_with_the_folders() {
+        let dir = tree(); // a.txt, b.txt, c.mp3
+        std::fs::create_dir(dir.path().join("photos.txt")).unwrap();
+        let mut session = Session {
+            settings: SessionSettings {
+                dir: dir.path().to_path_buf(),
+                folders: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        session.refresh_now();
+        session.set_sort(SortColumn::Extension);
+        assert_eq!(
+            names_of(&session)[0],
+            "photos.txt",
+            "no extension sorts first"
+        );
+    }
+
+    /// With a selection the plan covers only the selected rows, and its
+    /// `PlanItem::index` counts *those*. The reorder used to read it as a
+    /// listing row, and filed the selected file's new name under row 0.
+    #[test]
+    fn the_new_name_reorder_maps_a_scoped_plan_by_file() {
+        let dir = tree(); // a.txt, b.txt, c.mp3
+        let mut session = session_on(dir.path());
+        let pipeline = ren_core::Pipeline::new().with(
+            ren_core::Step::Name(Box::new(ren_core::Replace::new("b", "zb"))),
+            ren_core::StepConfig::scoped(ren_core::model::Scope::Name),
+        );
+        // Only b.txt is in the run.
+        let scoped = [session.entries()[1].clone()];
+        let plan = ren_core::plan(&scoped, &pipeline, ren_platform::host().as_ref());
+        assert_eq!(plan.items[0].index, 0);
+
+        session.reorder_by_new_names(&plan);
+        assert_eq!(names_of(&session), ["a.txt", "c.mp3", "b.txt"]);
+    }
+
+    /// A stored Free Select has no files to show — the set is not stored — so
+    /// a new session opens on the saved folder instead of an empty table.
+    #[test]
+    fn a_session_never_opens_on_an_empty_free_select() {
+        let session = Session::new(SessionSettings {
+            mode: SourceMode::FreeSelect,
+            ..Default::default()
+        });
+        assert_eq!(session.settings.mode, SourceMode::Browser);
+    }
+
+    /// A relative folder is listed as an absolute one, so every path in a
+    /// plan is absolute (the executor refuses anything else) and Backspace
+    /// has a real parent to go to.
+    #[test]
+    fn a_relative_folder_is_listed_by_its_absolute_path() {
+        let mut session = Session {
+            settings: SessionSettings {
+                dir: PathBuf::from("."),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        session.refresh_now();
+        assert!(session.settings.dir.is_absolute());
+        assert!(session.entries().iter().all(|e| e.path.is_absolute()));
+    }
+
+    /// Free Select follows a rename, a file inside a renamed folder, and a
+    /// file renamed inside a folder that was renamed after it — the order the
+    /// planner runs them in, deepest first.
+    #[test]
+    fn free_select_follows_its_paths_through_renames() {
+        let mut session = Session {
+            free_select: vec![
+                PathBuf::from("/p/a.txt"),
+                PathBuf::from("/p/x/kept.txt"),
+                PathBuf::from("/p/x/old.txt"),
+                PathBuf::from("/p/untouched.txt"),
+            ],
+            ..Default::default()
+        };
+        session.follow_renames(&[
+            (PathBuf::from("/p/a.txt"), PathBuf::from("/p/b.txt")),
+            (PathBuf::from("/p/x/old.txt"), PathBuf::from("/p/x/new.txt")),
+            (PathBuf::from("/p/x"), PathBuf::from("/p/y")),
+        ]);
+        assert_eq!(
+            session.free_select,
+            [
+                PathBuf::from("/p/b.txt"),
+                "/p/y/kept.txt".into(),
+                "/p/y/new.txt".into(),
+                "/p/untouched.txt".into(),
+            ]
+        );
+    }
+
+    /// Two folders that swapped names carry their contents once each, and
+    /// the walk does not chase them round.
+    #[test]
+    fn a_folder_swap_is_followed_once() {
+        let mut session = Session {
+            free_select: vec![PathBuf::from("/p/a/f.txt")],
+            ..Default::default()
+        };
+        session.follow_renames(&[
+            (PathBuf::from("/p/a"), PathBuf::from("/p/b")),
+            (PathBuf::from("/p/b"), PathBuf::from("/p/a")),
+        ]);
+        assert_eq!(session.free_select, [PathBuf::from("/p/b/f.txt")]);
+    }
+
+    /// P65: Delete edits the list and nothing else.
+    #[test]
+    fn removing_rows_from_free_select_leaves_the_files() {
+        let dir = tree();
+        let mut session = session_on(dir.path());
+        session.accept_dropped(vec![dir.path().join("a.txt"), dir.path().join("c.mp3")]);
+        session.refresh_now();
+        assert_eq!(session.remove_from_free_select(&[0]), 1);
+        assert!(session.relist_wanted);
+        session.refresh_now();
+        assert_eq!(session.entries().len(), 1);
+        assert!(dir.path().join("a.txt").exists() && dir.path().join("c.mp3").exists());
+    }
+
+    /// The row menu is not a drag: one folder added from it is added, not
+    /// browsed into.
+    #[test]
+    fn adding_one_folder_to_free_select_adds_it() {
+        let dir = tree();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        let mut session = session_on(dir.path());
+        session.add_to_free_select(vec![sub.clone()]);
+        assert_eq!(session.settings.mode, SourceMode::FreeSelect);
+        assert_eq!(session.settings.dir, dir.path());
+        assert_eq!(session.free_select, [sub]);
+    }
+
     #[test]
     fn a_missing_folder_is_reported_rather_than_panicking() {
         let mut session = Session {
@@ -1425,7 +1706,7 @@ mod tests {
         );
     }
 
-    /// "if no items are selected, all items will be renamed"
+    /// With nothing selected, every row is in the run (P22).
     #[test]
     fn an_empty_selection_scopes_the_run_to_everything() {
         let dir = tree();

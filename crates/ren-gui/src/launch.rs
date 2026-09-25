@@ -104,7 +104,7 @@ pub fn parse(argv: impl IntoIterator<Item = OsString>) -> Launch {
         Err(error) => {
             // `--help` and `--version` are "errors" that print to stdout and
             // mean success. A windows-subsystem build has no stdout either, so
-            // they reach nobody — `ren-cli --help` is the documented place, and
+            // they reach nobody — `ren-cli --help` is where the help lives, and
             // this at least does not open a window on top of it.
             if !error.use_stderr() {
                 let _ = error.print();
@@ -146,7 +146,7 @@ fn first_line(text: &str) -> &str {
 /// The names of these files, one per line, sorted.
 ///
 /// **Sorted here and nowhere else.** Every other path into the app builds a
-/// `Session`, and `Session::refresh` sorts the listing before anything is
+/// `Session`, and a listing is sorted as it is installed, before anything is
 /// numbered — which is what makes Explorer's habit of passing the
 /// right-clicked file *first* harmless everywhere else. This function has no
 /// session, so it is the one place that order could reach the user.
@@ -268,7 +268,7 @@ mod tests {
     }
 
     /// Explorer sends the file you right-clicked **first**, whatever the order
-    /// on screen. Everywhere else `Session::refresh` sorts before anything is
+    /// on screen. Everywhere else the listing is sorted before anything is
     /// numbered; this function has no session, so it sorts for itself.
     #[test]
     fn the_clipboard_list_is_sorted_not_the_order_explorer_sent() {
@@ -476,5 +476,51 @@ mod tests {
         // would pass in silence — which is the usual way a test like this
         // stops testing anything.
         assert_eq!(checked, 8, "every command in the plan, and no fewer");
+    }
+    /// A drive root is the one path a menu line cannot carry through the C
+    /// runtime's splitter: `"E:\"` reads as `E:"` with the quote still open,
+    /// and every argument after it is swallowed. `main` re-splits a
+    /// `--from-shell` line with `ren_platform::split_verbatim`, so that is the
+    /// splitter this checks every menu command against — on a selection of
+    /// two drives, and on one drive's background.
+    #[test]
+    fn a_drive_root_from_the_menu_arrives_whole() {
+        use ren_platform::shell::{MenuPreset, ShellPlan, Step, Value};
+
+        let presets = [MenuPreset {
+            name: "Tidy up",
+            file: std::path::Path::new(r"C:\Users\mk\presets\Tidy up.toml"),
+        }];
+        let plan = ShellPlan::build(
+            std::path::Path::new(r"C:\Apps\Ren It\renameit.exe"),
+            &presets,
+        );
+
+        let mut checked = 0;
+        for step in &plan.steps {
+            let Step::Set { key, name, value } = step else {
+                continue;
+            };
+            let Value::Sz(text) = value else { continue };
+            if !name.is_empty() || !key.ends_with(r"\command") {
+                continue;
+            }
+            let line = text.replace("%1", r#""E:\" "F:\""#).replace("%V", r"E:\");
+            let launch = parse(ren_platform::split_verbatim(std::ffi::OsStr::new(&line)));
+
+            assert!(launch.from_shell, "{line}");
+            assert_eq!(launch.complaint, None, "{line}");
+            let one = [PathBuf::from(r"E:\")];
+            let two = [PathBuf::from(r"E:\"), PathBuf::from(r"F:\")];
+            assert!(
+                launch.paths == one || launch.paths == two,
+                "{:?} from {line}",
+                launch.paths
+            );
+            checked += 1;
+        }
+        // Three fixed items and the preset on the item side; one fixed item
+        // and the preset on the background side.
+        assert_eq!(checked, 6, "every command in the plan, and no fewer");
     }
 }

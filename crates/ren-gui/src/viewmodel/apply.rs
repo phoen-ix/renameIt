@@ -1,10 +1,10 @@
-//! The run worker: apply and undo, off the frame.
+//! The run worker: apply, undo and rollback, off the frame.
 //!
 //! A run is one `fdatasync` per file (D168) and a rename syscall each, and
 //! it used to happen inside the frame: ten thousand files on a spinning disk
 //! or a share is minutes of a window that does not repaint, which Windows
 //! names "not responding" after five seconds. Undo is the same work
-//! backwards.
+//! backwards, and so is the recovery banner's Roll back.
 //!
 //! So both happen here, on the shape the preview and listing workers share —
 //! one job at a time, because a second run while the first is going would be
@@ -26,16 +26,19 @@
 //! committed, and undone exactly like any other.
 //!
 //! The work runs under `catch_unwind`, as the preview does: a panic in the
-//! engine mid-batch comes back as an error outcome with the journal already
-//! written ahead, which is what recovery is for — not as a dead thread and a
-//! button that never re-enables.
+//! engine mid-batch comes back as [`Outcome::Panicked`], naming the kind of
+//! job it interrupted, with the journal already written ahead — which is what
+//! recovery is for — not as a dead thread and a button that never
+//! re-enables. Its own variant rather than an `ExecError`, because the app
+//! has to treat it as "files may have moved", and no error the engine
+//! returns before starting means that.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use ren_core::exec::{ApplyOptions, ApplyReport, ExecError, UndoReport};
+use ren_core::exec::{ApplyOptions, ApplyReport, ExecError, UndoReport, Unfinished};
 use ren_core::{Plan, apply};
 use ren_platform::Platform;
 
@@ -51,6 +54,19 @@ pub enum Job {
         position: usize,
         journal: PathBuf,
     },
+    /// The recovery banner's Roll back: each unfinished transaction in turn,
+    /// stopping at the first that fails.
+    Rollback(Vec<Unfinished>),
+}
+
+impl Job {
+    fn kind(&self) -> JobKind {
+        match self {
+            Self::Run { .. } => JobKind::Run,
+            Self::Undo { .. } => JobKind::Undo,
+            Self::Rollback(_) => JobKind::Rollback,
+        }
+    }
 }
 
 /// What came back.
@@ -59,6 +75,13 @@ pub enum Outcome {
     Undo {
         position: usize,
         report: Result<UndoReport, ExecError>,
+    },
+    /// One result per transaction attempted, in order.
+    Rollback(Vec<(Unfinished, Result<UndoReport, ExecError>)>),
+    /// The engine panicked part-way through a job of this kind.
+    Panicked {
+        kind: JobKind,
+        message: String,
     },
 }
 
@@ -76,6 +99,7 @@ pub struct InFlight {
 pub enum JobKind {
     Run,
     Undo,
+    Rollback,
 }
 
 pub struct ApplyWorker {
@@ -106,6 +130,9 @@ impl ApplyWorker {
             .name("renameit-apply".into())
             .spawn(move || {
                 while let Ok(job) = request_rx.recv() {
+                    // Read before the job moves into the closure: a panic
+                    // has to come back as the kind of job it interrupted.
+                    let kind = job.kind();
                     let outcome =
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match job {
                             Job::Run { plan, options } => {
@@ -118,17 +145,22 @@ impl ApplyWorker {
                                     platform.as_ref(),
                                 ),
                             },
+                            Job::Rollback(items) => {
+                                let mut results = Vec::with_capacity(items.len());
+                                for item in items {
+                                    let result = ren_core::exec::rollback(&item, platform.as_ref());
+                                    let failed = result.is_err();
+                                    results.push((item, result));
+                                    if failed {
+                                        break;
+                                    }
+                                }
+                                Outcome::Rollback(results)
+                            }
                         }))
-                        .unwrap_or_else(|payload| {
-                            let message =
-                                crate::viewmodel::preview::panic_message(payload.as_ref());
-                            Outcome::Run(Err(ExecError::Io {
-                                path: PathBuf::new(),
-                                source: std::io::Error::other(format!(
-                                    "the run stopped part-way: {message}. The journal records what \
-                                 happened; the app offers to roll it back on the next start"
-                                )),
-                            }))
+                        .unwrap_or_else(|payload| Outcome::Panicked {
+                            kind,
+                            message: crate::viewmodel::preview::panic_message(payload.as_ref()),
                         });
                     if response_tx.send(outcome).is_err() {
                         return; // The UI is gone.
@@ -169,18 +201,30 @@ impl ApplyWorker {
     /// Starts an undo of the journal at `journal`, which sits at `position`
     /// on the history stack. Refused while another job is out.
     pub fn undo(&mut self, position: usize, journal: PathBuf, ops: usize) -> bool {
+        self.start(Job::Undo { position, journal }, ops)
+    }
+
+    /// Starts rolling back `items`, as the recovery banner asks. Refused
+    /// while another job is out — a rollback beside a run over the same files
+    /// is two batches over one listing.
+    pub fn rollback(&mut self, items: Vec<Unfinished>) -> bool {
+        let total = items.len();
+        self.start(Job::Rollback(items), total)
+    }
+
+    fn start(&mut self, job: Job, total: usize) -> bool {
         if self.busy.is_some() {
             return false;
         }
         self.progress.store(0, Ordering::Relaxed);
         self.cancel.store(false, Ordering::Relaxed);
-        self.busy = Some((JobKind::Undo, ops));
-        let _ = self.requests.send(Job::Undo { position, journal });
+        self.busy = Some((job.kind(), total));
+        let _ = self.requests.send(job);
         true
     }
 
-    /// Asks the run out to stop before its next op. Nothing for an undo,
-    /// which has to finish to be exact.
+    /// Asks the run out to stop before its next op. Nothing for an undo or a
+    /// rollback, which have to finish to be exact.
     pub fn cancel(&self) {
         if matches!(self.busy, Some((JobKind::Run, _))) {
             self.cancel.store(true, Ordering::Relaxed);
@@ -254,6 +298,98 @@ mod tests {
         assert_eq!(report.unwrap().renamed.len(), 1);
         assert!(!worker.is_busy());
         assert!(dir.path().join("a-b.txt").exists());
+    }
+
+    /// A platform whose renames panic, the way a bug in a reader might.
+    #[derive(Debug)]
+    struct Panics;
+
+    impl Platform for Panics {
+        fn name(&self) -> &'static str {
+            "panics"
+        }
+        fn capabilities(&self) -> &'static [ren_platform::Capability] {
+            ren_platform::host().capabilities()
+        }
+        fn rename(
+            &self,
+            _from: &std::path::Path,
+            _to: &std::path::Path,
+        ) -> ren_platform::Result<()> {
+            panic!("a rename that panics");
+        }
+        fn replace_file(
+            &self,
+            temp: &std::path::Path,
+            target: &std::path::Path,
+        ) -> ren_platform::Result<()> {
+            ren_platform::host().replace_file(temp, target)
+        }
+        fn get_attributes(
+            &self,
+            path: &std::path::Path,
+        ) -> ren_platform::Result<ren_platform::FileAttributes> {
+            ren_platform::host().get_attributes(path)
+        }
+        fn set_attributes(
+            &self,
+            path: &std::path::Path,
+            change: ren_platform::AttributeChange,
+        ) -> ren_platform::Result<()> {
+            ren_platform::host().set_attributes(path, change)
+        }
+        fn get_times(
+            &self,
+            path: &std::path::Path,
+        ) -> ren_platform::Result<ren_platform::FileTimes> {
+            ren_platform::host().get_times(path)
+        }
+        fn set_times(
+            &self,
+            path: &std::path::Path,
+            change: ren_platform::TimeChange,
+        ) -> ren_platform::Result<()> {
+            ren_platform::host().set_times(path, change)
+        }
+        fn naming_rules(&self, path: &std::path::Path) -> &'static ren_platform::NamingRules {
+            ren_platform::host().naming_rules(path)
+        }
+        fn case_sensitivity(&self, dir: &std::path::Path) -> ren_platform::CaseSensitivity {
+            ren_platform::host().case_sensitivity(dir)
+        }
+        fn reveal_in_file_manager(&self, path: &std::path::Path) -> ren_platform::Result<()> {
+            ren_platform::host().reveal_in_file_manager(path)
+        }
+        fn notify_shell_changed(&self, path: &std::path::Path) {
+            ren_platform::host().notify_shell_changed(path);
+        }
+    }
+
+    /// A panic in an undo comes back as an undo. It used to come back as a
+    /// run — which the app, with no run out, dropped without a word.
+    #[test]
+    fn a_panic_names_the_kind_of_job_it_interrupted() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("a_b.txt"), b"x").unwrap();
+        let journal = tempfile::TempDir::new().unwrap();
+        let host = ren_platform::host();
+        let entries = ren_core::list(dir.path(), Default::default()).unwrap();
+        let pipeline = ren_core::Pipeline::new().then(ren_core::ops::Replace::new("_", "-"));
+        let plan = ren_core::plan(&entries, &pipeline, host.as_ref());
+        let options = ApplyOptions {
+            journal_dir: journal.path().to_path_buf(),
+            ..Default::default()
+        };
+        let report = apply(&plan, host.as_ref(), &options).unwrap();
+
+        let mut worker = ApplyWorker::spawn(Arc::new(Panics), || {});
+        assert!(worker.undo(0, report.journal.unwrap(), 1));
+        let Outcome::Panicked { kind, message } = wait(&mut worker) else {
+            panic!("a panic is its own outcome");
+        };
+        assert_eq!(kind, JobKind::Undo);
+        assert!(message.contains("a rename that panics"), "{message}");
+        assert!(!worker.is_busy(), "and the worker is free again");
     }
 
     /// One job at a time: a second run while the first is out is refused
