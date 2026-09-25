@@ -2,7 +2,7 @@
 //!
 //! Thin over `ren_core::exec` — the engine already has the transactional half
 //! (P9: one undo step reverts one executed batch). This adds what a UI needs:
-//! a list to put in the Undo dropdown, a log to show, and the startup check
+//! a list for the Undo button (newest first) and About's session count, a log to show, and the startup check
 //! M1 built `exec::unfinished` for.
 
 use std::path::PathBuf;
@@ -13,7 +13,7 @@ use ren_core::exec::{
 use ren_core::{Plan, apply};
 use ren_platform::Platform;
 
-/// One finished batch, for the Undo dropdown.
+/// One finished batch, for the Undo button.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Batch {
     pub txn: String,
@@ -664,7 +664,7 @@ mod tests {
     }
 
     /// A tag-only batch used to render "Renamed 0 item(s)" — the same lie the
-    /// post-run status told, waiting in the Undo dropdown for whenever that
+    /// post-run status told, waiting on the Undo list for whenever that
     /// gets wired.
     #[test]
     fn a_batch_is_labelled_by_what_it_actually_did() {

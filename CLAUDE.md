@@ -9,7 +9,8 @@ ships first. MIT-licensed.
    (stack, licensing, deferred features, default behaviours). Never contradict
    it silently; append to it when you make a new policy call.
 2. `docs/DESIGN.md` is the architecture: engine model, GUI/UX screens, quality
-   strategy.
+   strategy. Parts 1–3 are the planning documents; **Part 4 is the app as
+   built** — the worker threads and a module map per crate. Start there.
 3. Behaviour that is not obvious from the code is explained in the doc comment
    beside it. Read the module doc before changing a module.
 
@@ -19,8 +20,10 @@ ships first. MIT-licensed.
   MIT/Apache-2.0/BSD/Zlib/ISC-class — check before adding; `cargo-deny`
   enforces it in CI. No GPL/LGPL static linking, ever.
 - **Cross-platform discipline (D3):** OS-specific code lives only in
-  `crates/ren-platform` behind the `Platform` trait. `ren-core` must build and
-  test green on Linux at all times, even though Windows ships first.
+  `crates/ren-platform` behind the `Platform` trait. The one exception is the
+  journal's lossless path encoding in `ren-core` (std only, D240). `ren-core`
+  must build and test green on Linux at all times, even though Windows ships
+  first.
 - **Data is ours (D6):** shipped defaults — presets, scripts, casing rules,
   the batch-replace list — are our own data in our own formats.
 - **Session hygiene:** before ending a session, the quality gate below must be
@@ -34,6 +37,8 @@ ships first. MIT-licensed.
 - `docs/MIGRATION-legacy-scripts.md` — porting a legacy `.frs` script to Koto
 - `docs/manual-checks.md` — the few things CI cannot prove, and how to check them
 - `docs/spikes/` — written verdicts on the risky assumptions
+- `deny.toml` / `about.toml` — which licences are allowed (D2, D238) / the
+  notices a release ships (D237)
 - `crates/` — Cargo workspace: `ren-core` (engine), `ren-platform` (OS traits),
   `ren-cli`, `ren-gui` (egui/eframe)
 
@@ -59,5 +64,7 @@ cargo test --workspace
 TZ=Asia/Kolkata cargo test --workspace   # P61: a UTC agent cannot tell Local from Utc
 cargo deny check
 cargo run --release -p ren-core --example plan_budget   # a 10k-file preset plan, p95 under 50 ms
+cargo run --release -p ren-gui --example spike_preview_headless -- 10000 100        # frame budget (D165)
+cargo run --release -p ren-gui --example spike_preview_headless -- 10000 100 grid   # grid tile count (D165)
 cargo bench -p ren-core --bench plan     # the same numbers with criterion's statistics; keep them in the commit message
 ```

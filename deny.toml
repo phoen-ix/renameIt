@@ -1,6 +1,9 @@
 # cargo-deny configuration — enforces D2 (project is MIT; every dependency must be
 # MIT / Apache-2.0 / BSD-2/3 / Zlib / ISC / Unicode-3.0 / Unlicense, fonts OFL-1.1).
 # No GPL/LGPL static linking, ever. CI fails the build if this drifts.
+#
+# This decides whether a licence is *allowed*. Whether its notice *ships* is
+# `about.toml`'s job (cargo-about, D237).
 
 [graph]
 targets = [
@@ -13,36 +16,39 @@ targets = [
 all-features = true
 
 [licenses]
-# SPDX identifiers only. Adding one here is a policy change: record it in
-# docs/DECISIONS.md before you commit it. D2 lists the core set; D170 records
-# MIT-0, BSL-1.0, CC0-1.0 and the LLVM exception.
+# SPDX identifiers only, and only the ones a crate in the graph needs (D238).
+# Adding one here is a policy change: record it in docs/DECISIONS.md before you
+# commit it. D2 lists the core set. D170 also allows MIT-0, CC0-1.0 and
+# `Apache-2.0 WITH LLVM-exception`; none is listed, because every crate that
+# offers one offers an allowed licence beside it. Put one back, citing D170,
+# when a crate needs it. BSL-1.0 is here for clipboard-win and error-code.
 allow = [
     "MIT",
-    "MIT-0",
     "Apache-2.0",
-    "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
     "BSL-1.0",
     "ISC",
-    "OFL-1.1",
     "Unicode-3.0",
     "Unlicense",
     "Zlib",
-    "CC0-1.0",
 ]
 confidence-threshold = 0.93
-unused-allowed-license = "allow"
+# So an entry nothing uses any more shows up, instead of quietly widening the
+# list (D238).
+unused-allowed-license = "warn"
 
-# D2 carves out fonts ("fonts: OFL-1.1"). egui's bundled default fonts also
-# include Ubuntu Mono under the Ubuntu Font Licence 1.0 — a DFSG-free font
-# licence in the same class as the OFL: it permits embedding and
-# redistribution, and constrains only modify-and-keep-the-name. It covers the
-# font file, not our code. Scoped to the one crate rather than allowed
-# globally. See D15 in docs/DECISIONS.md.
+# D2 carves out fonts ("fonts: OFL-1.1"), and the one crate that carries fonts
+# is egui's `epaint_default_fonts`: Hack and Noto Emoji under the OFL, and
+# Ubuntu-Light under the Ubuntu Font Licence 1.0 — a DFSG-free font licence in
+# the same class as the OFL: it permits embedding and redistribution, and
+# constrains only modify-and-keep-the-name. Both cover the font files, not our
+# code, and both are scoped to this crate rather than allowed globally, so a
+# crate of code cannot arrive under a font licence (D15, D238). The Noto faces
+# we bundle ourselves are assets, not crates; THIRD-PARTY-FONTS.md carries them.
 [[licenses.exceptions]]
 name = "epaint_default_fonts"
-allow = ["Ubuntu-font-1.0"]
+allow = ["OFL-1.1", "Ubuntu-font-1.0"]
 
 [bans]
 multiple-versions = "warn"
@@ -52,10 +58,10 @@ wildcards = "deny"
 # instead.
 deny = [
     { name = "symphonia", reason = "MPL-2.0; lofty already supplies bitrate/length/channels" },
-    { name = "taglib", reason = "LGPL; use lofty + id3" },
-    { name = "taglib-sys", reason = "LGPL; use lofty + id3" },
-    { name = "freeimage", reason = "FIPL/GPL; use the image crate + Windows shell thumbnails" },
-    { name = "freeimage-sys", reason = "FIPL/GPL; use the image crate + Windows shell thumbnails" },
+    { name = "taglib", reason = "LGPL; use lofty" },
+    { name = "taglib-sys", reason = "LGPL; use lofty" },
+    { name = "freeimage", reason = "FIPL/GPL; use the image crate" },
+    { name = "freeimage-sys", reason = "FIPL/GPL; use the image crate" },
     { name = "slint", reason = "D4: GPLv3 / proprietary dual licence, incompatible with MIT" },
 ]
 

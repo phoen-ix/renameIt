@@ -8,6 +8,12 @@ Everything else in this project is checked automatically: `cargo test` covers
 the engine and, since M2, the GUI itself through `egui_kittest` (D24) — no
 display, no GPU, both CI runners.
 
+**Recording a result.** Each section ends with a **Results** line. When you
+work through a section, replace *not yet recorded* with one line per run:
+the date, the machine (Windows build, or distribution and filesystem), and
+pass or fail with the row numbers that failed. A section with no result has
+not been checked — say so rather than assume it.
+
 ---
 
 ## M2 — drag-and-drop from Explorer
@@ -33,7 +39,9 @@ Linux is Windows Explorer actually handing those paths over, and the edge cases
 **If anything fails**, note which row and open an issue — rows 5 and 6 are the
 ones `docs/DESIGN.md` predicted would bite.
 
-## Scripts — what the headless tests cannot see
+**Results:** *not yet recorded.*
+
+## M8 — non-Latin filenames (writing systems)
 
 `every_bundled_script_rasterises` proves a real face claims each character and
 that epaint got an outline out of it. What it cannot prove is whether the result
@@ -55,6 +63,8 @@ Make a folder with one file per row and open it:
 Row 8 is the one that used to take the whole window down, so it is the one to
 repeat after any change to the listing or the journal.
 
+**Results:** *not yet recorded.*
+
 ## M2 — appearance at Windows DPI settings
 
 > **Worth doing now, in a way it was not before.** The icon vocabulary used to
@@ -71,6 +81,8 @@ The headless tests assert behaviour, not pixels. Worth eyeballing once at
 right-hand buttons, and the operation panel's radio groups should all still fit
 without clipping.
 
+**Results:** *not yet recorded.*
+
 ## M3 — tag behaviours worth eyeballing
 
 Four readings recorded as policies. All four are implemented and tested, using
@@ -85,6 +97,8 @@ Free Format:
 | 5 | Zero Padding to 2 digits on `Track 007` | `Track 07` — cropped from the left (P30) |
 | 6 | Re-Number, all numbers, `[/] Divide by: 3`, on `File 10` | `File 3.333…` unrounded (P31) |
 
+**Results:** *not yet recorded.*
+
 ## M3 — `<\>` Move To SubFolder
 
 `<\>` is D31. Worth walking once:
@@ -95,6 +109,8 @@ Free Format:
 | 2 | Then Undo | Files come back; the year folders are removed, because this run created them |
 | 3 | Put an unrelated file into one of those folders, then Undo | That folder is kept, not deleted, and is listed as kept |
 | 4 | `..<\><Name>` | Refused before anything is written — a target may never leave its folder |
+
+**Results:** *not yet recorded.*
 
 ## M4 — the file pickers
 
@@ -113,6 +129,8 @@ path and are driven directly — so what is left is the dialog itself.
 | 3 | A preset's ⋮ → Export… | A save dialog, pre-filled with the preset's name plus `.toml` |
 | 4 | The source bar's 📂 | A folder picker, starting in the folder you are browsing |
 
+**Results:** *not yet recorded.*
+
 ## M4 — the card stack at Windows scaling
 
 The cards are the first vertically-stacked resizable content in the app, and
@@ -120,13 +138,15 @@ the most likely thing to clip. Worth eyeballing once at **125 %** and **150 %**:
 eight cards in the panel, one expanded, the ⋮ menu open, and the preset drawer
 open beside the file table.
 
+**Results:** *not yet recorded.*
+
 ## M8 — the Windows-only work, and who can confirm it
 
 CI's `windows-latest` runner compiles and runs everything below, so "green"
 means the code does what its tests say. What a runner **cannot** tell us is how
 it behaves against a real user's machine: a drive that is not `C:`, a mapped
 network share, a folder with `LongPathsEnabled` off, an install rather than a
-`cargo run`. This is the list to work through on a real Windows box before 1.0.
+`cargo run`. This is the list to work through on a real Windows box before each release.
 
 | # | Do this | Expect |
 |---|---|---|
@@ -135,6 +155,8 @@ network share, a folder with `LongPathsEnabled` off, an install rather than a
 | 3 | The same with the machine's `LongPathsEnabled` registry value **off** (the default) | Still renames. That value is what a `longPathAware` manifest would have depended on, and the reason it was not the fix chosen |
 | 4 | Set Attributes and Set Date on a file at that depth | Both succeed — they go through the same four Win32 calls |
 | 5 | Reveal in Explorer on that file | Explorer opens and selects it. This is the one path deliberately **not** made verbatim, so it is the one to check has not regressed |
+
+**Results:** *not yet recorded.*
 
 ## M8 — shell integration and portable mode
 
@@ -167,6 +189,11 @@ refused. Folders, drives and backgrounds are unaffected and stay either way.
 | 14 | Delete `renameit-portable.txt` from a portable copy and start it | A normal install: files in `%APPDATA%\RenameIt` |
 | 15 | Right-click a file whose **path contains a space** and choose *Show in file manager*; then the same for a folder with a space in its path | Explorer opens the containing folder with the file selected, and the folder itself. The command line is `explorer.exe /select,"C:\My Folder\a.txt"` — switch bare, path quoted (`raw_arg`). Before the audit the whole argument was quoted as one string, which Explorer is known to mis-parse; this is the check no CI can run |
 
+**Results:** *not yet recorded.* Check 3 decides **P82** and check 9 is the only
+measurement of the selection cap: record both outcomes here, with the number of
+files check 9 reached, and append a row to `docs/DECISIONS.md` closing P82
+either way.
+
 ## M8 — Full Row Select
 
 `egui_kittest` drives widgets through the accessibility tree, and this setting
@@ -188,6 +215,8 @@ xvfb-run -a cargo run -p ren-gui     # or just `cargo run -p ren-gui`
 | 5 | Untick it, click a Size cell again | Nothing is selected: only the name senses a click, which is the default |
 | 6 | Tick *Shade every other row* | Alternate rows are faintly shaded, and a selected row still reads as selected |
 
+**Results:** *not yet recorded.*
+
 ## M8 — the Batch Replace box beside *Add rule*
 
 The colon-separated add is `rule_table::added_by`'s own unit test; what a
@@ -200,6 +229,8 @@ than an accessible name, so there is no node for the harness to aim at.
 | 2 | Type `aa:bb:cc` in the box and press **Add rule** | Three rules, finding `aa`, `bb` and `cc`, and the box is cleared |
 | 3 | Type `_` and press **Add rule** | One rule finding `_`, the box cleared |
 | 4 | On a Find & Replace card, fill the find box and press **Add to Batch Replace** | The rule appears at the bottom of the Settings list. A Batch Replace card you already added is unchanged (D35) |
+
+**Results:** *not yet recorded.*
 
 ## M8 — the thumbnail view
 
@@ -234,6 +265,8 @@ large, and one text file renamed to `.jpg`.
 | 14 | Windows at 125% and 150% scaling | Tiles are sharp, not soft. The bucket above the drawn size is what makes this work, so a soft tile means the scale is not reaching `key_for` |
 | 15 | Drop a 64 000 × 64 000 PNG in the folder | "too large to preview" on that one tile, promptly. The app stays responsive and memory does not spike |
 
+**Results:** *not yet recorded.*
+
 ## M8 — the file list's pointer and caret
 
 **Why it is here.** Everything the accessibility tree can reach is tested —
@@ -263,6 +296,8 @@ standing between that and a drag that moves the wrong file.
 | 11 | With **Folders** on, put the keyboard on a folder and press Enter, then Backspace | Down into it, then back out — landing on the folder you left |
 | 12 | Press Backspace with **Folders off**, at a drive root, and in Free Select | Up one level; nothing at the root; nothing in Free Select |
 
+**Results:** *not yet recorded.*
+
 ## M8 — Visual Assist
 
 **Why it is here.** Everything about the strip that the accessibility tree can
@@ -284,9 +319,66 @@ user's filenames.
 | 3 | A name with a **decomposed accent** (any file copied from a Mac), a **CJK character** and an **emoji outside the BMP**. Select across all three, press Select, run | The run cuts exactly where the strip said. This is the byte/character/grapheme check, and no headless test can make it: a decomposed `é` has two cursor positions at nearly the same x, so a selection can land between a letter and its accent |
 | 4 | Double-click a word; triple-click the line | Both select, and the readout agrees with an equivalent drag |
 | 5 | Type into the strip's field | Nothing happens, and the card's own fields are untouched |
-| 6 | Click into the strip's field, press **F3** | The strip cycles or closes. Then click into a real **Find** box and press **F5** and **Ctrl+Z** | Neither fires — the guard still holds where it should (P80) |
-| 7 | **Tab** to a ⌖ | It is reachable. Image buttons are exactly the kind of control a toolkit skips in the tab order, so this is the check that makes "the toolkit handles it" true rather than assumed |
-| 8 | A very long filename in a narrow window | The field scrolls or wraps and the far end is reachable. It is a `multiline` field precisely so it does not clip |
-| 9 | A folder of several thousand files | The picker opens promptly and its last line reads "the first 200 of N" |
-| 10 | An Add & Remove card in **Both** mode | Two markers, and the Add one shows a *shorter* name than the Remove one. That difference is the feature working, not a glitch |
-| 11 | Select to the end of a name, take **Anchor to the end**, then look at a file of a different length | The insertion lands at the end of both |
+| 6 | Click into the strip's field, press **F3** | The strip cycles or closes |
+| 7 | Then click into a real **Find** box and press **F5** and **Ctrl+Z** | Neither fires — the guard still holds where it should (P80) |
+| 8 | **Tab** to a ⌖ | It is reachable. Image buttons are exactly the kind of control a toolkit skips in the tab order, so this is the check that makes "the toolkit handles it" true rather than assumed |
+| 9 | A very long filename in a narrow window | The field scrolls or wraps and the far end is reachable. It is a `multiline` field precisely so it does not clip |
+| 10 | A folder of several thousand files | The picker opens promptly and its last line reads "the first 200 of N" |
+| 11 | An Add & Remove card in **Both** mode | Two markers, and the Add one shows a *shorter* name than the Remove one. That difference is the feature working, not a glitch |
+| 12 | Select to the end of a name, take **Anchor to the end**, then look at a file of a different length | The insertion lands at the end of both |
+| 13 | Select `a*b` in a name on a Find card **without** *Regular expression* | Before Select, the strip names the `*` and says to tick *Regular expression* to match it literally (D236) |
+
+**Results:** *not yet recorded.*
+
+## Second audit (2026-09) — Windows
+
+What the second audit changed on Windows that only a real machine can confirm.
+CI compiles and unit-tests each of these under `cfg(windows)`; the rows are
+about the machine around the code.
+
+| # | Do this | Expect |
+|---|---|---|
+| 1 | Tag an MP3 that has a created date, the **Hidden** attribute and an alternate data stream (download one, so it carries `Zone.Identifier`), with Music Tagger | All three survive, the modified date is unchanged, and no `__renameit-tags-*` file is left beside it (D203, D217). CI's `replace_file_keeps_the_created_date_on_windows` covers the created date only |
+| 2 | The same on a **read-only** MP3 | Refused with *this file cannot be written*; the file is untouched and no copy is left |
+| 3 | `attrib +P` a file (OneDrive *Always keep on this device*), then Set Attributes → Hidden, then Undo | `attrib` still shows `P` after both (D215) |
+| 4 | Explorer menu on a **drive root** (`E:\`): *Start from this folder* on the drive's background, and *Start and load selected files* on a selection spanning two drives | The app opens on `E:\` and lists the selection — not on nothing (D211) |
+| 5 | A `.bat` beside some files containing `ren-cli /p "%~dp0" /r "Photo cleanup"` | It renames them: the switches after the quoted folder are kept (D211) |
+| 6 | In Windows PowerShell 5.1: `Get-ChildItem *.jpg \| % FullName > list.txt`, then `ren-cli /l list.txt` | The files are listed. The file is UTF-16 with a byte-order mark; `Set-Content` (ANSI) must work as well (D212) |
+| 7 | With **Narrator** and then **NVDA** running, Tab through a card, a file row and a ⌖ button | Each is read with its name, not as *button* or silence (D218) |
+| 8 | About ▸ the repository link | The browser opens it (D218) |
+| 9 | Start an undo of a large batch on a network share, then close the window — and try **Alt+F4** | The window stays until the undo finishes, then closes; Alt+F4 never starts an undo (D220, D222) |
+| 10 | Start a long run in one RenameIt window, then open a second | The second window's banner says *a run is still going on in another RenameIt window* and offers no Roll back for it (D175, D228) |
+| 11 | `ren-cli apply C:\Windows\Temp --suffix _x` from an elevated prompt | Exit 2, naming the folder; nothing renamed (D200) |
+
+**Results:** *not yet recorded.*
+
+## Second audit (2026-09) — Linux
+
+Linux ships as an alpha archive, and these are the things only a real mount, a
+real desktop and a real screen reader show.
+
+| # | Do this | Expect |
+|---|---|---|
+| 1 | Mount a FAT image (`mkfs.vfat` a file, `mount -o loop`), open it in the app, and preview a Free Format of `a:b` | The row is refused as an invalid name (D162) |
+| 2 | Start the app **first**, then mount the image, and within two seconds preview the same | The same refusal — the mount table is re-read (D204) |
+| 3 | On a vfat or exFAT stick, rename `IMG.JPG` → `IMG.jpg` (F2, or Set Casing lower on the extension) | `ls` shows `IMG.jpg`. Before D202 the run reported success and the name stayed |
+| 4 | Right-click a row, *Show in file manager*, with a path containing a space | The desktop's file manager opens the folder (xdg-open) |
+| 5 | With **Orca** running, Tab through a card, a file row and a ⌖ button | Each is read with its name (D218) |
+| 6 | Music Tagger on a group-writable file owned by another user | It is tagged; the owner becomes you — the documented cost of the copy-and-swap (D217) |
+| 7 | `sudo ren-cli preview /etc` and `ren-cli preview /home/you/../../usr` | Both exit 2, naming the folder (D200) |
+
+**Results:** *not yet recorded.*
+
+## Second audit (2026-09) — the GUI by eye
+
+| # | Do this | Expect |
+|---|---|---|
+| 1 | Light theme: select a few rows, with *Shade every other row* on | A navy bar at the left of each selected row and tile, clearly distinct from a stripe (P113) |
+| 2 | **Tab** onto a card header | A focus outline in the selection colour |
+| 3 | The grid over a folder of long Free Format names, scrolling | Columns stay even; a long name is clipped, not widening its tile |
+| 4 | The Filename Editor over a folder of CJK names | The glyphs, not ◻ (D233) |
+| 5 | Type a date into Set Date digit by digit, e.g. `2024-02-30` then correct it | What you type stays while you type; nothing snaps back or turns into another date |
+| 6 | Run a preset with `<Ask>` and type at once, then press Enter | The prompt had the keyboard, and Enter renames |
+| 7 | In Free Select, select two rows and press **Delete**; then right-click a row | They leave the list, the files stay on disk, and the menu offers *Remove from Free Select* (P111) |
+
+**Results:** *not yet recorded.*

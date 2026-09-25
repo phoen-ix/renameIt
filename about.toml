@@ -1,0 +1,38 @@
+# cargo-about: the licence notices every release archive carries (D237).
+#
+#   cargo about generate --locked about.hbs -o THIRD-PARTY-LICENSES.html
+#
+# (The output is ignored by git; the release jobs write it into their stage.)
+#
+# `cargo deny` (deny.toml) decides whether a licence is *allowed* (D2);
+# this decides what ships so the notices travel with the binaries — the
+# BSD and MIT licences ask for exactly that of a binary distribution.
+
+# The licences a notice may be drawn from, in order of preference: for a
+# crate offered under `A OR B`, the first one listed here that it offers is
+# the one quoted. Kept to the set deny.toml allows.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "ISC",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+]
+
+# What the two release archives are built for. A crate only another target
+# links is not in either binary, so its notice would not belong there.
+targets = [
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+]
+
+# Build scripts and proc macros run on the build machine and are not
+# linked into what ships; tests and benches are not shipped at all.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true

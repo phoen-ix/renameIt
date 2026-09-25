@@ -6,6 +6,302 @@ Two things this file does **not** track. Engine and UI decisions live in
 `docs/DECISIONS.md`, which is the authority on why anything behaves as it does;
 and the reasoning behind each default lives beside the code it governs.
 
+## [Unreleased]
+
+The second audit: a read of the whole workspace — engine, platform layer, both
+front ends, the build and the docs — with 259 confirmed findings, fixed in eight
+batches. Every behaviour change has its decision number in `docs/DECISIONS.md`
+(**D171**–**D240**, **P100**–**P114**). The version stays 1.4.0 until a release
+is cut (**P66**).
+
+### Changed
+
+- **A script's `done()` may only write into a folder the run lists** (**D171**).
+  A path anywhere else, or one that lands on a name the run renames or creates,
+  blocks the run, and the reason names the path. In the app every script write
+  is now shown and confirmed before the run, each marked as a create or a
+  replace; the status bar counts them, and a run that only writes a file is no
+  longer *Nothing would change* (**D219**).
+- **A folder's name has no extension** (**P100**). Name-scoped operations see the
+  whole folder name (`Vol. 2`, `regex-1.13.1`), extension-scoped ones leave
+  folders alone, the Ext column is empty for a folder, and F2 selects the whole
+  name.
+- **Writing or removing tags keeps the file's modified date**, and Music Tagger
+  and Remove Tags refuse a symbolic link (instead of writing to the file it
+  points to) and a file that cannot be written (**D217**). The cost is stated
+  with the decision: a library scanner or a backup tool that compares dates and
+  sizes can miss a same-length retag.
+- **A script's top level and its `done()` get one second instead of 10 ms**
+  (**D190**), so loading a table or writing a playlist no longer depends on the
+  machine's speed. `rename()` keeps 10 ms per file.
+- **Startup reads only the end of each finished journal** instead of parsing
+  every journal ever written, in full (**D175**).
+- **`<Width>`, `<Height>`, `<Depth>` and `<ExifDate>` read only the headers of
+  JPEGs and camera RAW files**, and thumbnails of very large JPEGs are refused
+  without being read (**D194**). `<FirstFileInFolder>` is cached per folder
+  instead of read for every row on every keystroke (**D193**).
+- The engine refuses to run a plan that names a relative path, so an undo can
+  never replay a batch in the wrong folder (**D177**). Both front ends make
+  every path absolute before listing it (**D207**, **D225**).
+- After a run the file manager is told once per changed folder instead of once
+  per file, and a move into a subfolder refreshes the folder it left too
+  (**P110**).
+- Roll back runs in the background like Undo, and closing the window while a
+  run, an undo or a rollback is going waits for it (**D222**). The Rename
+  button reads *Listing…* while the file list is being read (**D223**).
+- A saved Free Select session opens on the saved folder instead of an empty
+  table (**D225**). Settings a newer version wrote, which this one cannot read,
+  are kept in `app-state.unreadable-<seconds>.ron` beside the journal folder
+  instead of being overwritten, and the status line says where (**D226**).
+- The reset confirmation lists everything it resets, including Run Settings,
+  drop-down history, Simulate, List or Grid and the include filter (**D230**).
+- A Set Date, Set Attributes, Music Tagger or Remove Tags card's Scope offers
+  only the filter, and says why (**P108**). The Zero Padding width box stops at
+  255, the limit the engine enforces (**P105**).
+- The Music Tagger note names the tag block written for each format (**D231**);
+  the Problem Solver says how a stopped or failed run is undone.
+- Selected rows and tiles carry a bar that is visible in light mode (**P113**).
+  A rename that only deletes characters shows the deleted text struck through
+  in the New name column (**D235**). The Genre drop-down keeps a Setup Parts
+  value such as `<%3>` as its first choice.
+- Add / Remove and Move Section card summaries say when a position counts from
+  the end, so the shipped prefix and suffix presets no longer look the same. Set
+  Date's *Get from filename* is labelled *Get from filename (Parts <%4>–<%9>)*.
+- `<Time-…>`, `<DirFiles-3>` and other tags given an argument they do not take
+  explain what the tag accepts, instead of claiming it does not exist
+  (**D182**).
+- Set Casing steps no longer save the unused `[rules.space]` table; presets and
+  settings that contain it still load (**P109**).
+- `ren-cli presets export` refuses to replace an existing file unless given
+  `--force` (**D216**). Undoing a transaction another window is still writing
+  exits 2 (refused, nothing touched), and `recover` reports such a journal as
+  running rather than as a problem (**D206**).
+
+### Fixed
+
+- **Music Tagger and Remove Tags rewrote a music file in place** (**D217**). The
+  tag library truncates the file and writes it back, so a full disk, a dropped
+  share or a pulled USB stick mid-write left a file with no audio — in the one
+  operation that cannot be undone. The change is now made to a copy beside the
+  file, which replaces it only when complete; any failure leaves the file as it
+  was.
+- **Music Tagger deleted fields it had no name for** (**D188**) — a FLAC rip's
+  CUESHEET, your own Vorbis or APE keys, WavPack and Musepack cover art — when
+  it wrote another field. Writing the Comment field no longer deletes iTunes'
+  Sound Check and gapless data, and `<Comment>` no longer renders that data on
+  a file with no comment of its own.
+- **Batch Replace could crash the app** when a rule was deleted or the list
+  reset while the card was on screen, and a Filename Editor, CSV List or Replace
+  card kept showing the first values it computed (**D185**). Every edit now
+  refreshes the card's operation.
+- **The system-folder guard held only on the Rename button** (**D200**). F5, a
+  preset's Run, F2, `ren-cli preview` and `ren-cli apply` now all refuse to
+  rename inside an operating-system folder (`/usr`, `/etc`, `C:\Windows`, the
+  program folders), the CLI with exit 2 and the folder's name;
+  `--allow-system-folders` goes ahead anyway. The guard also sees through `..`,
+  and catches `/usr` itself when listing `/` with folders on.
+- **Free Select emptied itself after every run, F2 rename and undo** (**D224**).
+  Its files are followed to their new names, a hand-set row order survives the
+  undo of the run that used it and a run whose renames swap names, and a file
+  deleted outside the app costs only its own row.
+- **F2 could rename a different file.** Its editor belongs to the file it was
+  opened on, so a sort or relist while it is open no longer makes Enter rename
+  another row. F2 honours Simulate, and waits while a run is going (**D221**).
+- **Pressing Rename again before the list was re-read re-applied the old plan**,
+  which swapped a swap back (**D223**).
+- **Closing the window during an undo killed it half-way** (**D222**). A crash
+  or panic part-way through a run relists and offers Roll back at once, and an
+  undo that panics says so instead of vanishing.
+- **Ctrl+Shift+Z and Alt+F4 undid the last batch** (**D220**). Ctrl+Z in a
+  number box now undoes the digit only, and no shortcut acts behind an open
+  dialog.
+- **`*.bak` in the include filter matched nothing** (**D178**): with the
+  Extension option on, the filter now also tests the whole name, so `*.bak` and
+  `*.mp3` include or exclude what they say.
+- **A torn last line in one journal broke recovery and `ren-cli undo` for every
+  journal** (**D175**). A full disk or a power cut leaves such a line; it is now
+  dropped, one unreadable journal no longer hides the others, and the recovery
+  banner names what it cannot read (**D228**). A batch still running in another
+  window is never offered for rollback or undo.
+- **Undo could move an unrelated file** (**D174**): it replayed a rename the
+  journal records as failed, onto whatever had appeared at the target name.
+  Crash recovery now also removes a folder the run created but never
+  confirmed, puts back a date or attribute change that ran but was never
+  confirmed, and reverts unconfirmed renames newest first. Run and undo reports
+  name each swapped file once, from its original name (`b → a`, not
+  `__renameit-tmp-0 → a`). An undo that cannot record itself in the journal
+  still reports what it restored, and `ren-cli undo` exits 3.
+- **On Linux, a case-only rename on a FAT or exFAT card did nothing** while the
+  run reported it done (`IMG.JPG` → `IMG.jpg`) (**D202**). It now goes through a
+  temporary name. Two hard links to one file are a collision, not a silent
+  no-op.
+- **On Linux a rename could replace a file another program created at the same
+  moment** (**D201**): renames use `renameat2` with no-replace, closing **P13**.
+- **`ren-cli apply .` followed by `undo` from another folder undid the wrong
+  files** (**D207**). Every path is made absolute before it is journalled, and a
+  file named twice in `--list` or `--file` is renamed once.
+- **A script could write over a file that appeared after the preview**, and undo
+  deleted a script-written file even after you had edited it (**D172**). A
+  script's write aimed at a folder the run renames lands in that folder under
+  its new name, and undo removes the file before the folder goes back.
+- **Scripts could crash or hang the app** through an enormous range, a
+  self-referencing `koto.deep_copy`, a huge format width, deeply nested code or
+  a library loop of slow callbacks (**D189**).
+- **`<Crc32>` and `<DetectedExt>` could hang the preview for good** on a named
+  pipe, and re-hashed every file on every keystroke (**D179**). They read only
+  regular files now, through the metadata cache.
+- **A file dated far outside the calendar crashed the preview, the CLI and the
+  file list's date cells** (**D180**). Its date tags are missing and the cell
+  shows a dash. `<ExifDate>`/`<ExifTime>` no longer go missing for a photo taken
+  in the hour a daylight-saving change skips.
+- **The shipped `camera-import.toml` example stripped the dot from every
+  extension**; it now keeps them and leaves files with no Exif date alone.
+  `cleanup.toml` runs the fifty-one shipped Batch Replace rules its comment
+  describes.
+- Planner: a Set Date or Set Attributes step on a file whose name does not
+  change, inside a folder the same run renames, finds the file where it landed
+  instead of stopping the run part-way. A `<\>` move into a folder the same run
+  renames is a conflict with a reason (**D173**). On Windows, `a\` and `A\` from
+  two rows create the folder once, and `Holiday` → `holiday\holiday` is refused
+  before the run. More than a thousand swaps in one folder are no longer falsely
+  refused as unbreakable cycles, and preview faster. Two folders whose names
+  differ only in a byte that is not valid Unicode no longer collide, and a
+  cycle's temporary name can no longer land on a folder the run creates
+  (**D176**). A produced name containing a NUL is refused in the preview on Linux
+  and macOS instead of failing mid-run (**D213**).
+- Journals: one that could not record its start is removed rather than showing
+  up as a batch that did not finish, and journal order stays right when the
+  system clock is set back (**D175**). The test suite no longer writes into the
+  developer's real undo history.
+- Templates: `ww` is the week of the calendar year, so `yyyy-ww` sorts
+  correctly around New Year; an escaped `\/`, `\:` or `\\` in a date format no
+  longer moves files into a subfolder or produces a name Windows refuses; and
+  `dddddd` renders the same as *Long Date* (**D181**). A mistyped `<Exif-…>` name
+  and `<Date->` with an empty format are errors instead of empty text
+  (**D182**). A Reset at limit the counter step jumps over no longer produces a
+  value past the limit, and *Get from filename* no longer reads a year written
+  `0017` as 2017 (**D183**).
+- Operations: with *Regular expression* off, a `$` in the replacement stays a
+  dollar sign (`USD` → `$10` kept the number) (**D186**). Swap Mode works when
+  one string begins the other (`Art` ⇄ `Artist`), and Swap with an empty
+  replacement deletes the find text, as the card says (**P102**). `<Ask>` and
+  `<Clipboard>` in a Batch Replace rule are asked for before the run, and a
+  mistyped tag in any rule is reported (**P106**, **D187**). Space Trimming no
+  longer puts a space between a closing bracket and the punctuation after it
+  (`Song (Live), 2020`) or between two brackets (**P103**). Re-Number arithmetic
+  too large for a number, and a zero-pad width above 255, are row errors
+  instead of a crash or exhausted memory (**P105**). Music Rename leaves
+  untagged files alone even when the style contains `<\>` or `<Counter>`
+  (**P104**). Set Casing exception words match non-ASCII words in any case
+  (**P107**). Add Counter and Re-Number no longer ask for an `<Ask>` left in a
+  field the chosen mode does not use (**P106**). A multi-line Filename Editor
+  card and an interval or partial Set Date card no longer show a permanent
+  false error (**P101**).
+- Metadata and presets: renaming a preset to another capitalisation of its own
+  name no longer deletes it on Windows and macOS, and renaming, duplicating or
+  importing a preset never overwrites another of the same name (**D192**). With
+  *show hidden files* off, the contents of hidden folders such as `.git` are no
+  longer listed and renamed (**D191**). Remove Tags removes Lyrics3 v2 blocks
+  larger than 6 KB instead of calling them damaged. Set Date's *peek inside
+  folders* takes effect whichever setting was used first, and tags on a
+  symbolic link read the file it points to (**D193**). A CSV list saved as
+  UTF-16 works, a CSV or script that could not be read is read again once the
+  problem is fixed, and a `/` after an unclosed `<` in a CSV's new-name column
+  no longer moves the file (**D195**). Scripts whose names contain a dot, or
+  whose extension is `.KOTO`, load again (**D198**). The shipped *Get HTML XML
+  Tags* script no longer moves a page into a subfolder when its title contains
+  `/`, and *Length of Filename* counts characters (**D199**).
+- Platform: Set Date and Set Attributes on a symbolic link change the link, as
+  a rename does, and a dangling link can have its date set (**D205**). On
+  Windows, changing an attribute no longer clears OneDrive's *Always keep on
+  this device* pin (**D215**). On Linux, a FAT or NTFS drive mounted while the
+  app is open gets that drive's naming rules within two seconds (**D204**). The
+  Explorer menu opens the app on a drive root (`E:\`), and a batch file's
+  `/p "%~dp0" /r preset` keeps its switches (**D211**).
+- Command line: a non-Unicode argument no longer crashes `ren-cli` with exit
+  101. `--list` reads the files Windows PowerShell writes (UTF-16 or the ANSI
+  code page) and, on Linux, file names that are not UTF-8 (**D212**). A legacy
+  `/p` naming a file renames just that file, and a `/p` folder that no longer
+  exists fails naming it (**D210**). `ren-cli preview /d` and other modern command
+  lines are never read as legacy switches. `--job` refuses `--list`, `--file`
+  and the listing flags instead of ignoring them, so `--delete-list` can no
+  longer delete a list that was never read (**D208**). `--answer` for a slot the
+  pipeline does not ask for is refused, and `apply` stops when stdin closes
+  before an `<Ask>` is answered (**D209**). A missing folder is named in the
+  error, a list file that cannot be deleted after a successful run is a
+  warning, and `recover --rollback` carries on past one transaction it cannot
+  roll back and exits 3 (**D206**). `undo` and `recover` say which files and
+  folders they removed, and which folders they kept and why. Control characters
+  in file names are shown escaped, so a hostile name cannot rewrite the preview
+  in the terminal (**D214**).
+- The app: sorting by New name with a selection orders the rows by their own
+  new names; the running counter advances by the rows that ran, even if the
+  selection changed during the run; *Add to Free Select* on a single folder row
+  adds the folder instead of browsing into it; a batch undone with
+  `ren-cli undo` or in another window leaves the Undo list instead of jamming
+  it (**D227**); saving over a preset keeps its description (**D229**); the
+  listing thread survives a panic in the walk; the About window's repository
+  link opens in the browser (**D218**).
+- Cards and widgets: deleting a Batch Replace rule no longer reports the deleted
+  rule's broken tag; typing a date or time into Set Date keeps what you type;
+  the pre-processor's *Regular expression* switch can be unticked; a preset
+  cannot be loaded, appended or run while a run or an undo is going (**D234**);
+  deleting a row from Music Styles or a casing list no longer hands its undo
+  history to the row below; a missing or broken script is no longer also said
+  to take no arguments; a failed right-click-menu install stays on screen.
+- The grid and the list: folders and files that are not pictures can be
+  clicked, right-clicked and double-clicked in the grid; tiles sit on a fixed
+  pitch, so a long new name no longer widens its tile; the ⟳ button forgets
+  what was read from inside the files, as F9 does (**D232**); CJK, Hebrew,
+  Arabic, Thai and Devanagari names draw in the Filename Editor, Visual Assist
+  and the Problem Solver's paths (**D233**); Settings edits no longer re-plan the
+  whole listing, which the thumbnail slider did once per frame; and scrolling
+  back onto loaded thumbnails cancels the decodes still queued for the tiles
+  scrolled away from.
+
+### Added
+
+- **Screen-reader support** (**D218**). The shipped app never registered its
+  accessibility tree with the operating system, so every accessible name the
+  tests check reached no screen reader. It now works with Narrator and NVDA on
+  Windows and AT-SPI on Linux. The binary grows by about 3 MB.
+- **In Free Select, Delete takes the selected rows out of the list**, and the
+  row menu offers *Remove from Free Select*. The files are untouched
+  (**P111**).
+- **Licence notices for everything the binaries link** ship in both release
+  archives as `THIRD-PARTY-LICENSES.html`, generated by `cargo-about`, beside
+  the notices for egui's own fonts; the archives also carry `docs/tags.md` and
+  `docs/MIGRATION-legacy-scripts.md`, which the README and the Script card point
+  at (**D237**).
+- `ren-cli --help` (and `/?`) lists the exit codes and the legacy
+  `/p /l /r /f /d /s /k /x` switches, and the README has a full command-line
+  reference, a keyboard table, the app's own command line, what to do when a
+  run was interrupted, and where RenameIt keeps its files.
+- The undo log lists files a script wrote that the undo deleted, folders it
+  removed or had to keep, and an undo that could not be written into the
+  journal.
+- The `<Ask>` prompt takes the keyboard when it opens, and Enter renames. A
+  focused card header shows a focus outline.
+- Visual Assist warns before Select when the picked text holds `*`, `:` or `?`,
+  which a Find box without *Regular expression* reads as wildcards (**D236**).
+  Set Date's *Get from filename* says how to set up Setup Parts.
+- `<NowDate-fmt>`, and `<Rnd>` ranges with negative bounds (`<Rnd3--5-5>`)
+  (**D182**). `docs/tags.md` has a table of the date format codes, and lists
+  `<DirSizeB-#>`, `<SDirSizeB>` and `<MidRev-#-#>`.
+- `docs/DESIGN.md` Part 4 describes the app as built: the worker threads and a
+  module map per crate.
+
+### Removed
+
+- Scripts may no longer use generators (`yield`), define their own iterators
+  (`@next`, `@iterator`), call `koto.deep_copy`, hand a library function a range
+  of more than a million items, or exceed 64 KB or 100 levels of nesting
+  (**D189**). `docs/MIGRATION-legacy-scripts.md` lists the alternatives.
+- The palette's machinery for operations that were not built yet, which had
+  nothing left to describe (**P112**), and unused thumbnail API.
+- About 1 100 lines of test-fixture writers from the shipped binaries; they
+  now sit behind a `testing` feature only the tests enable (**D197**).
+
 ## [1.4.0] - 2026-09-06
 
 The audit: a read of the whole workspace for defects, dead code and cost, with the fixes.
@@ -316,7 +612,7 @@ Three defects the last pass turned up, none of which any test had caught:
   Two things Windows imposes, said on the Settings page rather than left to be
   discovered: on **Windows 11** this lives under *"Show more options"*, and a
   selection reaches a menu entry as a command line the shell caps at about 2000
-  characters — roughly thirty files. Past that Windows hides the entry rather
+  characters, so how many files fit depends on how long their paths are. Past that Windows hides the entry rather
   than shortening the list. If a selection arrives near the limit, a dismissible
   banner says how many characters it was and offers to list the whole folder
   instead.

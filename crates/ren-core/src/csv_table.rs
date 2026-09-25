@@ -154,7 +154,7 @@ const CP1252_HIGH: [char; 32] = [
 
 /// UTF-8 if it is valid, CP1252 if it is not.
 ///
-/// Excel writes CP1252, and P10 already records that a CSV in the wild is as
+/// Excel writes CP1252, and D50 already records that a CSV in the wild is as
 /// likely to be ISO-8859-1/CP1252 as UTF-8. `String::from_utf8_lossy` is the
 /// wrong fallback here:
 /// it would turn `Björk` into `Bj<?>rk` and rename a file to it.

@@ -29,7 +29,7 @@ pub struct TableStyle {
     /// A grey background on every other row.
     ///
     /// **On by default** (P91). P70 already
-    /// waived "Show Guidelines" on the grounds that this is "the thing that
+    /// declined a grid-lines option on the grounds that this is "the thing that
     /// actually makes a wide row readable" — and now that the name columns
     /// take the window's spare width instead of collapsing to their content,
     /// every row is a wide row.
@@ -354,8 +354,8 @@ mod style_tests {
     /// Shading on, full-row select off.
     ///
     /// Both shipped off until the name columns stopped collapsing to their
-    /// content and started taking the window's spare width. P70 waived
-    /// "Show Guidelines" on the grounds that row
+    /// content and started taking the window's spare width. P70 declined a
+    /// grid-lines option on the grounds that row
     /// shading is "the thing that actually makes a wide row readable"; P91
     /// finishes that thought by having it on. Full-row select stays off —
     /// it changes what a click *does*, which is not a legibility default.

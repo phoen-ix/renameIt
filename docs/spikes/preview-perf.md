@@ -3,7 +3,8 @@
 *M0's preview-performance spike. Written 2026-08-15. Harness:
 `crates/ren-gui/examples/spike_preview_headless.rs` (numbers of record) and
 `crates/ren-gui/examples/spike_preview_app.rs` (windowed confirmation), sharing
-`crates/ren-gui/src/spike.rs`.*
+`crates/ren-gui/examples/spike/mod.rs` (moved out of the shipped library in
+1.4.0).*
 
 ## Question
 
@@ -105,6 +106,9 @@ row is touched, which is why the p50 stays low across a whole typed word.
 4. **The budget line is `recompute`, not `frame`.** Future work that threatens
    it is per-row *IO* — audio tags, EXIF, CRC32. That is exactly what
    `TagNeeds` + `MetaCache` + `Pending` placeholders exist for; keep them.
+   *(As built: there are no `Pending` placeholders — metadata is read
+   synchronously behind one mtime-keyed cache (P44), and `TagNeeds` is a
+   declaration kept for that future work rather than a gate (D184).)*
 5. Everything here was measured with a **software** rasteriser and no GPU. Real
    hardware can only be faster.
 
@@ -115,7 +119,8 @@ row is touched, which is why the p50 stays low across a whole typed word.
 - The pure pass has no stateful tags. Counters and unique-random tags force the
   serial finalize pass described in `docs/DESIGN.md` Part 1 §4; that pass is
   O(n) string patching and is expected to be cheap, but it is **M3's** measure
-  to take, not this spike's.
+  to take, not this spike's. *(M3 replaced the finalize pass with a serial
+  pre-pass, D28, so evaluation stayed fully parallel.)*
 - No metadata IO. Music/EXIF tags (M6) hit the disk and are cache-backed by
   design; they are out of scope here.
 

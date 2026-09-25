@@ -669,7 +669,11 @@ pub fn file_stem_for(name: &str) -> String {
 ///
 /// `std::fs::rename`, **not** `Platform::rename`: that one refuses to overwrite
 /// by design (P13), which is right for a user's files and exactly wrong here.
-/// This is our own data file, and replacing it is the whole point.
+/// For a save this is our own data file, and replacing it is the whole point.
+/// For an export the target is any path the user typed, so whether it may be
+/// replaced is the caller's question: `ren-cli presets export` refuses an
+/// existing file without `--force` (D216), and in the GUI the path comes from
+/// a native save dialog, which is where a user confirms a replacement.
 fn write_atomically(path: &Path, text: &str) -> Result<(), PresetError> {
     use std::io::Write;
 

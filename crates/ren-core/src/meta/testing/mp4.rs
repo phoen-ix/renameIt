@@ -63,7 +63,7 @@ fn hdlr_soun() -> Vec<u8> {
 /// Named `.m4a` rather than `.mp4` on purpose when written: `mp4` is **not** in
 /// [`crate::meta::audio::AUDIO_EXTENSIONS`], and both mutation operations gate
 /// on that list by name before opening anything — so a `.mp4` fixture would be
-/// invisible to the tagger and the untagger while reading perfectly.
+/// invisible to Music Tagger and Remove Tags while reading perfectly.
 #[derive(Debug, Default, Clone)]
 pub struct M4a {
     /// `(atom fourcc, value)` — `©ART`, `©nam`, `©alb` and friends.

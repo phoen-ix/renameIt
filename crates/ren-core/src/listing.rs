@@ -18,13 +18,13 @@ pub struct ListOptions {
     pub files: bool,
     pub folders: bool,
     pub subfolders: bool,
-    /// The pattern textbox — *"e.g. `*.mp3`; `*.*` = all"*.
+    /// The pattern box — `*.mp3`, with `*.*` meaning everything.
     ///
     /// A **mask** over the whole file name, not a search, which is the same
     /// reading P19 settled for wildcards in the include filter. `None` lists
     /// everything.
     pub pattern: Option<MatchSpec>,
-    /// *"Show write protected / hidden / system files and folders"*.
+    /// Whether write-protected, hidden and system entries are listed.
     ///
     /// All three default to **true**. See D126: a renamer that silently
     /// omits rows is the failure this project has already fixed once (P63), and
@@ -32,15 +32,15 @@ pub struct ListOptions {
     pub hidden: bool,
     pub system: bool,
     pub read_only: bool,
-    /// *"If both files & folders are displayed, apply pattern mask to:
-    /// Files | Folders"*.
+    /// Which entries the pattern box filters when both files and folders are
+    /// listed.
     pub pattern_applies: PatternScope,
 }
 
 /// Which kinds of entry the pattern box filters.
 ///
-/// > *"If \*both\* files & folders are displayed, apply pattern mask to:
-/// > Files | Folders"*
+/// Only matters when the listing holds both files and folders: then the mask
+/// can apply to files only, to folders only, or to both.
 ///
 /// `Both` is the default, because it is what the box appears to do.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -308,9 +308,10 @@ mod tests {
         assert!(FileEntry::from_path(dir.path().join("dangling")).is_ok());
     }
 
-    /// *"Show write protected … files and folders"*, and what happens when it
-    /// is unticked. Cross-platform: `set_readonly` is the owner write bit here
-    /// and `FILE_ATTRIBUTE_READONLY` on Windows, which is exactly the pair
+    /// The write-protected switch, and what happens when it is unticked.
+    /// Cross-platform: `set_readonly` clears every write bit here (no write
+    /// bit for anyone is what counts as write-protected, D126) and sets
+    /// `FILE_ATTRIBUTE_READONLY` on Windows, which is exactly the pair
     /// `ren_platform::visibility` reads.
     #[test]
     fn the_write_protected_switch_takes_rows_out_of_the_listing() {
@@ -406,8 +407,8 @@ mod tests {
         );
     }
 
-    /// *"If both files & folders are displayed, apply pattern mask to:
-    /// Files | Folders"*.
+    /// With files and folders both listed, the mask can be told to leave
+    /// folders alone.
     #[test]
     fn the_pattern_can_be_told_to_leave_folders_alone() {
         let dir = TempDir::new().unwrap();

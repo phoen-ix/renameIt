@@ -1,8 +1,8 @@
 //! M6's acceptance, over every format the engine dispatches on differently.
 //!
-//! > *"golden tests: rename-from-tags over the corpus; tagger write→lofty
-//! > re-read round-trip per format; untagger leaves audio stream intact
-//! > (byte-compare past tag blocks)"*
+//! > rename-from-tags over the corpus; a tag write re-read by lofty per
+//! > format; Remove Tags leaves the audio stream intact, byte for byte, past
+//! > the tag blocks.
 //!
 //! One row per **tag type**, not per container: `meta::write` chooses what to do
 //! from `FileType::primary_tag_type()`, so a second Vorbis-comment format tests

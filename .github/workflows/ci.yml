@@ -46,6 +46,40 @@ jobs:
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
+      # Type-checks the cfg(windows) half of the workspace on the fast runner,
+      # before the test suite, so a Windows-only compile error is reported in
+      # seconds rather than after the suite — or after the windows-latest job
+      # spins up. `cargo check`/`clippy` need no linker, so this needs no
+      # cross-toolchain at all.
+      #
+      # DESIGN.md Part 3's M0 task list asks for a `cargo xwin build` smoke
+      # here instead. We do this rather than that deliberately: xwin would add
+      # a ~1 GB Microsoft-licensed SDK download to every run, and actual
+      # *linking* is already covered for real by the windows job below. See
+      # D17.
+      # Libraries and binaries only, not `--all-targets`: some dev-dependencies
+      # (proptest's `alloca`) have build scripts that need an MSVC C compiler,
+      # which a Linux runner does not have. The windows job below builds and
+      # runs the tests for real.
+      - name: Type-check the Windows target
+        run: cargo clippy --locked --workspace --lib --bins --target x86_64-pc-windows-msvc -- -D warnings
+
+      # D218: the shipped app registers its accessibility tree with the OS
+      # (UIA on Windows, AT-SPI on Linux) and opens links. Both are eframe
+      # features that `default-features = false` silently dropped once, and
+      # losing them again would pass every test — the kittest harness builds
+      # the tree either way. (`grep` without `-q`, so it reads the whole tree:
+      # an early exit would SIGPIPE `cargo tree` and fail under pipefail.)
+      - name: The shipped app keeps its screen-reader adapter and links
+        run: |
+          for t in x86_64-unknown-linux-gnu x86_64-pc-windows-msvc; do
+            for f in accesskit links; do
+              cargo tree --locked -p ren-gui -e no-dev,features -i egui-winit --target "$t" \
+                | grep -F "egui-winit feature \"$f\"" > /dev/null \
+                || { echo "::error::eframe lost its $f feature on $t (D218)"; exit 1; }
+            done
+          done
+
       # Deliberately **not** UTC. GitHub's runners are, and so is the machine
       # this is usually developed on — which means a test written against
       # `chrono::Local` passes just as happily against a UTC-hardcoded
@@ -58,22 +92,6 @@ jobs:
         run: cargo test --locked --workspace
         env:
           TZ: Asia/Kolkata
-
-      # Type-checks the cfg(windows) half of ren-platform on the fast runner, so
-      # a Windows-only compile error is caught in ~30s rather than after the
-      # windows-latest job spins up. `cargo check`/`clippy` need no linker, so
-      # this needs no cross-toolchain at all.
-      #
-      # ROADMAP M0 task 3 asks for a `cargo xwin build` smoke here instead. We
-      # do this rather than that deliberately: xwin would add a ~1 GB
-      # Microsoft-licensed SDK download to every run, and actual *linking* is
-      # already covered for real by the windows job below. See D17.
-      # Libraries and binaries only, not `--all-targets`: some dev-dependencies
-      # (proptest's `alloca`) have build scripts that need an MSVC C compiler,
-      # which a Linux runner does not have. The windows job below builds and
-      # runs the tests for real.
-      - name: Type-check the Windows target
-        run: cargo clippy --locked --workspace --lib --bins --target x86_64-pc-windows-msvc -- -D warnings
 
       # The planning budget on the real engine: the bench's 10 000-row
       # `preset` listing through `ren_core::plan`, p95 against a budget. Spike
@@ -119,8 +137,8 @@ jobs:
 
       # So a binary does not require cutting a tag.
       #
-      # The release archive is `release.yml`'s job and is staged with a P11
-      # check; this is the *build*, for trying a change on Windows without
+      # The release archive is `release.yml`'s job, staged from an explicit
+      # list and checked (D161, D237); this is the *build*, for trying a change on Windows without
       # inventing a version number. Named for the commit so two downloads are
       # never confused, and GitHub expires it on its own.
       - name: Keep the executables

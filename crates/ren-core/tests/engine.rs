@@ -1773,7 +1773,7 @@ fn an_announced_irreversible_change_counts_as_in_flight() {
     assert_eq!(unfinished[0].in_flight[0].op, "music_tagger");
     assert!(
         unfinished[0].in_flight.iter().any(|f| f.rewrote_contents),
-        "a tag write rewrites the file in place, so it may be half-written"
+        "a tag write in flight is flagged as possibly half-written: a journal cannot say which build wrote it"
     );
 }
 
@@ -1999,10 +1999,10 @@ fn the_tagger_writes_the_filename_into_the_file() {
     assert_eq!(fixture.names(), ["Metallica - One.mp3"]);
 }
 
-/// The untagger's acceptance criterion, stated as acceptance: *"untagger leaves
-/// audio stream intact (byte-compare past tag blocks)"*.
+/// M6's acceptance for Remove Tags: the audio stream is left intact, byte for
+/// byte, past the tag blocks.
 #[test]
-fn the_untagger_strips_tags_and_leaves_the_audio_byte_identical() {
+fn remove_tags_strips_tags_and_leaves_the_audio_byte_identical() {
     use ren_core::meta::testing::{Mp3, mpeg_frames};
     use ren_core::ops::RemoveTags;
 

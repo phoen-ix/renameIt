@@ -40,7 +40,8 @@ serde_json.workspace = true
 tempfile.workspace = true
 
 # Stamps the Windows .exe with our icon and version metadata (build.rs).
-# MIT, no dependencies of its own; audited under D2.
+# MIT; it depends on `toml` and `version_check`, both MIT/Apache-2.0.
+# Audited under D2.
 #
 # Not gated on `cfg(windows)`: for a build script that cfg means the *host*,
 # and cross-compiling to Windows from a Linux box would then silently drop the

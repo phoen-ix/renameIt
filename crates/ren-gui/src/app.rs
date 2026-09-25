@@ -2565,8 +2565,8 @@ impl RenameItApp {
     /// The two directions are deliberately asymmetric in what they need:
     /// **Backspace works whatever the Folders chip says**, because a parent
     /// folder is not a row; **Enter needs a folder row to act on**, so it needs
-    /// the chip. That asymmetry is why "always show folder icons" is waived
-    /// rather than blocking this one.
+    /// the chip. That asymmetry is why listing folders for navigation only is
+    /// not offered (P86) rather than blocking this one.
     fn walk_the_folder_tree(&mut self, ctx: &egui::Context) {
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
             // A **folder** row descends into it. A file row does nothing, and

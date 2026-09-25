@@ -57,9 +57,37 @@ jobs:
             exit 1
           fi
 
+  # D237: the notices of everything the binaries link, generated once and
+  # shipped in both archives. The BSD and MIT licences ask for their notice
+  # in the documentation of a binary distribution; `cargo deny` only checks
+  # that a licence is allowed. One run covers both archives because
+  # about.toml names both targets. cargo-about is MIT OR Apache-2.0 and runs
+  # only here; its output is not committed.
+  notices:
+    name: Third-party licence notices
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-about
+        run: cargo install --locked cargo-about --version 0.9.2 --features cli
+
+      - name: Generate THIRD-PARTY-LICENSES.html
+        run: |
+          mkdir -p dist
+          cargo about generate --locked about.hbs -o dist/THIRD-PARTY-LICENSES.html
+          test -s dist/THIRD-PARTY-LICENSES.html
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: third-party-licenses
+          path: dist/THIRD-PARTY-LICENSES.html
+
   windows:
     name: Windows — build and package
-    needs: gate
+    needs: [gate, notices]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -73,25 +101,42 @@ jobs:
       - name: Build
         run: cargo build --locked --release --bin renameit --bin ren-cli
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: third-party-licenses
+          path: dist/notices
+
       # The archive is built from an explicit list rather than by sweeping a
-      # directory, so nothing reaches a release artifact by accident.
+      # directory, so nothing reaches a release artifact by accident — the
+      # examples and docs included.
       - name: Stage the artifact
         shell: pwsh
         run: |
           $stage = "dist/RenameIt"
-          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          foreach ($dir in @($stage, "$stage/docs", "$stage/examples", "$stage/font-licences")) {
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          }
           Copy-Item target/release/renameit.exe $stage
           Copy-Item target/release/ren-cli.exe  $stage
           Copy-Item LICENSE                     $stage
           Copy-Item README.md                   $stage
           Copy-Item CHANGELOG.md                $stage
-          # The OFL requires its notice to travel with the font, and the fonts
-          # are compiled into the executable. cargo-deny cannot see an asset
-          # that is not a crate, so this is the only thing carrying the
-          # obligation.
+          # D237: every crate the binaries link, with its licence text.
+          Copy-Item dist/notices/THIRD-PARTY-LICENSES.html $stage
+          # The font licences require their notice to travel with the fonts,
+          # and the fonts are compiled into the executable. cargo-deny cannot
+          # see an asset that is not a crate, so this is the only thing
+          # carrying the obligation for the five Noto faces (OFL.txt) and
+          # egui's own four (font-licences/).
           Copy-Item THIRD-PARTY-FONTS.md        $stage
           Copy-Item crates/ren-gui/assets/fonts/OFL.txt "$stage/OFL.txt"
-          Copy-Item examples                    $stage -Recurse
+          Copy-Item crates/ren-gui/assets/fonts/egui/*.txt "$stage/font-licences"
+          # The README and the Script card point at these two.
+          Copy-Item docs/tags.md                     "$stage/docs"
+          Copy-Item docs/MIGRATION-legacy-scripts.md "$stage/docs"
+          foreach ($example in @("camera-import", "cleanup", "music-rename", "numbered", "photo-cleanup")) {
+            Copy-Item "examples/$example.toml" "$stage/examples"
+          }
           # A downloaded, extracted folder is exactly the portable case, so the
           # marker ships. Deleting it makes the copy behave like an install and
           # keep its files in the per-user folder instead (D131). If the folder
@@ -108,8 +153,14 @@ jobs:
           # Checked rather than trusted: a licence obligation that depends on
           # somebody remembering a copy step is one that will eventually be
           # forgotten.
-          foreach ($needed in @("OFL.txt", "THIRD-PARTY-FONTS.md")) {
-            if (-not (Test-Path "$stage/$needed")) { throw "font notice missing: $needed" }
+          $needed = @(
+            "OFL.txt", "THIRD-PARTY-FONTS.md", "THIRD-PARTY-LICENSES.html",
+            "font-licences/UFL.txt", "font-licences/Hack-Regular.txt",
+            "font-licences/emoji-icon-font-mit-license.txt",
+            "docs/tags.md", "docs/MIGRATION-legacy-scripts.md"
+          )
+          foreach ($file in $needed) {
+            if (-not (Test-Path "$stage/$file")) { throw "missing from the archive: $file" }
           }
           Get-ChildItem $stage -Recurse -File | Select-Object FullName, Length
 
@@ -122,51 +173,71 @@ jobs:
           name: RenameIt-windows-x64
           path: dist/RenameIt-windows-x64.zip
 
+      # The draft's body is the newest CHANGELOG section, not the whole file.
+      - name: Release notes
+        shell: bash
+        run: awk '/^## \[/{n++} n==1' CHANGELOG.md > dist/notes.md
+
       - name: Publish
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: dist/RenameIt-windows-x64.zip
-          body_path: CHANGELOG.md
+          body_path: dist/notes.md
           draft: true
 
   linux:
     name: Linux — build and package
-    needs: gate
+    needs: [gate, notices]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: Swatinem/rust-cache@v2
 
-      # eframe's own list. The Windows job needs none of this, which is the
-      # whole reason the two jobs are not one matrix.
+      # The same list `ci.yml` builds with, so the release is built in the
+      # environment the gate certified (P98). rfd's defaults (xdg-portal) mean
+      # no GTK, and nothing in the graph links OpenSSL. The Windows job needs
+      # none of this, which is the whole reason the two jobs are not one
+      # matrix.
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libxcb-render0-dev libxcb-shape0-dev \
-            libxcb-xfixes0-dev libxkbcommon-dev libssl-dev
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libgl1-mesa-dev
 
       - name: Build
         run: cargo build --locked --release --bin renameit --bin ren-cli
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: third-party-licenses
+          path: dist/notices
+
       # D3 says `ren-core` builds and tests green on Linux at all times, and M9
       # promotes that build from "CI artifact" to an alpha. This is the artifact
-      # half, cut by the same tag rather than by a separate act — the binaries
-      # are already built and tested on this runner either way.
+      # half, cut by the same tag rather than by a separate act. The tests ran
+      # in `ci.yml` on this commit, which the gate checked (P98).
       #
       # Staged from an explicit copy list, for the same reason as the Windows
       # job.
       - name: Stage the artifact
         run: |
           stage=dist/RenameIt
-          mkdir -p "$stage"
+          mkdir -p "$stage/docs" "$stage/examples" "$stage/font-licences"
           cp target/release/renameit "$stage"
           cp target/release/ren-cli  "$stage"
           cp LICENSE README.md CHANGELOG.md THIRD-PARTY-FONTS.md "$stage"
-          # See the Windows job: the OFL notice has to ship with the binary the
-          # fonts are compiled into.
+          # See the Windows job: every crate's notice (D237), and the font
+          # notices that have to ship with the binary the fonts are compiled
+          # into.
+          cp dist/notices/THIRD-PARTY-LICENSES.html "$stage"
           cp crates/ren-gui/assets/fonts/OFL.txt "$stage/OFL.txt"
-          cp -r examples "$stage"
+          cp crates/ren-gui/assets/fonts/egui/*.txt "$stage/font-licences"
+          cp docs/tags.md docs/MIGRATION-legacy-scripts.md "$stage/docs"
+          for example in camera-import cleanup music-rename numbered photo-cleanup; do
+            cp "examples/$example.toml" "$stage/examples"
+          done
           cat > "$stage/renameit-portable.txt" <<'MARKER'
           The presence of this file makes this a portable copy of RenameIt:
           presets, scripts, the undo journal and the window layout are kept in
@@ -176,9 +247,12 @@ jobs:
           Delete this file to keep them in your user profile instead.
           MARKER
           # See the Windows job: checked, not trusted.
-          for needed in OFL.txt THIRD-PARTY-FONTS.md; do
+          for needed in OFL.txt THIRD-PARTY-FONTS.md THIRD-PARTY-LICENSES.html \
+              font-licences/UFL.txt font-licences/Hack-Regular.txt \
+              font-licences/emoji-icon-font-mit-license.txt \
+              docs/tags.md docs/MIGRATION-legacy-scripts.md; do
             if [ ! -f "$stage/$needed" ]; then
-              echo "font notice missing: $needed" >&2
+              echo "missing from the archive: $needed" >&2
               exit 1
             fi
           done
@@ -192,10 +266,15 @@ jobs:
           name: RenameIt-linux-x64
           path: dist/RenameIt-linux-x64.tar.gz
 
+      # The draft's body is the newest CHANGELOG section, not the whole file.
+      - name: Release notes
+        shell: bash
+        run: awk '/^## \[/{n++} n==1' CHANGELOG.md > dist/notes.md
+
       - name: Publish
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: dist/RenameIt-linux-x64.tar.gz
-          body_path: CHANGELOG.md
+          body_path: dist/notes.md
           draft: true

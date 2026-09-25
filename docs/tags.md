@@ -148,7 +148,12 @@ These read from MP3, FLAC, Ogg Vorbis, Opus, Speex, MP4/M4A, Musepack and
 WavPack — one set of names across every format. WMA and TTA are not supported
 (D55).
 
-A **folder** answers with the tags of the first music file inside it.
+`<Comment>` is the comment with no description; a file that has only described
+comments gives one of those instead, and iTunes' own data (`iTun…` comments such
+as Sound Check) is never used (D188).
+
+A **folder** answers with the tags of the first music file inside it, by name
+— one of `.mp3 .mp2 .mp1 .ogg .oga .spx .opus .flac .mpc .wv .m4a .m4b .m4p`.
 
 ## Image
 

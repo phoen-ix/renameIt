@@ -18,8 +18,8 @@ identically. Three deviations exist; all three are recorded below and none of
 them can affect a filename. Two wrapper-level fixes were required and are
 implemented.
 
-Method: every row of the appendix table became a test case, with the Help
-sentence quoted in the test. Ground truth for each case was measured against
+Method: every construct in the JScript regular-expression syntax reference
+became a test case, with the documented behaviour described in the test. Ground truth for each case was measured against
 `fancy-regex` 0.19.0 before the assertions were written, so the tests document
 observed behaviour rather than assumed behaviour.
 

@@ -338,9 +338,8 @@ mod tests {
         path
     }
 
-    /// The acceptance criterion stated for the untagger, for all four
-    /// combinations: *"untagger leaves audio stream intact (byte-compare past
-    /// tag blocks)"*.
+    /// M6's acceptance for Remove Tags, for all four combinations: the audio
+    /// stream is left intact, byte for byte, past the tag blocks.
     #[test]
     fn a_block_is_removed_and_the_audio_is_byte_identical() {
         let dir = TempDir::new().unwrap();

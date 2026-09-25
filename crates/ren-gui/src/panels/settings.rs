@@ -1,11 +1,12 @@
 //! The Settings window.
 //!
-//! `docs/DESIGN.md` S9 lists nine pages eventually. Two came first: the Batch
-//! Replace list, and Appearance — which is where the theme control moves to,
+//! Nine pages: Batch Replace, Music Styles, Casing Exceptions, Display, File
+//! System, Startup, Shell Integration, Appearance and Problem Solver
+//! (`docs/DESIGN.md` §S9 as amended; there is no Renaming, Scripting or
+//! Advanced page, P71 and P88). Appearance is where the theme control lives,
 //! so the left panel can be purely the pipeline.
 //!
-//! The shell is deliberately a page list plus a body, so M8 fills it in rather
-//! than rebuilding it.
+//! The window is a page list plus a body; a page is one function.
 
 use ren_core::ops::Replace;
 use ren_core::ops::music_rename::SHIPPED_STYLES;

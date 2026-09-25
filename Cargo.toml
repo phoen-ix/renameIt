@@ -14,9 +14,6 @@ rust-version = "1.97"
 license = "MIT"
 authors = ["phoen-ix"]
 repository = "https://github.com/phoen-ix/renameIt"
-homepage = "https://github.com/phoen-ix/renameIt"
-keywords = ["rename", "batch", "files"]
-categories = ["command-line-utilities", "filesystem"]
 
 # Every version lives here so `cargo-deny` and upgrades have a single source of
 # truth (D2: licences are audited centrally).
@@ -108,9 +105,9 @@ walkdir = "2.5.0"
 #   in the panels reached the tests and nobody else.
 # * `links` — `webbrowser`, which is how a hyperlink opens. Without it the
 #   About window's repository link logs a warning and does nothing.
-# Both trees are MIT/Apache-2.0 (`cargo deny` checks them). CI asserts the
-# `accesskit` feature is still on, since losing it again would pass every
-# test.
+# Both trees are MIT/Apache-2.0 (`cargo deny` checks them). CI asserts both
+# features are still on for both targets, since losing them again would pass
+# every test (D218).
 eframe = { version = "0.36.1", default-features = false, features = [
     "accesskit",
     "default_fonts",
@@ -129,7 +126,8 @@ egui_kittest = "0.36.1"
 # build needs no GTK.
 rfd = "0.17.2"
 # Stamps the Windows .exe with our icon and version metadata
-# (`ren-gui/build.rs`). MIT, no dependencies of its own; audited under D2.
+# (`ren-gui/build.rs`). MIT; it depends on `toml` and `version_check`, both
+# MIT/Apache-2.0. Audited under D2.
 winresource = "0.1.31"
 
 [workspace.dependencies.windows-sys]
@@ -164,6 +162,12 @@ warnings = "deny"
 lto = "thin"
 codegen-units = 1
 strip = true
+# Load-bearing, not a default left lying about (D239). The preview, listing and
+# apply workers and the thumbnail decoders catch panics with `catch_unwind`
+# (P75, D169, D222), so an engine panic becomes a message rather than a dead
+# window with a journal open. `panic = "abort"` would trim the binary and
+# silently turn every one of those into a crash.
+panic = "unwind"
 
 # Spikes and tests are unbearable in a debug build of the dependency tree.
 [profile.dev.package."*"]

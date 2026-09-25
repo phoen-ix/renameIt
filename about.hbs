@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RenameIt — third-party licences</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 60rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.45; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.25rem; margin-top: 2.5rem; }
+  h3 { font-size: 1.05rem; margin: 2rem 0 0.25rem; }
+  ul.used-by { columns: 2 16rem; font-size: 0.9rem; }
+  pre { white-space: pre-wrap; background: #f4f4f4; padding: 0.75rem; font-size: 0.85rem; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #1b1b1b; color: #ddd; }
+    pre { background: #262626; }
+    a { color: #8cb4ff; }
+  }
+</style>
+</head>
+<body>
+<main>
+<h1>Third-party licences</h1>
+<p>RenameIt itself is MIT-licensed; see <code>LICENSE</code>. The programs in
+this archive are built from the open-source crates listed below, each under
+the licence shown, whose text follows. The fonts compiled into the app are
+listed separately in <code>THIRD-PARTY-FONTS.md</code>.</p>
+
+<h2>Overview</h2>
+<ul>
+{{#each overview}}
+  <li><a href="#{{id}}">{{name}}</a> ({{count}})</li>
+{{/each}}
+</ul>
+
+<h2>Licence texts</h2>
+{{#each licenses}}
+<section>
+  <h3 id="{{id}}">{{name}}</h3>
+  <p>Used by:</p>
+  <ul class="used-by">
+  {{#each used_by}}
+    <li><a href="{{#if crate.repository}}{{crate.repository}}{{else}}https://crates.io/crates/{{crate.name}}{{/if}}">{{crate.name}} {{crate.version}}</a></li>
+  {{/each}}
+  </ul>
+  <pre>{{text}}</pre>
+</section>
+{{/each}}
+</main>
+</body>
+</html>
