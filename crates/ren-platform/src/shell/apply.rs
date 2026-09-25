@@ -410,23 +410,35 @@ mod tests {
     /// reachable. `Software\Classes` is not an ordinary key — it is a merged
     /// view of `HKCU` and `HKLM` — and a scratch copy of it is an ordinary key
     /// that would not have noticed.
+    ///
+    /// **Skipped on a machine that has the menu installed.** Putting it back
+    /// afterwards would mean registering this test binary and these fake
+    /// presets in its place, which is a broken menu until the app next starts.
+    /// A machine without it is left without it, even if an assertion fails
+    /// half-way.
     #[test]
     fn the_menu_registers_and_unregisters_under_the_current_user() {
         let _lock = LIVE_KEYS.lock().unwrap_or_else(|e| e.into_inner());
 
-        // Whatever the machine looked like before, put it back.
-        let was = is_registered();
+        if is_registered() {
+            eprintln!(
+                "skipped: the RenameIt menu is installed here, and this test would replace it"
+            );
+            return;
+        }
         let exe = std::env::current_exe().unwrap();
 
-        register(&exe, &presets()).expect("HKCU needs no elevation");
-        assert!(is_registered());
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            register(&exe, &presets()).expect("HKCU needs no elevation");
+            assert!(is_registered());
 
-        unregister().expect("removing our own keys");
-        assert!(!is_registered());
-        unregister().expect("already gone is success");
-
-        if was {
-            register(&exe, &presets()).unwrap();
+            unregister().expect("removing our own keys");
+            assert!(!is_registered());
+            unregister().expect("already gone is success");
+        }));
+        let _ = unregister();
+        if let Err(panic) = outcome {
+            std::panic::resume_unwind(panic);
         }
     }
 }

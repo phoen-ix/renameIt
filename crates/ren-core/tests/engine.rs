@@ -2788,6 +2788,9 @@ impl ren_platform::Platform for WindowsFolding {
     fn rename(&self, from: &Path, to: &Path) -> ren_platform::Result<()> {
         self.0.rename(from, to)
     }
+    fn replace_file(&self, temp: &Path, target: &Path) -> ren_platform::Result<()> {
+        self.0.replace_file(temp, target)
+    }
     fn get_attributes(&self, path: &Path) -> ren_platform::Result<ren_platform::FileAttributes> {
         self.0.get_attributes(path)
     }

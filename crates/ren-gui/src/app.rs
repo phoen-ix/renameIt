@@ -3386,6 +3386,9 @@ mod tests {
             }
             self.inner.rename(from, to)
         }
+        fn replace_file(&self, temp: &Path, target: &Path) -> ren_platform::Result<()> {
+            self.inner.replace_file(temp, target)
+        }
         fn get_attributes(
             &self,
             path: &Path,
@@ -3985,6 +3988,9 @@ mod menu_tests {
         }
         fn rename(&self, from: &Path, to: &Path) -> ren_platform::Result<()> {
             self.inner.rename(from, to)
+        }
+        fn replace_file(&self, temp: &Path, target: &Path) -> ren_platform::Result<()> {
+            self.inner.replace_file(temp, target)
         }
         fn get_attributes(
             &self,

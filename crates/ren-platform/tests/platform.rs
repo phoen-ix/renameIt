@@ -530,3 +530,243 @@ fn a_case_only_rename_succeeds_on_a_case_insensitive_volume() {
         .collect();
     assert_eq!(listed, vec!["SAMPLE.TXT".to_string()]);
 }
+
+// --- No clobber, whatever is in the way (P13) --------------------------------
+
+/// `symlink_metadata`, not `exists`, is what sees a link whose target is gone
+/// — and `std::fs::rename` would replace the link without a word.
+#[cfg(unix)]
+#[test]
+fn rename_refuses_to_overwrite_a_dangling_link() {
+    let (dir, file) = fixture();
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(dir.path().join("gone"), &link).unwrap();
+
+    let err = host().rename(&file, &link).expect_err("must not clobber");
+    assert!(matches!(err, PlatformError::TargetExists { .. }), "{err:?}");
+    assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+    assert_eq!(std::fs::read(&file).unwrap(), b"contents");
+}
+
+/// `rename(2)` replaces an empty directory with a directory.
+#[cfg(unix)]
+#[test]
+fn rename_refuses_to_overwrite_an_empty_folder() {
+    let dir = TempDir::new().unwrap();
+    let from = dir.path().join("from");
+    let to = dir.path().join("to");
+    std::fs::create_dir(&from).unwrap();
+    std::fs::write(from.join("inside.txt"), b"x").unwrap();
+    std::fs::create_dir(&to).unwrap();
+
+    let err = host().rename(&from, &to).expect_err("must not clobber");
+    assert!(matches!(err, PlatformError::TargetExists { .. }), "{err:?}");
+    assert!(from.join("inside.txt").exists());
+    assert!(to.is_dir());
+}
+
+/// Two hard links to one file are the same inode, which the case-only
+/// exemption used to accept — and `rename(2)` between two links of one file
+/// is specified to do nothing and succeed. The run journalled a rename that
+/// never happened.
+#[cfg(unix)]
+#[test]
+fn rename_onto_a_hard_link_of_the_same_file_is_refused() {
+    let (dir, file) = fixture();
+    let other = dir.path().join("other.txt");
+    std::fs::hard_link(&file, &other).unwrap();
+
+    let err = host()
+        .rename(&file, &other)
+        .expect_err("a second name is not a free one");
+    assert!(matches!(err, PlatformError::TargetExists { .. }), "{err:?}");
+    assert!(file.exists() && other.exists());
+}
+
+/// The same, where the two links differ only in case — the shape a
+/// case-only rename has. On a case-sensitive volume they are two names, and
+/// the rename must be refused with both left where they were.
+#[cfg(unix)]
+#[test]
+fn a_hard_link_differing_only_in_case_is_still_a_collision() {
+    let (dir, file) = fixture();
+    let upper = dir.path().join("SAMPLE.TXT");
+    std::fs::hard_link(&file, &upper).unwrap();
+
+    let err = host()
+        .rename(&file, &upper)
+        .expect_err("two names, not one");
+    assert!(matches!(err, PlatformError::TargetExists { .. }), "{err:?}");
+    let mut names: Vec<String> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        ["SAMPLE.TXT", "sample.txt"],
+        "nothing left under a temporary name"
+    );
+}
+
+// --- replace_file -----------------------------------------------------------
+
+#[test]
+fn replace_file_puts_the_new_contents_under_the_old_name() {
+    let (dir, file) = fixture();
+    let temp = dir.path().join(".sample.txt.tmp");
+    std::fs::write(&temp, b"rewritten").unwrap();
+
+    host().replace_file(&temp, &file).expect("replace");
+
+    assert_eq!(std::fs::read(&file).unwrap(), b"rewritten");
+    assert!(!temp.exists(), "the temporary name is gone");
+}
+
+/// It replaces; it never creates. Both platforms agree, because
+/// `ReplaceFileW` cannot do otherwise.
+#[test]
+fn replace_file_refuses_a_target_that_is_not_there() {
+    let dir = TempDir::new().unwrap();
+    let temp = dir.path().join("new.tmp");
+    std::fs::write(&temp, b"new").unwrap();
+
+    host()
+        .replace_file(&temp, &dir.path().join("missing.txt"))
+        .expect_err("nothing to replace");
+    assert_eq!(
+        std::fs::read(&temp).unwrap(),
+        b"new",
+        "and the new file is untouched"
+    );
+    assert!(!dir.path().join("missing.txt").exists());
+}
+
+/// The reason `replace_file` is a platform call at all: on Windows the file
+/// keeps its identity, created date included, through a rewrite.
+#[cfg(windows)]
+#[test]
+fn replace_file_keeps_the_created_date_on_windows() {
+    let (dir, file) = fixture();
+    let platform = host();
+    let created = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+    platform
+        .set_times(
+            &file,
+            TimeChange {
+                created: Some(created),
+                ..Default::default()
+            },
+        )
+        .expect("set created");
+
+    let temp = dir.path().join(".sample.txt.tmp");
+    std::fs::write(&temp, b"rewritten").unwrap();
+    platform.replace_file(&temp, &file).expect("replace");
+
+    assert_eq!(std::fs::read(&file).unwrap(), b"rewritten");
+    let got = platform.get_times(&file).unwrap().created.unwrap();
+    let delta = got
+        .duration_since(created)
+        .or_else(|e| Ok::<_, std::time::SystemTimeError>(e.duration()))
+        .unwrap();
+    assert!(delta < Duration::from_secs(1), "created moved by {delta:?}");
+}
+
+// --- A link is the row, not its target ---------------------------------------
+
+/// A listed symlink shows its own dates, so a date written to the row goes
+/// on the link. Writing through it changed a file no row was about, and the
+/// row then showed the old date anyway.
+#[cfg(unix)]
+#[test]
+fn a_date_set_on_a_link_changes_the_link_and_not_its_target() {
+    let (dir, target) = fixture();
+    let link = dir.path().join("link.txt");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    let before = std::fs::metadata(&target).unwrap().modified().unwrap();
+    let when = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+
+    host()
+        .set_times(
+            &link,
+            TimeChange {
+                modified: Some(when),
+                ..Default::default()
+            },
+        )
+        .expect("set the link's date");
+
+    assert_eq!(
+        std::fs::metadata(&target).unwrap().modified().unwrap(),
+        before
+    );
+    assert_eq!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .modified()
+            .unwrap(),
+        when
+    );
+    assert_eq!(host().get_times(&link).unwrap().modified, Some(when));
+}
+
+/// A dangling link is a real row since 1.4.0, and a date on it is a date on
+/// the link — which exists, so it does not fail.
+#[cfg(unix)]
+#[test]
+fn a_dangling_link_can_have_its_date_set() {
+    let dir = TempDir::new().unwrap();
+    let link = dir.path().join("dangling");
+    std::os::unix::fs::symlink(dir.path().join("gone"), &link).unwrap();
+    let when = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+
+    host()
+        .set_times(
+            &link,
+            TimeChange {
+                accessed: Some(when),
+                modified: Some(when),
+                ..Default::default()
+            },
+        )
+        .expect("the link exists even though its target does not");
+    assert_eq!(host().get_times(&link).unwrap().modified, Some(when));
+}
+
+/// Linux has no `lchmod`, and `chmod` would change the target. So a
+/// read-only request on a link is refused, and the target keeps its mode.
+#[cfg(unix)]
+#[test]
+fn read_only_on_a_link_is_refused_rather_than_applied_to_its_target() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (dir, target) = fixture();
+    std::fs::set_permissions(&target, PermissionsExt::from_mode(0o644)).unwrap();
+    let link = dir.path().join("link.txt");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    assert!(!host().get_attributes(&link).unwrap().read_only);
+    host()
+        .set_attributes(
+            &link,
+            AttributeChange {
+                read_only: Some(true),
+                ..Default::default()
+            },
+        )
+        .expect_err("there is no read-only bit on the link to set");
+    let mode = std::fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o644, "the target was not touched");
+
+    // Asking for what the link already is changes nothing, so it is fine.
+    host()
+        .set_attributes(
+            &link,
+            AttributeChange {
+                read_only: Some(false),
+                ..Default::default()
+            },
+        )
+        .expect("no change is no error");
+}

@@ -86,6 +86,9 @@ fancy-regex = "0.19.0"
 # prefilter exact. MIT OR Apache-2.0.
 regex = "1.13.1"
 filetime = "0.2.29"
+# `renameat2(RENAME_NOREPLACE)` for P13's no-clobber rename on Linux. MIT OR
+# Apache-2.0, and already in the graph under `filetime`.
+libc = "0.2.189"
 infer = "0.22.0"
 rayon = "1.12.0"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -119,6 +122,9 @@ winresource = "0.1.31"
 version = "0.61.2"
 features = [
     "Win32_Foundation",
+    # `MultiByteToWideChar`: a `--list` file in the ANSI code page, which is
+    # what Windows PowerShell's `Set-Content` writes.
+    "Win32_Globalization",
     # CreateFileW takes a *const SECURITY_ATTRIBUTES, which lives here.
     "Win32_Security",
     "Win32_Storage_FileSystem",

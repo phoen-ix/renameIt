@@ -8,12 +8,14 @@
 //! created date on Linux is the motivating case.
 
 use std::collections::HashMap;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
 
 pub mod guarded;
+pub mod list_file;
 pub mod naming;
 pub mod shell;
 pub mod visibility;
@@ -241,11 +243,17 @@ impl TimeChange {
     }
 }
 
+/// What [`Platform::case_sensitivity`] found.
+///
+/// Implemented and deliberately **not called by the planner** (P96): the
+/// probe writes a file into the folder it is asked about, and the preview
+/// reruns on every keystroke. The planner folds case from the static
+/// [`NamingRules::case_insensitive`] instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaseSensitivity {
     Sensitive,
     Insensitive,
-    /// Could not be probed — the planner must assume the pessimistic case.
+    /// Could not be probed: the folder refused the probe's write.
     Unknown,
 }
 
@@ -276,11 +284,44 @@ pub trait Platform: Send + Sync + fmt::Debug {
         wanted.iter().copied().find(|c| !self.supports(*c))
     }
 
-    /// Renames `from` to `to`, **failing** if `to` already exists.
+    /// Renames `from` to `to`, **failing** with [`PlatformError::TargetExists`]
+    /// if `to` already exists.
     ///
     /// `std::fs::rename` silently replaces the destination on every platform,
     /// which for a batch renamer means silent data loss.
+    ///
+    /// Atomic on Windows (`MoveFileExW` without `MOVEFILE_REPLACE_EXISTING`)
+    /// and on Linux (`renameat2` with `RENAME_NOREPLACE`, P13). A Linux
+    /// filesystem that refuses that flag — NFS, SMB, some FUSE — gets
+    /// `link` + `unlink` for a file, which is just as atomic about an existing
+    /// target, and a probe-then-rename only for a folder or where hard links
+    /// are refused too; that last path, and other Unixes, keep a window of
+    /// microseconds in which a file created by another process is replaced.
+    ///
+    /// A case-only rename on a case-insensitive volume — `a.JPG` to `a.jpg`,
+    /// where the two names are one file — is a rename, not a collision, and
+    /// it really happens: on Linux it goes through a temporary name, because
+    /// the kernel treats a rename onto the same file as already done.
     fn rename(&self, from: &Path, to: &Path) -> Result<()>;
+
+    /// Puts the contents of `temp` in place of `target`, which must exist,
+    /// in one step.
+    ///
+    /// For rewriting a file's contents without a moment in which it is half
+    /// written: the new bytes go to a sibling `temp` in the same folder, and
+    /// this swaps it in. A crash leaves either the old file or the new one.
+    ///
+    /// **What survives differs, which is why it is a platform call.** On
+    /// Windows it is `ReplaceFileW`, which keeps what makes `target` the file
+    /// it is — its created date, its ACLs, its alternate data streams, its
+    /// attributes. On Unix it is `rename`: the file at `temp` becomes
+    /// `target` exactly as it is, with `temp`'s permissions, owner and times,
+    /// so a caller copies across whatever it wants kept *before* the swap.
+    ///
+    /// Refuses when `target` does not exist, on every platform, so that the
+    /// two agree: `ReplaceFileW` cannot create a file, and a caller that
+    /// wanted one created has asked for something else.
+    fn replace_file(&self, temp: &Path, target: &Path) -> Result<()>;
 
     fn get_attributes(&self, path: &Path) -> Result<FileAttributes>;
     fn set_attributes(&self, path: &Path, change: AttributeChange) -> Result<()>;
@@ -314,7 +355,13 @@ pub trait Platform: Send + Sync + fmt::Debug {
 
     fn reveal_in_file_manager(&self, path: &Path) -> Result<()>;
 
-    /// Best-effort notification so the OS file manager refreshes. Never fails.
+    /// Best-effort notification that the folder holding `path` changed, so
+    /// the OS file manager refreshes it. Never fails.
+    ///
+    /// The *parent*, whatever `path` is: a renamed file or folder changes the
+    /// listing it appears in. Taken from the path's text rather than by
+    /// asking the disk whether `path` is a folder, because this runs once per
+    /// change.
     fn notify_shell_changed(&self, path: &Path);
 
     /// Whether the file manager's RenameIt menu is installed, in the shape
@@ -425,7 +472,12 @@ pub const PORTABLE_MARKER: &str = "renameit-portable.txt";
 /// Returns the data root to pass to [`use_portable_root`].
 pub fn portable_root() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let dir = exe.parent()?;
+    portable_root_in(exe.parent()?)
+}
+
+/// [`portable_root`] for an executable that lives in `dir`, so the decision
+/// is testable without moving the test binary.
+fn portable_root_in(dir: &Path) -> Option<PathBuf> {
     if !dir.join(PORTABLE_MARKER).exists() {
         return None;
     }
@@ -462,21 +514,93 @@ fn home_dir() -> Option<PathBuf> {
 pub fn command_line_chars() -> Option<usize> {
     #[cfg(windows)]
     {
-        // SAFETY: `GetCommandLineW` returns a pointer to a static, NUL-terminated
-        // buffer owned by the process for its lifetime. It never fails and never
-        // returns null.
-        let ptr = unsafe { windows_sys::Win32::System::Environment::GetCommandLineW() };
-        let mut len = 0usize;
-        // SAFETY: the buffer above is NUL-terminated, so this stops.
-        while unsafe { *ptr.add(len) } != 0 {
-            len += 1;
-        }
-        Some(len)
+        Some(command_line_wide().len())
     }
     #[cfg(not(windows))]
     {
         None
     }
+}
+
+/// The command line exactly as Windows handed it over, before any splitting.
+#[cfg(windows)]
+fn command_line_wide() -> &'static [u16] {
+    // SAFETY: `GetCommandLineW` returns a pointer to a static, NUL-terminated
+    // buffer owned by the process for its lifetime. It never fails and never
+    // returns null.
+    let ptr = unsafe { windows_sys::Win32::System::Environment::GetCommandLineW() };
+    let mut len = 0usize;
+    // SAFETY: the buffer above is NUL-terminated, so this stops.
+    while unsafe { *ptr.add(len) } != 0 {
+        len += 1;
+    }
+    // SAFETY: the `len` units before the terminator were each just read, and
+    // the buffer lives as long as the process.
+    unsafe { std::slice::from_raw_parts(ptr, len) }
+}
+
+/// This process's command line as one unsplit string, where there is such a
+/// thing — Windows. `None` elsewhere, where a process receives its arguments
+/// already split and there is nothing to re-read.
+///
+/// For [`split_verbatim`]; see there for why a caller wants it.
+pub fn raw_command_line() -> Option<OsString> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt;
+        Some(OsString::from_wide(command_line_wide()))
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+/// Splits a command line the way a batch file's author, or the Explorer menu
+/// writing `"%V"`, means it: whitespace separates, `"` toggles quoting, and
+/// **nothing escapes anything**.
+///
+/// `std::env::args_os` follows the C runtime's rule instead, in which a
+/// backslash before a quote escapes it. That rule can never be what a Windows
+/// path means — `"` is not allowed in one — and it breaks the two commonest
+/// quoted paths that end in a backslash: a drive root, `"E:\"`, arrives as
+/// `E:"` with the quote still open, and a batch file's `"%~dp0"` swallows
+/// every switch after it. Split this way, both come out whole.
+///
+/// Pure, so it is tested everywhere; only [`raw_command_line`] is Windows.
+pub fn split_verbatim(line: &OsStr) -> Vec<OsString> {
+    let mut args = Vec::new();
+    let mut current: Vec<u8> = Vec::new();
+    let mut in_quotes = false;
+    // `""` is an empty argument, not no argument.
+    let mut started = false;
+    for &byte in line.as_encoded_bytes() {
+        match byte {
+            b'"' => {
+                in_quotes = !in_quotes;
+                started = true;
+            }
+            b' ' | b'\t' if !in_quotes => {
+                if started {
+                    args.push(std::mem::take(&mut current));
+                    started = false;
+                }
+            }
+            _ => {
+                current.push(byte);
+                started = true;
+            }
+        }
+    }
+    if started {
+        args.push(current);
+    }
+    args.into_iter()
+        // SAFETY: every piece is bytes from `as_encoded_bytes` on this
+        // platform, cut only next to an ASCII byte (a quote or a separator),
+        // which the encoding guarantees is a character boundary.
+        .map(|piece| unsafe { OsString::from_encoded_bytes_unchecked(piece) })
+        .collect()
 }
 
 /// What the shell will pass a static verb, in characters.
@@ -505,8 +629,12 @@ pub fn host() -> Arc<dyn Platform> {
 /// Reads created/accessed/modified through `std::fs`, which every supported
 /// platform can do (reading a birth time works on Linux via `statx`; only
 /// *writing* it is Windows-only — see P5).
+///
+/// **A link's own times, never its target's.** A listing shows a symbolic
+/// link as the link it is and a rename renames the link, so a date read here
+/// describes that same row — and the setters write to the link as well.
 pub(crate) fn read_times(path: &Path) -> Result<FileTimes> {
-    let md = std::fs::metadata(path).map_err(|e| PlatformError::io(path, e))?;
+    let md = std::fs::symlink_metadata(path).map_err(|e| PlatformError::io(path, e))?;
     Ok(FileTimes {
         created: md.created().ok(),
         accessed: md.accessed().ok(),
@@ -602,24 +730,26 @@ mod tests {
 mod portable_tests {
     use super::*;
 
-    /// Two conditions, both required.
-    ///
-    /// `portable_root` reads `current_exe`, which a unit test cannot move — so
-    /// the *decision* is tested here through the same two predicates, and the
-    /// wiring is tested where it is wired (`ren-gui`'s `main`).
+    /// Two conditions, both required — tested through the function
+    /// `portable_root` actually calls, so a change to the rule fails here.
     #[test]
     fn a_marker_in_a_writable_folder_is_what_makes_an_install_portable() {
         let dir = tempfile::TempDir::new().unwrap();
+        assert_eq!(
+            portable_root_in(dir.path()),
+            None,
+            "no marker, not portable"
+        );
 
-        // No marker: not portable, whatever else is true.
-        assert!(!dir.path().join(PORTABLE_MARKER).exists());
-
-        // With one, and the folder writable.
         std::fs::write(dir.path().join(PORTABLE_MARKER), b"").unwrap();
-        assert!(dir.path().join(PORTABLE_MARKER).exists());
-        let probe = dir.path().join(".renameit-write-probe");
-        assert!(std::fs::write(&probe, b"").is_ok(), "and writable");
-        std::fs::remove_file(&probe).unwrap();
+        assert_eq!(
+            portable_root_in(dir.path()),
+            Some(dir.path().join("RenameIt-data"))
+        );
+        assert!(
+            !dir.path().join(".renameit-write-probe").exists(),
+            "the write probe cleans up after itself"
+        );
     }
 
     /// A copy on a read-only share must **not** take the portable path: it
@@ -634,12 +764,17 @@ mod portable_tests {
         std::fs::write(dir.path().join(PORTABLE_MARKER), b"").unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
 
-        let probe = dir.path().join(".renameit-write-probe");
-        let writable = std::fs::write(&probe, b"").is_ok();
+        let verdict = portable_root_in(dir.path());
+        let writable_anyway = std::fs::write(dir.path().join("root-check"), b"").is_ok();
 
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(
-            !writable,
+        if writable_anyway {
+            // Root ignores the mode bits, so there is nothing to observe.
+            eprintln!("skipped: running as root, so the folder is writable anyway");
+            return;
+        }
+        assert_eq!(
+            verdict, None,
             "a read-only folder cannot hold a portable install"
         );
     }
@@ -650,5 +785,56 @@ mod portable_tests {
     fn an_ordinary_process_is_not_portable() {
         assert!(!is_portable());
         assert!(app_data_dir("RenameIt").is_absolute());
+    }
+}
+
+#[cfg(test)]
+mod command_line_tests {
+    use super::*;
+
+    fn split(line: &str) -> Vec<String> {
+        split_verbatim(OsStr::new(line))
+            .into_iter()
+            .map(|arg| arg.into_string().unwrap())
+            .collect()
+    }
+
+    /// The lines the C runtime's rule breaks, whole again.
+    #[test]
+    fn a_quoted_path_ending_in_a_backslash_keeps_it() {
+        assert_eq!(
+            split(r#"renameit.exe --from-shell --start-in "E:\""#),
+            ["renameit.exe", "--from-shell", "--start-in", r"E:\"]
+        );
+        assert_eq!(
+            split(r#"ren-cli.exe /p "C:\Scripts\" /r "my preset""#),
+            ["ren-cli.exe", "/p", r"C:\Scripts\", "/r", "my preset"]
+        );
+        // Explorer's per-item quoting of two drive roots.
+        assert_eq!(
+            split(r#"x --from-shell "E:\" "F:\""#),
+            ["x", "--from-shell", r"E:\", r"F:\"]
+        );
+    }
+
+    #[test]
+    fn whitespace_separates_and_quotes_group() {
+        assert_eq!(
+            split("  a\tb  \"c d\"e \"\"  "),
+            ["a", "b", "c de", ""],
+            "a run of whitespace is one separator, and a bare pair of quotes is \
+             an empty argument"
+        );
+        assert_eq!(
+            split(r#""C:\Program Files\x.exe" y"#),
+            [r"C:\Program Files\x.exe", "y"]
+        );
+    }
+
+    /// Only Windows has an unsplit line to give.
+    #[test]
+    fn there_is_a_raw_command_line_only_on_windows() {
+        assert_eq!(raw_command_line().is_some(), cfg!(windows));
+        assert_eq!(command_line_chars().is_some(), cfg!(windows));
     }
 }

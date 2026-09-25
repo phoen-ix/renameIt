@@ -860,6 +860,13 @@ mod tests {
                 self.cancel.store(true, Ordering::Relaxed);
                 self.inner.rename(from, to)
             }
+            fn replace_file(
+                &self,
+                temp: &std::path::Path,
+                target: &std::path::Path,
+            ) -> ren_platform::Result<()> {
+                self.inner.replace_file(temp, target)
+            }
             fn get_attributes(
                 &self,
                 path: &std::path::Path,

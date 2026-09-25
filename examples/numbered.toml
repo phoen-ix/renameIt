@@ -54,10 +54,9 @@ enabled = false
 
 # --- 3. Shift a numbered series ------------------------------------------------
 #
-# Note that "+1 to all numbers" collides with files that have not
-# been renamed yet, and suggests two passes as a workaround. It is not needed
-# here: the planner orders renames topologically and breaks cycles with a
-# temporary name, so this runs in one pass.
+# Shifting every number by one looks as if it collides with files not yet
+# renamed — 02 wants the name 01 still has. The planner orders renames and
+# breaks cycles with a temporary name, so it runs in one pass.
 
 [[step]]
 op = "renumber"

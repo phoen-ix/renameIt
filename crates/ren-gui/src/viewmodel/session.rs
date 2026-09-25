@@ -518,30 +518,22 @@ impl Session {
 
     /// The first folder this listing would touch that the OS needs left alone.
     ///
-    /// By distinct parent, so the usual case — one folder, ten thousand files —
-    /// is one check. The browse directory is tested too, so an empty
-    /// `C:\Windows` is refused before the user adds an operation and wonders
-    /// why nothing happened.
+    /// `ren_platform::guarded::first_guarded` is the check `ren-cli` makes
+    /// too, so both front ends refuse the same folders: the browse directory
+    /// (an empty `C:\Windows` is refused before the user adds an operation and
+    /// wonders why nothing happened), each distinct parent, and an entry that
+    /// is itself a guarded root.
     fn find_guarded(&self) -> Option<PathBuf> {
         if !self.settings.guard_system_folders {
             return None;
         }
-        let platform = ren_platform::host();
-        if self.settings.mode == SourceMode::Browser
-            && platform.is_system_folder(&self.settings.dir)
-        {
-            return Some(self.settings.dir.clone());
-        }
-        let mut seen: BTreeSet<&Path> = BTreeSet::new();
-        for entry in self.entries.iter() {
-            let Some(parent) = entry.path.parent() else {
-                continue;
-            };
-            if seen.insert(parent) && platform.is_system_folder(parent) {
-                return Some(parent.to_path_buf());
-            }
-        }
-        None
+        let dir =
+            (self.settings.mode == SourceMode::Browser).then_some(self.settings.dir.as_path());
+        ren_platform::guarded::first_guarded(
+            ren_platform::host().as_ref(),
+            dir,
+            self.entries.iter().map(|entry| entry.path.as_path()),
+        )
     }
 
     /// Adds paths dropped from the file manager, switching to Free Select.

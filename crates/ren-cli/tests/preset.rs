@@ -212,9 +212,10 @@ fn a_preset_needs_a_directory_and_a_job_file_refuses_one() {
         "--job",
         job.to_str().unwrap(),
     ]);
-    assert!(!with_dir.status.success());
+    // clap refuses the pair itself now, with its own wording, and exit 1.
+    assert_eq!(with_dir.status.code(), Some(1));
     assert!(
-        stderr(&with_dir).contains("not both"),
+        stderr(&with_dir).contains("cannot be used with"),
         "{}",
         stderr(&with_dir)
     );
@@ -630,6 +631,224 @@ fn every_shipped_example_loads() {
             path.display(),
             stderr(&output)
         );
+    }
+    assert!(seen >= 4, "expected the shipped examples, found {seen}");
+}
+
+// --- --answer has to land, and every <Ask> has to be answered ------------
+
+const ASKING: &str = "[preset]\nname = \"Add prefix\"\n\n[[step]]\nop = \"add_remove\"\nmode = \"add\"\ninsert = \"<Ask> \"\nadd_pos = 0\n";
+
+/// A mistyped slot used to be stored and ignored: `--answer 10=Holiday`
+/// meant for slot 1, the real slot unanswered, and the run renamed nothing
+/// with exit 0. A slot the pipeline does not ask for is refused, naming the
+/// ones it does.
+#[test]
+fn an_answer_for_a_slot_nobody_asks_for_is_refused() {
+    let fixture = Fixture::new(&["one.txt"]);
+    let preset = fixture.write_preset("prefix.toml", ASKING);
+
+    for answer in ["10=Holiday", "1=Holiday"] {
+        let output = fixture.run(&[
+            "apply",
+            fixture.dir.path().to_str().unwrap(),
+            "--preset",
+            preset.to_str().unwrap(),
+            "--answer",
+            answer,
+        ]);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{answer}: {}",
+            stderr(&output)
+        );
+        assert_eq!(fixture.names(), ["one.txt"]);
+    }
+    let output = fixture.run(&[
+        "apply",
+        fixture.dir.path().to_str().unwrap(),
+        "--preset",
+        preset.to_str().unwrap(),
+        "--answer",
+        "1=Holiday",
+    ]);
+    assert!(stderr(&output).contains("<Ask>"), "{}", stderr(&output));
+}
+
+/// Under a scheduler stdin is closed, so a question nobody can answer is a
+/// refusal — not a run that leaves every name alone and exits 0.
+#[test]
+fn an_ask_that_stdin_cannot_answer_stops_the_run() {
+    let fixture = Fixture::new(&["one.txt"]);
+    let preset = fixture.write_preset("prefix.toml", ASKING);
+
+    let output = fixture.run(&[
+        "apply",
+        fixture.dir.path().to_str().unwrap(),
+        "--preset",
+        preset.to_str().unwrap(),
+    ]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(stderr(&output).contains("--answer"), "{}", stderr(&output));
+    assert_eq!(fixture.names(), ["one.txt"]);
+    assert_eq!(fixture.journals(), 0, "nothing ran");
+}
+
+// --- presets export -------------------------------------------------------
+
+/// TO is any path the user typed, and there is no save dialog to ask: a
+/// `notes.txt` typed for `notes.toml` became TOML with no undo.
+#[test]
+fn export_never_replaces_a_file_unless_told_to() {
+    let fixture = Fixture::new(&["a.txt"]);
+    let source = fixture.three_op_preset();
+    let dir = fixture.presets.path().join("store");
+    let imported = fixture.run(&[
+        "presets",
+        "import",
+        source.to_str().unwrap(),
+        "--preset-dir",
+        dir.to_str().unwrap(),
+    ]);
+    assert!(imported.status.success(), "{}", stderr(&imported));
+
+    let notes = fixture.presets.path().join("notes.txt");
+    std::fs::write(&notes, b"my notes").unwrap();
+    let export = |force: bool| {
+        let mut line = vec![
+            "presets",
+            "export",
+            "Photo cleanup",
+            notes.to_str().unwrap(),
+            "--preset-dir",
+            dir.to_str().unwrap(),
+        ];
+        if force {
+            line.push("--force");
+        }
+        fixture.run(&line)
+    };
+
+    let refused = export(false);
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(stderr(&refused).contains("--force"), "{}", stderr(&refused));
+    assert_eq!(std::fs::read(&notes).unwrap(), b"my notes");
+
+    let forced = export(true);
+    assert!(forced.status.success(), "{}", stderr(&forced));
+    assert!(
+        std::fs::read_to_string(&notes)
+            .unwrap()
+            .contains("Photo cleanup")
+    );
+}
+
+// --- What undo says -------------------------------------------------------
+
+/// A folder the run created and something else now lives in is kept, and
+/// undo says so — an empty-looking year folder that survived an undo is
+/// otherwise a mystery.
+#[test]
+fn undo_names_a_folder_it_kept() {
+    let fixture = Fixture::new(&["a.txt"]);
+    let preset = fixture.write_preset(
+        "move.toml",
+        "[[step]]\nop = \"add_remove\"\nscope = \"both\"\nmode = \"add\"\ninsert = \"new<\\\\>\"\nadd_pos = 0\n",
+    );
+    let run = fixture.run(&[
+        "apply",
+        fixture.dir.path().to_str().unwrap(),
+        "--preset",
+        preset.to_str().unwrap(),
+    ]);
+    assert!(run.status.success(), "{}", stderr(&run));
+    let created = fixture.dir.path().join("new");
+    assert!(created.join("a.txt").exists(), "{}", stdout(&run));
+    std::fs::write(created.join("mine.txt"), b"the user's own").unwrap();
+
+    let undone = fixture.run(&["undo"]);
+    assert!(undone.status.success(), "{}", stderr(&undone));
+    let said = stdout(&undone);
+    assert!(said.contains("kept folder"), "{said}");
+    assert!(said.contains("new"), "{said}");
+    assert!(fixture.dir.path().join("a.txt").exists());
+}
+
+// --- The shipped examples do what they say --------------------------------
+
+/// Every example, previewed over a folder of the kinds of file it is for.
+///
+/// Importing them only proved they parse, which is how `camera-import.toml`
+/// shipped turning `IMG_0001.jpg` into `2021-07-04 1jpg` — and a screenshot
+/// into " 2png". So every renamed row that had an extension must still have
+/// one, and a file without an Exif date must be left alone by the camera
+/// example, as it promises.
+#[test]
+fn every_shipped_example_previews_without_losing_an_extension() {
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let mut seen = 0;
+    for entry in std::fs::read_dir(&examples).expect("examples/") {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "toml") {
+            continue;
+        }
+        seen += 1;
+        let fixture = Fixture::new(&[
+            "notes_file.txt",
+            "Metallica - One.txt",
+            "shot.png",
+            "x cant y.txt",
+        ]);
+        std::fs::write(
+            fixture.dir.path().join("IMG_0001.jpg"),
+            ren_core::meta::testing::jpeg_with_exif(Some("2021:07:04 10:11:12"), None, None),
+        )
+        .unwrap();
+
+        let output = fixture.run(&[
+            "preview",
+            fixture.dir.path().to_str().unwrap(),
+            "--preset",
+            path.to_str().unwrap(),
+        ]);
+        let name = path.file_name().unwrap().to_string_lossy();
+        let said = stdout(&output);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{name}: {said}{}",
+            stderr(&output)
+        );
+
+        for line in said.lines() {
+            let Some(row) = line.trim_start().strip_prefix("→") else {
+                continue;
+            };
+            let (from, to) = row.trim().split_once("  ->  ").expect("a rename row");
+            let to = to.split("  [").next().unwrap();
+            if Path::new(from).extension().is_some() {
+                assert!(
+                    Path::new(to).extension().is_some_and(|e| !e.is_empty()),
+                    "{name}: {from} -> {to} lost its extension"
+                );
+            }
+        }
+
+        // Its comment promises the shipped fifty-one Batch Replace rules;
+        // it used to list three of its own, which replace them (D35).
+        if name == "cleanup.toml" {
+            assert!(said.contains("X Can't Y.txt"), "{said}");
+        }
+        if name == "camera-import.toml" {
+            assert!(said.contains("2021-07-04 1.jpg"), "{said}");
+            for untouched in ["shot.png", "notes_file.txt"] {
+                assert!(
+                    !said.contains(&format!("{untouched}  ->")),
+                    "{untouched} has no Exif date and must be left alone: {said}"
+                );
+            }
+        }
     }
     assert!(seen >= 4, "expected the shipped examples, found {seen}");
 }

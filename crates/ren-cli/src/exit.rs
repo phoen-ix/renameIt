@@ -9,9 +9,11 @@
 //!   a blocked plan must not exit zero. A script that pipes `preview` into a
 //!   deploy has to be able to tell "nothing needed renaming" from "the rename
 //!   was refused".
-//! * **D54 / D77** — an undo that could not put everything back still exits
-//!   `SUCCESS`. Tag writes were never undoable and saying so is not a failure;
-//!   an undo that reports "still applied: …" did its whole job.
+//! * **D54 / D77** — an undo whose only shortfall is a tag write it could
+//!   never take back still exits `SUCCESS`: saying so is not a failure, and an
+//!   undo that reports "still applied: …" did its whole job. A *skipped* item,
+//!   or an undo the journal could not record, is a shortfall, and exits
+//!   [`Exit::Failed`].
 //!
 //! Anything added later has to keep both.
 
@@ -22,17 +24,28 @@ use std::process::ExitCode;
 pub enum Exit {
     /// The command did what it was asked.
     Success,
-    /// The command line was wrong, or the filesystem refused something before
-    /// any work started. Also every unexpected error, so that a caller
-    /// checking only for zero is never misled.
+    /// The command line was wrong, or something failed before any work
+    /// started — nothing was changed. Also every unexpected error, so that a
+    /// caller checking only for zero is never misled.
+    ///
+    /// Never used once files have moved: a list file that will not delete
+    /// after a successful run is a warning, and an error part-way through a
+    /// rollback is [`Self::Failed`].
     Usage,
-    /// The plan has conflicts or row errors, so nothing ran (P4).
+    /// Refused before anything was touched.
+    ///
+    /// The plan has conflicts or row errors (P4); or a folder is one the
+    /// operating system needs left alone (D127); or a change cannot be undone
+    /// and `--allow-irreversible` was not given (P2); or the plan names a path
+    /// that is not absolute; or another run is writing the journal an `undo`
+    /// wanted.
     ///
     /// Distinct from [`Self::Failed`] on purpose: nothing was touched. A
-    /// caller can retry after fixing the pipeline, and does not need to
-    /// inspect the filesystem first.
+    /// caller can retry after fixing the cause, and does not need to inspect
+    /// the filesystem first.
     Blocked,
-    /// The run started and some items did not make it.
+    /// The run started and some items did not make it, or an undo or a
+    /// rollback could not put everything back.
     ///
     /// The filesystem is in whatever state the journal describes, so the next
     /// step for a caller is `recover`, not a retry.

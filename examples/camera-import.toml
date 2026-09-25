@@ -17,15 +17,24 @@ version = 1
 name = "Camera import"
 description = "Name photos from their Exif date, then set the file date to match."
 
+[settings]
+# A file that cannot fill in every tag is left alone. Without this a file with
+# no Exif date would still be renamed, to " 1.png" — a missing tag renders as
+# nothing (D87) — so a folder with a few screenshots in it would lose their
+# names.
+require_all_tags = true
+
 [[step]]
 # The photograph's own Exif date — DateTimeOriginal first, so an editor's
-# rewritten DateTime does not win. A file with no Exif date renders nothing
-# there and is left alone (P45), so a folder with a few screenshots in it still
-# runs; the file's own modified date would have renamed those to whenever they
-# were last saved.
+# rewritten DateTime does not win — then a counter, for two shots on one day.
+# The file's own modified date would have renamed a screenshot to whenever it
+# was last saved.
+#
+# Scope "name": the extension is left as it is. The pattern replaces only the
+# part before the last dot, so IMG_0001.jpg becomes "2021-07-04 1.jpg".
 op = "free_format"
-scope = "both"
-pattern = "<ExifDate-yyyy-mm-dd> <Counter><Ext>"
+scope = "name"
+pattern = "<ExifDate-yyyy-mm-dd> <Counter>"
 
 [[step]]
 # The part this pipeline is actually about. The source reads the photograph's own

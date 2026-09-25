@@ -11,11 +11,11 @@
 //!
 //! # Why a cascade, and why these keys
 //!
-//! A preset menu could be built on an in-process COM handler, but the GPL-3.0
-//! options are barred outright by **D2** — and such a handler's config is
-//! seventeen lines in which every item is a plain command line, so there is no
-//! COM *behaviour* to
-//! reproduce, only a command line and a place to hang it.
+//! A preset menu could be built on an in-process COM handler, but every item on
+//! it is a plain command line — run this program, with this preset, on this
+//! selection — so a menu item needs nothing more than a command line and a
+//! place to hang it, and no code of ours has to load inside Explorer. The
+//! ready-made COM handlers are GPL-3.0 besides, which **D2** bars outright.
 //!
 //! `ExtendedSubCommandsKey` is that place. Microsoft: *"you can register any
 //! custom verbs under the `HKEY_CURRENT_USER\Software\Classes` subkey. The main
@@ -377,13 +377,14 @@ impl ShellPlan {
     ///
     /// It has to be **importable**, not merely readable: a snapshot that a
     /// human can read but `regedit` cannot import would prove nothing about
-    /// the values, and a user on a broken install could double-click a saved
-    /// one — nothing offers it to them yet, which is why this doc no longer
-    /// claims it does.
-    /// Every value here contains quotes — `Icon` is `"<exe>",0` and every
-    /// command starts with a quoted path — so unescaped output would have
-    /// looked fine and imported as garbage.
-    pub fn to_reg(&self) -> String {
+    /// the values. Every value here contains quotes — `Icon` is `"<exe>",0`
+    /// and every command starts with a quoted path — so unescaped output would
+    /// have looked fine and imported as garbage.
+    ///
+    /// Test-only until something offers a saved `.reg` to a user, so the
+    /// shipped build carries no API nothing calls.
+    #[cfg(test)]
+    pub(crate) fn to_reg(&self) -> String {
         let mut out = String::from("Windows Registry Editor Version 5.00\n");
         let mut current = String::new();
         for step in &self.steps {
@@ -456,9 +457,10 @@ fn preset_key(index: usize, name: &str) -> String {
 
 /// A preset's display name as a menu label.
 ///
-/// `&` is a **mnemonic** — the shipped verb text is deliberately `"Open with
-/// &RenameIt"`, so the shell really does process it, and a preset called
-/// `Rock & Roll` would otherwise read as "Rock  Roll" with an R accelerator.
+/// `&` is a **mnemonic**: the shell reads the character after it as the
+/// item's keyboard accelerator, so a preset called `Rock & Roll` would
+/// otherwise read as "Rock  Roll" with an R accelerator. `&&` is a literal
+/// ampersand.
 ///
 /// A leading `@` is neutralised because `MUIVerb` accepts `@file,resource` as
 /// a resource reference; a name that began with one would render empty, which
@@ -622,7 +624,7 @@ mod tests {
             .steps
             .iter()
             .position(|s| matches!(s, Step::Set { key, .. } if key.ends_with(r"\shell\RenameIt")))
-            .expect("four of them");
+            .expect("three of them");
         let last_container = plan
             .steps
             .iter()
@@ -813,6 +815,47 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A drive root is the one path Explorer passes that ends in a backslash,
+    /// and quoted, `"E:\"`, the C runtime's rule reads that as an escaped
+    /// quote: the app used to receive `E:"` and open on nothing. Every
+    /// command the menu holds, run on drive roots through the split the app
+    /// uses for a `--from-shell` line, must come back with the roots whole and
+    /// everything before them untouched.
+    #[test]
+    fn a_drive_root_reaches_the_app_whole() {
+        let files = preset_files(&["Tidy up"]);
+        let plan = menu(&files);
+        let mut checked = 0;
+        for (key, _, value) in sets(&plan) {
+            if !key.ends_with(r"\command") {
+                continue;
+            }
+            let Value::Sz(command) = value else { continue };
+            // Two drives selected in This PC; one drive's background.
+            let (line, roots) = if inside(key, BACKGROUND_CONTAINER) {
+                (command.replace("%V", r"E:\"), vec![r"E:\"])
+            } else {
+                (
+                    command.replace("%1", r#""E:\" "F:\""#),
+                    vec![r"E:\", r"F:\"],
+                )
+            };
+            let args: Vec<String> = crate::split_verbatim(std::ffi::OsStr::new(&line))
+                .into_iter()
+                .map(|arg| arg.into_string().unwrap())
+                .collect();
+
+            assert_eq!(args[0], r"C:\Program Files\RenameIt\renameit.exe", "{line}");
+            assert_eq!(args[1], "--from-shell", "{line}");
+            assert_eq!(args[args.len() - roots.len()..], roots, "{line}");
+            if let Some(at) = args.iter().position(|a| a == "--preset") {
+                assert_eq!(args[at + 1], r"C:\presets\Tidy up.toml", "{line}");
+            }
+            checked += 1;
+        }
+        assert!(checked >= 4, "every command in the plan, found {checked}");
     }
 
     /// Windows caps a static verb's command line at 2000 characters, so the

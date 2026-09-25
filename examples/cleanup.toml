@@ -1,4 +1,4 @@
-# RenameIt job file — a worked example of every General operation.
+# RenameIt job file — a worked example of most General operations.
 #
 #   ren-cli preview --job examples/cleanup.toml
 #   ren-cli apply   --job examples/cleanup.toml
@@ -24,8 +24,8 @@ op = "replace"
 find = "_"
 replace = " "
 
-# Regular expressions get $1-$9 in the replacement, exactly as documented
-# documents. This one collapses "01 - " style prefixes to "01. ".
+# Regular expressions get $1-$9 in the replacement. This one collapses
+# "01 - " style prefixes to "01. ".
 [[step]]
 op = "replace"
 regex = true
@@ -33,17 +33,19 @@ find = "^(\\d+) - "
 replace = "$1. "
 
 # --- 2. The shipped batch-replace rules ----------------------------------------
-# Fifty-one rules covering underscores and English contractions. Listed here in
-# short form; the full default list lives in
-# crates/ren-core/data/batch_replace_default.toml.
+# Fifty-one rules covering underscores and English contractions ("dont" and
+# "don t" become "don't"), kept in crates/ren-core/data/batch_replace_default.toml.
+#
+# No `rules` key means the shipped fifty-one. A `rules = [ ... ]` array
+# *replaces* them rather than adding to them (D35), so a step that lists three
+# rules runs exactly those three:
+#
+#   rules = [
+#     { find = "( don)[ `´]?(t) ", replace = "$1'$2 ", regex = true },
+#   ]
 
 [[step]]
 op = "batch_replace"
-rules = [
-  { find = "( don)[ `´]?(t) ", replace = "$1'$2 ", regex = true },
-  { find = "( isn)[ `´]?(t) ", replace = "$1'$2 ", regex = true },
-  { find = "( it)[ `´]?(s) ", replace = "$1'$2 ", regex = true },
-]
 
 # --- 3. Casing ------------------------------------------------------------------
 # Casing the name and the extension differently is simply two steps, which is

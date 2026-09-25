@@ -49,20 +49,29 @@ pub fn visibility(_path: &Path, metadata: &Metadata) -> Visibility {
 /// The same question, answered the way this platform asks it.
 ///
 /// **Hidden is a leading dot**, which is a convention rather than a bit — so it
-/// is read from the *name*, and a `Metadata` cannot answer it. **System does
+/// is read from the *name*, and a `Metadata` cannot answer it. Read as a byte,
+/// so a dotfile whose name is not valid UTF-8 is hidden too. **System does
 /// not exist**, and saying so beats guessing at `/proc` or `/sys`.
-/// **Write-protected** is the owner write permission, which is the closest
-/// thing to the DOS read-only bit and the thing that actually stops a rename.
+/// **Write-protected** means no write bit is set for anyone
+/// (`Permissions::readonly`), the closest thing to the DOS read-only bit. On
+/// Unix it protects the file's *contents*, not its name: whether a file can
+/// be renamed is decided by the folder it is in, never by its own mode.
 #[cfg(not(windows))]
 pub fn visibility(path: &Path, metadata: &Metadata) -> Visibility {
     Visibility {
-        hidden: path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with('.')),
+        hidden: is_dotfile(path),
         system: false,
         read_only: metadata.permissions().readonly(),
     }
+}
+
+/// A leading `.` in the last component, tested on the bytes rather than
+/// through `to_str`, which is `None` for exactly the names a renamer exists
+/// to fix.
+#[cfg(not(windows))]
+pub(crate) fn is_dotfile(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.as_encoded_bytes().first() == Some(&b'.'))
 }
 
 #[cfg(all(test, unix))]
@@ -95,9 +104,29 @@ mod tests {
         assert!(!visibility(&path, &std::fs::metadata(&path).unwrap()).system);
     }
 
+    /// `to_str` is `None` for a name that is not UTF-8, and the dot was
+    /// only looked for through it — so `.caf\xe9` showed with hidden off.
     #[test]
     #[cfg(unix)]
-    fn write_protection_is_the_permission_that_stops_a_rename() {
+    fn a_dotfile_whose_name_is_not_utf8_is_hidden_too() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let dir = TempDir::new().unwrap();
+        let hidden = dir.path().join(std::ffi::OsStr::from_bytes(b".caf\xe9"));
+        let plain = dir.path().join(std::ffi::OsStr::from_bytes(b"caf\xe9"));
+        std::fs::write(&hidden, b"x").unwrap();
+        std::fs::write(&plain, b"x").unwrap();
+
+        assert!(visibility(&hidden, &std::fs::metadata(&hidden).unwrap()).hidden);
+        assert!(!visibility(&plain, &std::fs::metadata(&plain).unwrap()).hidden);
+    }
+
+    /// No write bit for anyone, which is what `Permissions::readonly` reads.
+    /// A file the owner alone cannot write is not write-protected: somebody
+    /// can still write it.
+    #[test]
+    #[cfg(unix)]
+    fn write_protected_means_no_write_bit_for_anyone() {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = TempDir::new().unwrap();
@@ -107,5 +136,8 @@ mod tests {
 
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
         assert!(visibility(&path, &std::fs::metadata(&path).unwrap()).read_only);
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o464)).unwrap();
+        assert!(!visibility(&path, &std::fs::metadata(&path).unwrap()).read_only);
     }
 }

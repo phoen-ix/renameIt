@@ -50,7 +50,17 @@ fn main() -> eframe::Result {
     // A bare argument list is a list of files to load, or a single folder to
     // start in — a file dropped on the executable, or a menu entry from before
     // the flags existed. `parse` never fails; see `launch`.
-    let mut launch = ren_gui::launch::parse(std::env::args_os());
+    //
+    // A line the Explorer menu wrote is split again without the C runtime's
+    // escaping: a drive root arrives quoted as `"E:\"`, which `args_os` reads
+    // as `E:"` with the quote still open (see `ren_platform::split_verbatim`).
+    let mut argv: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if argv.iter().any(|arg| arg == "--from-shell")
+        && let Some(line) = ren_platform::raw_command_line()
+    {
+        argv = ren_platform::split_verbatim(&line);
+    }
+    let mut launch = ren_gui::launch::parse(argv);
 
     // "Copy filenames to clipboard" — before `run_native`, so nothing is drawn
     // at all. See `launch::copy_names` for why the text survives the process.

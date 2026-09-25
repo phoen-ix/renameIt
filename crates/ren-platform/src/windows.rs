@@ -9,13 +9,18 @@ use std::path::Path;
 use std::process::Command;
 use std::time::SystemTime;
 
-use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, ERROR_UNABLE_TO_MOVE_REPLACEMENT, FILETIME, HANDLE, INVALID_HANDLE_VALUE,
+};
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_NORMAL,
-    FILE_ATTRIBUTE_NOT_CONTENT_INDEXED, FILE_ATTRIBUTE_OFFLINE, FILE_ATTRIBUTE_READONLY,
-    FILE_ATTRIBUTE_SYSTEM, FILE_ATTRIBUTE_TEMPORARY, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE,
-    FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES, GetFileAttributesW,
-    INVALID_FILE_ATTRIBUTES, MoveFileExW, OPEN_EXISTING, SetFileAttributesW, SetFileTime,
+    CreateFileW, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_COMPRESSED, FILE_ATTRIBUTE_DEVICE,
+    FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_ENCRYPTED, FILE_ATTRIBUTE_HIDDEN,
+    FILE_ATTRIBUTE_INTEGRITY_STREAM, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_READONLY,
+    FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_SPARSE_FILE,
+    FILE_ATTRIBUTE_SYSTEM, FILE_ATTRIBUTE_VIRTUAL, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    FILE_WRITE_ATTRIBUTES, GetFileAttributesW, INVALID_FILE_ATTRIBUTES, MoveFileExW, OPEN_EXISTING,
+    ReplaceFileW, SetFileAttributesW, SetFileTime,
 };
 use windows_sys::Win32::UI::Shell::{SHCNE_UPDATEDIR, SHCNF_PATHW, SHChangeNotify};
 
@@ -35,13 +40,49 @@ const MANAGED_ATTRIBUTES: u32 = FILE_ATTRIBUTE_READONLY
     | FILE_ATTRIBUTE_SYSTEM
     | FILE_ATTRIBUTE_ARCHIVE;
 
-/// Everything `SetFileAttributesW` is documented to accept: the four we
-/// manage, plus the three a file may carry that we preserve.
-const SETTABLE_ATTRIBUTES: u32 = MANAGED_ATTRIBUTES
+/// What `GetFileAttributesW` reports and `SetFileAttributesW` cannot set:
+/// the kind of file, and how it is stored. `NORMAL` is here too, because it
+/// means "no other bit" and is only ever sent on its own.
+///
+/// **A deny-list, deliberately.** An allow-list of what may travel back has
+/// to name every bit Windows accepts, and the one this used to carry did not
+/// name OneDrive's `PINNED`/`UNPINNED` — so clearing Archive on a folder set
+/// to "Always keep on this device" cleared the pin with it, and the journal's
+/// before-image, which holds the four bits we manage, could not put it back.
+/// A bit Windows adds later is preserved by this list; the kernel ignores the
+/// storage bits below if one slips through, so the failure mode of a gap
+/// here is harmless, where the allow-list's was data loss.
+const NOT_SETTABLE: u32 = FILE_ATTRIBUTE_DIRECTORY
+    | FILE_ATTRIBUTE_DEVICE
     | FILE_ATTRIBUTE_NORMAL
-    | FILE_ATTRIBUTE_TEMPORARY
-    | FILE_ATTRIBUTE_OFFLINE
-    | FILE_ATTRIBUTE_NOT_CONTENT_INDEXED;
+    | FILE_ATTRIBUTE_SPARSE_FILE
+    | FILE_ATTRIBUTE_REPARSE_POINT
+    | FILE_ATTRIBUTE_COMPRESSED
+    | FILE_ATTRIBUTE_ENCRYPTED
+    | FILE_ATTRIBUTE_INTEGRITY_STREAM
+    | FILE_ATTRIBUTE_VIRTUAL
+    | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS;
+
+/// The attribute word to hand `SetFileAttributesW`: every settable bit the
+/// file has now, with the four we manage replaced by `wanted`.
+fn next_attributes(current_raw: u32, wanted: FileAttributes) -> u32 {
+    let mut raw = current_raw & !MANAGED_ATTRIBUTES & !NOT_SETTABLE;
+    if wanted.read_only {
+        raw |= FILE_ATTRIBUTE_READONLY;
+    }
+    if wanted.hidden {
+        raw |= FILE_ATTRIBUTE_HIDDEN;
+    }
+    if wanted.system {
+        raw |= FILE_ATTRIBUTE_SYSTEM;
+    }
+    if wanted.archive {
+        raw |= FILE_ATTRIBUTE_ARCHIVE;
+    }
+    // SetFileAttributesW rejects an empty word; NORMAL means "nothing else"
+    // and is valid only on its own.
+    if raw == 0 { FILE_ATTRIBUTE_NORMAL } else { raw }
+}
 
 #[derive(Debug, Default)]
 pub struct WindowsPlatform {
@@ -188,6 +229,11 @@ fn raw_attributes(path: &Path) -> Result<u32> {
 
 /// Opens a handle with just enough access to call `SetFileTime`.
 /// `FILE_FLAG_BACKUP_SEMANTICS` is what makes directories openable.
+///
+/// `FILE_FLAG_OPEN_REPARSE_POINT` opens a symbolic link or junction itself
+/// rather than what it points at: the listing shows the link's own dates, a
+/// rename renames the link, and `SetFileAttributesW` already acts on it — so
+/// the times go on the link too, not on a file no row is about.
 fn open_for_time_write(path: &Path) -> Result<HANDLE> {
     let wide = wide_verbatim(path);
     // SAFETY: `wide` is NUL-terminated and outlives the call; a null security
@@ -199,7 +245,7 @@ fn open_for_time_write(path: &Path) -> Result<HANDLE> {
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             std::ptr::null(),
             OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
             std::ptr::null_mut(),
         )
     };
@@ -214,8 +260,9 @@ impl Platform for WindowsPlatform {
         PLATFORM
     }
 
-    /// Windows does all eight: `SetFileTime` writes all three stamps and
-    /// `SetFileAttributesW` all four bits. Nothing is missing on Windows.
+    /// Windows does all nine: `SetFileTime` writes all three stamps,
+    /// `SetFileAttributesW` all four bits, and the file manager and its menu
+    /// are there to reveal in and register with.
     fn capabilities(&self) -> &'static [Capability] {
         &Capability::ALL
     }
@@ -260,6 +307,41 @@ impl Platform for WindowsPlatform {
         Ok(())
     }
 
+    fn replace_file(&self, temp: &Path, target: &Path) -> Result<()> {
+        let target_w = wide_verbatim(target);
+        let temp_w = wide_verbatim(temp);
+        // No backup file and no flags: every piece of `target`'s identity is
+        // merged onto `temp` or the call fails with both files as they were.
+        // SAFETY: both buffers are NUL-terminated and outlive the call; the
+        // backup name and the two reserved pointers are documented as null.
+        let ok = unsafe {
+            ReplaceFileW(
+                target_w.as_ptr(),
+                temp_w.as_ptr(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        if ok != 0 {
+            return Ok(());
+        }
+        let err = std::io::Error::last_os_error();
+        // The one failure that leaves neither file where it was: `target` is
+        // gone and the new contents are still at `temp`. Finishing the move
+        // puts a file back under the name, which beats reporting an error
+        // for a file that no longer exists.
+        if err.raw_os_error() == Some(ERROR_UNABLE_TO_MOVE_REPLACEMENT as i32) {
+            // SAFETY: as above.
+            let moved = unsafe { MoveFileExW(temp_w.as_ptr(), target_w.as_ptr(), 0) };
+            if moved != 0 {
+                return Ok(());
+            }
+        }
+        Err(PlatformError::io(target, err))
+    }
+
     fn get_attributes(&self, path: &Path) -> Result<FileAttributes> {
         let attrs = raw_attributes(path)?;
         Ok(FileAttributes {
@@ -281,31 +363,7 @@ impl Platform for WindowsPlatform {
             system: current_raw & FILE_ATTRIBUTE_SYSTEM != 0,
             archive: current_raw & FILE_ATTRIBUTE_ARCHIVE != 0,
         };
-        let wanted = change.apply_to(current);
-
-        // Only what `SetFileAttributesW` can set travels back with the
-        // change. Compressed, encrypted, sparse and reparse bits are
-        // reported by `GetFileAttributesW` and are not settable through this
-        // call — the kernel ignores them in practice, but passing them is
-        // relying on that, and the documented settable set is short.
-        let mut raw = current_raw & !MANAGED_ATTRIBUTES & SETTABLE_ATTRIBUTES;
-        if wanted.read_only {
-            raw |= FILE_ATTRIBUTE_READONLY;
-        }
-        if wanted.hidden {
-            raw |= FILE_ATTRIBUTE_HIDDEN;
-        }
-        if wanted.system {
-            raw |= FILE_ATTRIBUTE_SYSTEM;
-        }
-        if wanted.archive {
-            raw |= FILE_ATTRIBUTE_ARCHIVE;
-        }
-        // SetFileAttributesW rejects an empty attribute word; NORMAL means "no
-        // other attributes" and is only valid on its own.
-        if raw == 0 {
-            raw = FILE_ATTRIBUTE_NORMAL;
-        }
+        let raw = next_attributes(current_raw, change.apply_to(current));
 
         let wide = wide_verbatim(path);
         // SAFETY: `wide` is NUL-terminated and outlives the call.
@@ -359,8 +417,9 @@ impl Platform for WindowsPlatform {
     }
 
     fn case_sensitivity(&self, dir: &Path) -> CaseSensitivity {
-        // Windows 10 1803+ can flag a directory case-sensitive for WSL. Probing
-        // is cheap and correct in both worlds, so we probe rather than assume.
+        // Windows 10 1803+ can flag a directory case-sensitive for WSL, which
+        // only a probe can see. Implemented, and deliberately not called by
+        // the planner (P96): the probe writes a file into `dir`.
         self.case_cache.get(dir)
     }
 
@@ -387,11 +446,9 @@ impl Platform for WindowsPlatform {
     }
 
     fn notify_shell_changed(&self, path: &Path) {
-        let dir = if path.is_dir() {
-            path
-        } else {
-            path.parent().unwrap_or(path)
-        };
+        // The folder the change shows up in, whatever `path` is — no `stat`
+        // to ask, which on a network share was a round trip per renamed file.
+        let dir = path.parent().unwrap_or(path);
         let wide = wide(dir);
         // SAFETY: `wide` is a NUL-terminated UTF-16 path, matching SHCNF_PATHW;
         // dwItem2 is unused for SHCNE_UPDATEDIR.
@@ -417,6 +474,57 @@ mod tests {
             let t = SystemTime::UNIX_EPOCH + Duration::from_secs(offset_secs);
             assert_eq!(from_filetime(to_filetime(t)), t);
         }
+    }
+
+    /// The regression: OneDrive's pin was outside the old allow-list, so any
+    /// attribute change cleared it.
+    #[test]
+    fn a_bit_we_do_not_manage_survives_an_attribute_change() {
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_NOT_CONTENT_INDEXED, FILE_ATTRIBUTE_PINNED,
+        };
+
+        let current = FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_PINNED;
+        let wanted = FileAttributes {
+            hidden: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            next_attributes(current, wanted),
+            FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_PINNED
+        );
+        assert_eq!(
+            next_attributes(
+                FILE_ATTRIBUTE_NOT_CONTENT_INDEXED,
+                FileAttributes::default()
+            ),
+            FILE_ATTRIBUTE_NOT_CONTENT_INDEXED
+        );
+    }
+
+    /// `NORMAL` alone when nothing is left, and never beside another bit.
+    #[test]
+    fn normal_is_sent_only_on_its_own() {
+        assert_eq!(
+            next_attributes(FILE_ATTRIBUTE_NORMAL, FileAttributes::default()),
+            FILE_ATTRIBUTE_NORMAL
+        );
+        let archived = FileAttributes {
+            archive: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            next_attributes(FILE_ATTRIBUTE_NORMAL, archived),
+            FILE_ATTRIBUTE_ARCHIVE
+        );
+        assert_eq!(
+            next_attributes(
+                FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_COMPRESSED,
+                archived
+            ),
+            FILE_ATTRIBUTE_ARCHIVE,
+            "what the kind and storage of a file say is not sent back"
+        );
     }
 
     #[test]

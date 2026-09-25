@@ -16,10 +16,8 @@ name = "Sort an album"
 description = "Name tracks from their tags, into <Artist>/<Album>/ subfolders."
 
 [[step]]
-# The worked example for Setup Parts:
-#
-#   "By using the SubFolder <\> tag you can move your files into subfolders
-#    named after different properties of the file."
+# `<\>` is the SubFolder tag: whatever comes before it becomes a folder, so
+# this files every track under its artist and album.
 #
 # `<\>` is a *deliberate* move, so it is obeyed. A slash that arrives inside a
 # tag value — AC/DC, a title like "Sympathy/Antipathy" — is not, and gets

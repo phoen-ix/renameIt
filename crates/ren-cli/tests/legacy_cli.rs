@@ -111,9 +111,8 @@ pattern = "<FullName>-done"
 
 // --- /l and /k, the two that touch the filesystem ------------------------
 
-/// > *"/l - Allows you to specify a text file containing files and folders
-/// > (full paths, one file or folder per line). The files and folders will be
-/// > loaded into the Free Select mode."*
+/// `/l` names files and folders by full path, one per line, and they are
+/// loaded as Free Select: the run renames those and nothing beside them.
 #[test]
 fn a_list_file_renames_exactly_the_files_it_names() {
     let fixture = Fixture::new(&["a.txt", "b.txt", "untouched.txt"]);
@@ -135,11 +134,9 @@ fn a_list_file_renames_exactly_the_files_it_names() {
     );
 }
 
-/// `/k` deletes the `/l` list file once it has been read.
-///
-/// Ours waits for the run to have succeeded first. That is deliberate: `/k` is
-/// not a rename, so it is not journalled and there is no
-/// undo for it — and a batch that failed is one somebody will want to run
+/// `/k` deletes the `/l` list file — once the run has succeeded, not the
+/// moment it is read. `/k` is not a rename, so it is not journalled and there
+/// is no undo for it, and a batch that failed is one somebody will want to run
 /// again from the same list.
 #[test]
 fn the_list_file_is_deleted_once_the_run_has_happened() {
@@ -259,10 +256,9 @@ fn a_list_file_tolerates_blank_lines_and_comments() {
     assert_eq!(fixture.names(), ["a.txt-done"]);
 }
 
-/// PowerShell's `Out-File` writes a byte-order mark, and a list file is what a
-/// script feeds `/l`. The mark is not whitespace, so `trim` alone left the
-/// first path as `\u{feff}C:\…` — missing, and printed indistinguishably from
-/// the real one.
+/// A UTF-8 byte-order mark — what Windows PowerShell writes with `-Encoding
+/// UTF8` — is not whitespace, so `trim` alone left the first path as
+/// `\u{feff}C:\…`: missing, and printed indistinguishably from the real one.
 #[test]
 fn a_list_file_with_a_byte_order_mark_still_names_its_first_file() {
     let fixture = Fixture::new(&["a.txt", "b.txt"]);
@@ -526,4 +522,188 @@ fn a_translated_line_that_does_not_parse_says_what_it_became() {
     let out = fixture.run_bare(&["/p", fixture.path().to_str().unwrap(), "--no-such-flag"]);
     assert_eq!(code(&out), 1);
     assert!(stderr(&out).contains("did not parse"), "{}", stderr(&out));
+}
+
+// --- /l in the encodings Windows actually writes --------------------------
+
+/// Windows PowerShell 5.1's `Out-File` and `>` write UTF-16LE with a mark,
+/// which `read_to_string` refused outright: "stream did not contain valid
+/// UTF-8", on the commonest way to make the file.
+#[test]
+fn a_utf16_list_file_is_read() {
+    let fixture = Fixture::new(&["a.txt", "b.txt", "untouched.txt"]);
+    let list = fixture.presets.path().join("files.txt");
+    let text = format!(
+        "{}\r\n{}\r\n",
+        fixture.path().join("a.txt").display(),
+        fixture.path().join("b.txt").display()
+    );
+    let mut bytes = vec![0xFF, 0xFE];
+    bytes.extend(text.encode_utf16().flat_map(u16::to_le_bytes));
+    std::fs::write(&list, bytes).unwrap();
+    let preset = fixture.preset("suffix.toml", SUFFIXED);
+
+    let out = fixture.run(&[
+        "apply",
+        "--list",
+        list.to_str().unwrap(),
+        "--preset",
+        preset.to_str().unwrap(),
+    ]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(
+        fixture.names(),
+        ["a.txt-done", "b.txt-done", "untouched.txt"]
+    );
+}
+
+/// A list naming a file whose name is not UTF-8 — Latin-1 bytes, on Unix,
+/// are the name as the kernel stores it.
+#[cfg(unix)]
+#[test]
+fn a_list_file_that_is_not_utf8_names_its_files_byte_for_byte() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let fixture = Fixture::new(&["b.txt"]);
+    let odd = fixture
+        .path()
+        .join(std::ffi::OsStr::from_bytes(b"caf\xe9.txt"));
+    std::fs::write(&odd, b"x").unwrap();
+    let list = fixture.presets.path().join("files.txt");
+    let mut body = odd.as_os_str().as_bytes().to_vec();
+    body.push(b'\n');
+    body.extend_from_slice(fixture.path().join("b.txt").as_os_str().as_bytes());
+    body.push(b'\n');
+    std::fs::write(&list, body).unwrap();
+
+    let out = fixture.run(&["preview", "--list", list.to_str().unwrap()]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(stdout(&out).contains("2 items"), "{}", stdout(&out));
+}
+
+// --- /p reads what the path is -------------------------------------------
+
+/// `/p` naming one file loads that file. Split into folder and name, the
+/// name became a substring filter: `/p /etc/hosts` selected `hosts`,
+/// `hosts.allow` and `hosts.deny`, and `/r` renamed all three.
+#[test]
+fn a_path_naming_a_file_renames_only_that_file() {
+    let fixture = Fixture::new(&["hosts", "hosts.allow", "hosts.deny"]);
+    let preset = fixture.preset("suffix.toml", SUFFIXED);
+    let file = fixture.path().join("hosts");
+
+    let out = fixture.run(&["/p", file.to_str().unwrap(), "/r", preset.to_str().unwrap()]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(fixture.names(), ["hosts-done", "hosts.allow", "hosts.deny"]);
+}
+
+/// A folder that has gone since the batch file was written is a failure that
+/// names it — not "every name in its parent containing its last word".
+#[test]
+fn a_path_to_a_missing_folder_fails_and_renames_nothing() {
+    let fixture = Fixture::new(&["strawberry.jpg", "drawing.png"]);
+    let preset = fixture.preset("suffix.toml", SUFFIXED);
+    let gone = fixture.path().join("raw");
+
+    let out = fixture.run(&["/p", gone.to_str().unwrap(), "/r", preset.to_str().unwrap()]);
+    assert_eq!(code(&out), 1, "{}", stderr(&out));
+    assert!(stderr(&out).contains("raw"), "{}", stderr(&out));
+    assert_eq!(fixture.names(), ["drawing.png", "strawberry.jpg"]);
+}
+
+// --- --job brings its own source ------------------------------------------
+
+/// `--job` used to accept `--list` and ignore it — and `--delete-list` then
+/// deleted a list that was never read. clap refuses the combination now.
+#[test]
+fn a_job_refuses_a_list_and_leaves_it_alone() {
+    let fixture = Fixture::new(&["a.txt"]);
+    let list = fixture.list_file(&["a.txt"]);
+    let job = fixture.preset(
+        "job.toml",
+        &format!(
+            "[source]\ndir = {:?}\n\n[[step]]\nop = \"free_format\"\npattern = \"x\"\n",
+            fixture.path()
+        ),
+    );
+
+    for extra in [
+        &["--list", list.to_str().unwrap(), "--delete-list"][..],
+        &["--file", fixture.path().join("a.txt").to_str().unwrap()],
+        &["--pattern", "*.zzz"],
+        &["--subfolders"],
+    ] {
+        let mut line = vec!["apply", "--job", job.to_str().unwrap()];
+        line.extend_from_slice(extra);
+        let out = fixture.run(&line);
+        assert_eq!(code(&out), 1, "{extra:?}: {}", stderr(&out));
+    }
+    assert!(list.exists(), "a list that was never read is never deleted");
+    assert_eq!(fixture.names(), ["a.txt"]);
+}
+
+// --- Exit codes once work has happened ------------------------------------
+
+/// The renames are committed and journalled by the time `/k` runs, so a list
+/// that will not delete is a warning. Exit 1 told a script nothing had been
+/// touched.
+#[cfg(unix)]
+#[test]
+fn a_list_that_will_not_delete_after_a_run_is_a_warning() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new(&["a.txt"]);
+    let list = fixture.list_file(&["a.txt"]);
+    let preset = fixture.preset("suffix.toml", SUFFIXED);
+    let folder = list.parent().unwrap().to_path_buf();
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let root = std::fs::write(folder.join("probe"), b"").is_ok();
+
+    let out = fixture.run(&[
+        "apply",
+        "--list",
+        list.to_str().unwrap(),
+        "--preset",
+        preset.to_str().unwrap(),
+        "--delete-list",
+    ]);
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if root {
+        eprintln!("skipped: running as root, the folder is writable anyway");
+        return;
+    }
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(stderr(&out).contains("warning"), "{}", stderr(&out));
+    assert_eq!(fixture.names(), ["a.txt-done"]);
+}
+
+/// Exit 3 end to end: the run started, one rename could not happen, and the
+/// line says which.
+#[cfg(unix)]
+#[test]
+fn a_run_that_fails_part_way_exits_three() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new(&["a.txt"]);
+    let locked = fixture.path().join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::write(locked.join("b.txt"), b"x").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let root = std::fs::write(locked.join("probe"), b"").is_ok();
+    let preset = fixture.preset("suffix.toml", SUFFIXED);
+
+    let out = fixture.run(&[
+        "apply",
+        fixture.path().to_str().unwrap(),
+        "--subfolders",
+        "--preset",
+        preset.to_str().unwrap(),
+    ]);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if root {
+        eprintln!("skipped: running as root, the folder is writable anyway");
+        return;
+    }
+    assert_eq!(code(&out), 3, "{}\n{}", stdout(&out), stderr(&out));
+    assert!(stderr(&out).contains("failed:"), "{}", stderr(&out));
 }

@@ -159,9 +159,15 @@ pub static WINDOWS: NamingRules = NamingRules {
     case_insensitive: true,
 };
 
+/// `/` separates components and NUL ends the string, so POSIX forbids exactly
+/// those two. NUL has to be listed even though no filesystem can store it:
+/// a produced name carrying one — from a hand-edited preset's `\u0000`, a
+/// script, or a tag value — would otherwise preview as a clean rename and
+/// then fail at the syscall part-way through the batch, which is the run P4
+/// promises cannot happen.
 pub static POSIX: NamingRules = NamingRules {
     id: "posix",
-    illegal_chars: &['/'],
+    illegal_chars: &['/', '\0'],
     forbid_control_chars: false,
     reserved_stems: &[],
     forbid_trailing_dot: false,
@@ -250,11 +256,16 @@ mod tests {
     }
 
     #[test]
-    fn posix_only_rejects_the_separator_and_empty_names() {
+    fn posix_only_rejects_the_separator_nul_and_empty_names() {
         assert_eq!(POSIX.validate_component(""), Err(NameProblem::Empty));
         assert_eq!(
             POSIX.validate_component("a/b"),
             Err(NameProblem::IllegalChar('/'))
+        );
+        assert_eq!(
+            POSIX.validate_component("a\0b.txt"),
+            Err(NameProblem::IllegalChar('\0')),
+            "the syscall cannot take it, so the preview must not promise it"
         );
         // Perfectly legal on POSIX, catastrophic on Windows.
         assert!(POSIX.validate_component("CON").is_ok());
