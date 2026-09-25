@@ -6,13 +6,13 @@ survives embedding such a host, so **`.frs` files do not run**. The language is 
 page is the translation.
 
 It is a real break, and worth being blunt about: a script you wrote for the
-legacy script has to be rewritten, not converted. The *shape* is unchanged —
-the same lifecycle, the same eleven members, the same Script folder and
-Arguments box — so the rewrite is usually mechanical. All nine shipped examples
+legacy host has to be rewritten, not converted. The *shape* is unchanged —
+the same lifecycle, the same eleven members (and four new ones), the same
+Script folder and Arguments box — so the rewrite is usually mechanical. All nine shipped examples
 were written this way, and they are in your script folder.
 
 Your `.frs` files are not deleted or hidden. They show in the script picker,
-greyed, with their original description, pointing here.
+greyed, with their own description, pointing here.
 
 ---
 
@@ -50,7 +50,7 @@ If your script accumulates anything across files, put it in a map.
 
 ## The file
 
-| | Original `.frs` | Ours `.koto` |
+| | Legacy `.frs` | Ours `.koto` |
 |---|---|---|
 | Line 1 | `language=vbscript` | *(gone — there is one language)* |
 | Line 2 | `description=…` | `# description: …` |
@@ -76,7 +76,7 @@ takes no arguments; give it and the text appears beside the Arguments box.
 
 ## The lifecycle
 
-| Original | Ours |
+| Legacy | Ours |
 |---|---|
 | `Function Init()` | **top-level code** — it runs once, before the first file |
 | `Function Rename()` | `rename = \|\| …` |
@@ -112,15 +112,24 @@ rename = ||
 **Returning a value.** VBScript assigns to the function name; Koto returns the
 last expression. Returning an empty string still skips the file — `''` means
 leave this file alone. A number is accepted and turned
-into a string, so `Length of Filename`'s `rename = || size fr.full_filename`
-still works.
+into a string, so `Length of Filename`'s
+`rename = || fr.full_filename.chars().count()` works as it reads.
+
+**What you return is obeyed like typed text.** A `/` (or `\`) in it moves the
+file into a subfolder, exactly as it would in a Free Format field. That is
+right when the script means it and wrong when the text came out of a file: a
+page titled `HTTP/2` would land in a folder called `HTTP`. The built-in tags
+that read a file's contents turn separators into `-`, and a script that takes
+a name from `fr.contents()`, `fr.args_file()` or `fr.format_tags` should do
+the same — `Get HTML XML Tags` ends with `.replace('/', '-').replace('\\', '-')`.
 
 ---
 
 ## The `fr` object
 
 The script object is `fr`, and the member names are snake_case. Everything else
-is the same value the legacy object carried.
+is the same value the legacy object carried. It is an ordinary map: a script
+can assign to a member, and nothing the engine does reads the change back.
 
 | Legacy member | Ours | Notes |
 |---|---|---|
@@ -128,11 +137,11 @@ is the same value the legacy object carried.
 | `.FullFilename` | `fr.full_filename` | |
 | `.Path` | `fr.path` | still ends with a separator |
 | `.DiskName` | `fr.disk_name` | |
-| `.Args` | `fr.args` | **read-only, genuinely** — see below |
+| `.Args` | `fr.args` | the Arguments box — see below |
 | `.Preview` | `fr.preview` | **always `true`** — see below |
 | `.NumItems` | `fr.num_items` | |
 | `.ItemOrder` | `fr.item_order` | 0-based, zero-padded |
-| `.BrowserPath` | `fr.browser_path` | empty in free select |
+| `.BrowserPath` | `fr.browser_path` | empty in free select, and whenever the files span more than one folder (subfolders listed) |
 | `.FormatTags("<size>")` | `fr.format_tags '<size>'` | the real tag engine |
 | `.GetAllFilenames` | `fr.all_filenames()` | a **List**, not a `*`-joined string |
 
@@ -146,13 +155,17 @@ flag itself. Your `If Not .Preview Then` guards should come out — the code
 inside them will never run. If the guard protected a *file
 write*, see the next section.
 
-**`fr.args` really is read-only.** A legacy script could assign to it
-(`.Args = trim(.Args)`) despite the object being documented as read-only. Trim
-it into a local instead:
+**Keep `fr.args` as it came.** A legacy script could assign to it
+(`.Args = trim(.Args)`), and so can a Koto one — `fr` is a map — but a trimmed
+copy in a local says what it means and cannot surprise a helper that reads
+`fr.args` later:
 
 ```koto
 tag = fr.args.trim()
 ```
+
+`fr.args_file()` reads the path that was in the Arguments box when the run
+started, whatever `fr.args` has been set to since.
 
 **`fr.all_filenames()` returns a List.** The legacy member returned one string
 with `*` between the names, which every caller then had to split. If you want
@@ -205,10 +218,20 @@ done = ||
   }
 ```
 
-The engine turns that into a planned operation, so the write is previewed,
-confirmed, journalled and undoable like everything else — and creating a file
-that was not there can be undone, while **overwriting one cannot**, and asks
-first. `path` must be absolute; build it from `fr.path` or `fr.browser_path`.
+The engine turns that into a planned operation, so the write is in the preview
+and journalled like everything else.
+
+- `path` must be **absolute**, and in **a folder the run lists** — the folder
+  of a file being renamed. Build it from `fr.path` or `fr.browser_path`. A
+  path anywhere else refuses the whole run, with a reason naming the path:
+  `done` may be code somebody else wrote, and a write that could name any
+  folder would hand back what removing `io` took away.
+- It may not be the new name of a file the run renames, a file the run
+  renames away, a folder, or a link. Each of those refuses the run too.
+- The app asks before any run that writes a file, and lists each write.
+  Creating a file that was not there can be undone; **overwriting one
+  cannot**. On the command line a create needs nothing extra and an overwrite
+  needs `--allow-irreversible`.
 
 Anything else `done` returns is a line for the log.
 
@@ -229,21 +252,29 @@ substitutions:
 | VBScript | Koto |
 |---|---|
 | `a & b` | `a + b`, or `'{a}{b}'` |
-| `Len(s)` | `size s` |
-| `Mid(s, i)` / `Mid(s, i, n)` | `s[i-1..]` / `s[i-1..i-1+n]` — **0-based** |
-| `Left(s, n)` / `Right(s, n)` | `s[..n]` / `s[(size s) - n..]` |
+| `Len(s)` | `s.chars().count()` |
+| `Mid(s, i)` / `Mid(s, i, n)` | `s.chars().skip(i - 1).to_string()` / `s.chars().skip(i - 1).take(n).to_string()` |
+| `Left(s, n)` / `Right(s, n)` | `s.chars().take(n).to_string()` / `s.chars().skip(s.chars().count() - n).to_string()` |
 | `InStr(1, h, n)` | `h.find n`, or `fr.find_ci h, n` for a case-insensitive one |
 | `Replace(s, a, b)` | `s.replace a, b` |
 | `LCase` / `UCase` | `.to_lowercase()` / `.to_uppercase()` |
 | `Trim` | `.trim()` |
 | `Split(s, ",")` | `s.split(',').to_tuple()` |
 | `CStr(n)` / `CInt(s)` | `'{n}'` / `s.to_number()` |
-| `Asc(c)` / `Chr(n)` | `c.bytes().next()` / — |
+| `Asc(c)` / `Chr(n)` | — / — |
 | `If … Then … End If` | `if …` + indentation |
 | `For i = 0 To n` | `for i in 0..=n` |
 | `Dim a(10)` | `a = []`, then `a.push x` |
 | `MsgBox "…"` | *(no UI — return an error or a log line)* |
 | `Exit Function` | `return` |
+
+**`size s` and `s[a..b]` count bytes, not characters.** A Koto string is
+UTF-8, so `size 'Björk'` is 6 and `'Ärger'[0..1]` is an error — it would cut
+the `Ä` in half. The VBScript functions count characters, which is what the
+`chars()` forms above do; use `size` and byte slices only on text you know is
+ASCII, or on offsets a search gave you (`fr.find_ci` returns byte offsets for
+exactly that reason). `Asc` has no equivalent at all: `c.bytes().next()` is
+the first UTF-8 byte, not the character's code.
 
 Two that have no direct equivalent:
 
@@ -258,22 +289,40 @@ Two that have no direct equivalent:
 
 ## Limits
 
-A script gets **10 ms per file**. It is wall-clock, because that is the only
-budget Koto offers, and it exists because the preview re-runs on every
-keystroke. A script that overruns fails that one row.
+A script's time is wall-clock, because that is the only budget Koto offers:
 
-The deadline is checked *between* VM instructions, so it cannot interrupt a
-single long call into the runtime. A handful of functions are therefore removed
-rather than policed (D106) — you will get "not found" if you reach for one:
+| Call | Budget | If it runs out |
+|---|---|---|
+| each `rename` | **10 ms** | that one row fails |
+| the top level (init) | **1 s** | the script fails, on every row |
+| `done` | **1 s** | nothing is written; the log says why |
+
+The per-row budget exists because the preview re-runs on every keystroke. The
+top level and `done` run once per session, and are where whole-listing work
+belongs — loading a table into a map, building a playlist — so they get more.
+
+The limit is checked *between* the script's own instructions, so it cannot
+interrupt a single long call into Koto's library. Everything that could make
+one is removed, refused, or bounded instead (D106) — you will get "not found"
+for a removed function, and an error on the row for the rest:
 
 | Removed | Why | Instead |
 |---|---|---|
-| `iterator.repeat`, `iterator.cycle`, `iterator.generate` | infinite, and outside the deadline's reach | build a list with `push`, or iterate a range |
+| `iterator.repeat`, `iterator.cycle`, `iterator.generate` | infinite, and outside the limit's reach | build a list with `push`, or iterate a range |
 | `string.repeat` | `'x'.repeat 1e18` aborts the process | build it in a loop |
 | `list.resize`, `list.resize_with`, `list.fill` | same | `push` |
+| `koto.deep_copy` | a list that contains itself overflows the stack | `koto.copy`, or build the copy you need |
 
-A script may also not nest more than 256 deep — koto's parser overflows its
-stack long before that and takes the process with it.
+| Refused | Why | Instead |
+|---|---|---|
+| a range or iterator of more than a million items handed to a library function (`(0..1e9).count()`, `list.extend 0..1e9`) | the library walks it in one uninterruptible loop | a `for` loop, which the limit does reach |
+| a generator (`yield`), or a map with its own `@next`, `@next_back` or `@iterator` | every item re-enters the script with a fresh limit, so a loop over an endless one never ends | a list |
+| a format spec wider or more precise than 1024 (`'{x:4000000000}'`) | one allocation of that size | pad in a loop |
+| nesting more than 100 deep, or a script over 64 KB | the parser recurses once per level, and running out of stack ends the process — the limits sit far below that | flatter code |
+
+A library call that calls back into your script (`each`, `keep`, `fold`,
+`sort` …) is held to the budget of the call it is part of: once that is spent,
+the next callback is not made, and the row fails as slow like any other.
 
 There is no `import`, and no way to load code at run time. A script is one file.
 

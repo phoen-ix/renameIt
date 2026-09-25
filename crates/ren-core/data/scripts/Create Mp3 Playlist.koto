@@ -1,4 +1,4 @@
-# description: Create an m3u playlist for the selected MP3 files. Name it in the arguments, or it is called Playlist.m3u. It is written to the browsed folder, or beside the first file in free-select mode.
+# description: Create an m3u playlist for the selected MP3 files. Name it in the arguments, or it is called Playlist.m3u. It is written to the browsed folder — or, when the files come from more than one folder (free select, or with subfolders listed), beside the first file.
 # args: the playlist filename, for example Road Trip.m3u
 
 # This is the script the whole write-a-file design exists for.
@@ -64,7 +64,8 @@ done = ||
 
   folder = fr.browser_path
   if folder.is_empty()
-    # Free-select mode: beside the first file, once sorted.
+    # The files span more than one folder (free select, or subfolders), so
+    # there is no one browsed folder: beside the first file, once sorted.
     first = state.entries[0].path
     cut = first.char_indices().to_tuple()
     at = null

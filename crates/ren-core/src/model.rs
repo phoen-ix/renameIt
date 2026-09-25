@@ -39,6 +39,12 @@ pub struct FileEntry {
     #[serde(default)]
     pub name_is_lossy: bool,
     pub is_dir: bool,
+    /// Whether the entry is a symbolic link. The row describes the link
+    /// itself — its `size` is the length of the path it holds, and 0 on
+    /// Windows — while the metadata readers open what it points at, so they
+    /// stamp and size-gate a link by its target (`meta::cache::Stamp`).
+    #[serde(default)]
+    pub is_symlink: bool,
     pub size: u64,
     pub modified: Option<SystemTime>,
     pub created: Option<SystemTime>,
@@ -91,6 +97,7 @@ impl FileEntry {
             file_name,
             name_is_lossy,
             is_dir: metadata.is_dir(),
+            is_symlink: metadata.file_type().is_symlink(),
             size: if metadata.is_dir() { 0 } else { metadata.len() },
             modified: metadata.modified().ok(),
             created: metadata.created().ok(),
@@ -114,6 +121,7 @@ impl FileEntry {
             file_name,
             name_is_lossy,
             is_dir: false,
+            is_symlink: false,
             size: 0,
             modified: None,
             created: None,

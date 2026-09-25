@@ -34,13 +34,17 @@ pub mod names;
 pub mod thumb;
 pub mod write;
 
-/// Fixture builders, compiled into the library rather than hidden behind
-/// `#[cfg(test)]`.
+/// Fixture builders: tagged music files, Exif JPEGs and hostile TIFFs, written
+/// byte by byte.
 ///
-/// M5 made `jpeg_with_exif` test-only, and the consequence was that no
-/// integration test could reach it — so the Exif reader has had unit coverage
-/// and nothing end to end since. A ~200-line byte builder with no dependencies
-/// is cheap to carry, and being able to construct a tagged file is useful to
-/// anything testing against this crate, not only to this crate's own tests.
+/// Behind the `testing` feature rather than `#[cfg(test)]`, because
+/// `#[cfg(test)]` is true only for this crate's own unit tests — the
+/// integration tests, the bench and the two front ends' tests could not reach
+/// them, and the Exif reader once went without an end-to-end test for exactly
+/// that reason. The feature is switched on only by dev-dependencies (this
+/// crate's own, and ren-cli's and ren-gui's), so a shipped build never
+/// compiles the thousand-odd lines of fixture writers here, nor the `image`
+/// encoder call one of them makes.
+#[cfg(any(test, feature = "testing"))]
 #[doc(hidden)]
 pub mod testing;

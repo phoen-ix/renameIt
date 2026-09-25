@@ -48,8 +48,16 @@ const V1_BLOCK_MAX: usize = BEGIN.len() + V1_TEXT_MAX + END_V1.len();
 /// v2's footer: six ASCII digits plus `LYRICS200`.
 const V2_FOOTER: usize = 6 + 9;
 
-/// Enough for the largest block either version allows, an ID3v1 trailer, and
-/// slack.
+/// The largest block v2's six-digit size can describe, footer included.
+const V2_BLOCK_MAX: u64 = 999_999 + V2_FOOTER as u64;
+
+/// What is read from the end of the file first: enough for the largest v1
+/// block, an ID3v1 trailer, and slack.
+///
+/// Not enough for v2, whose size field allows almost a megabyte — and
+/// timestamped lyrics pass 6 KB easily. A v2 footer that points further back
+/// than this is re-read at the size it gives (see `locate`), so the common
+/// case costs 6 KB and the long one costs exactly its own length.
 const TAIL: u64 = V1_BLOCK_MAX as u64 + 1024;
 
 #[derive(Debug, thiserror::Error)]
@@ -158,8 +166,9 @@ fn find_in(tail: &[u8], base: u64, end: u64, floor: u64) -> Result<Option<Block>
             .and_then(|size| region.len().checked_sub(size + V2_FOOTER))
             .filter(|&start| start >= rel_floor && region[start..].starts_with(BEGIN));
 
-        // A six-digit size bounds the block at 999999, but the header search is
-        // the recovery path, so it gets a window that can actually reach one.
+        // The header search is the recovery path for a size that lies, so it
+        // scans everything read — which `locate` has already widened to what
+        // a size that fits the file asked for.
         let start = by_size.or_else(|| search(region.len()));
         return match start {
             Some(start) => Ok(Some(Block {
@@ -210,7 +219,34 @@ fn locate(file: &mut std::fs::File, len: u64) -> Result<Option<Block>, Error> {
         tail.len() as u64 >= ID3V1_LEN && &tail[tail.len() - ID3V1_LEN as usize..][..3] == b"TAG";
     let end = if has_id3v1 { len - ID3V1_LEN } else { len };
 
+    // A v2 block longer than the window: read back exactly as far as its size
+    // says, if the file has room for that above the ID3v2 tag and the format
+    // allows it. A size that fails either test is one `find_in` treats as a
+    // lie, recovering from the header search or reporting the damage.
+    if let Some(size) = v2_size(&tail, base, end) {
+        let reach = size + V2_FOOTER as u64;
+        if reach > end - base && reach <= V2_BLOCK_MAX && reach <= end.saturating_sub(floor) {
+            let base = end - reach;
+            let mut wider = vec![0u8; usize::try_from(len - base).unwrap_or(0)];
+            file.seek(SeekFrom::Start(base))?;
+            file.read_exact(&mut wider)?;
+            return find_in(&wider, base, end, floor);
+        }
+    }
+
     find_in(&tail, base, end, floor)
+}
+
+/// The size a v2 footer ending at `end` states, if one is there and says a
+/// number.
+fn v2_size(tail: &[u8], base: u64, end: u64) -> Option<u64> {
+    let rel_end = usize::try_from(end.checked_sub(base)?).ok()?;
+    let region = tail.get(..rel_end)?;
+    if region.len() < V2_FOOTER || !region.ends_with(END_V2) {
+        return None;
+    }
+    let digits = &region[region.len() - V2_FOOTER..region.len() - END_V2.len()];
+    std::str::from_utf8(digits).ok()?.parse().ok()
 }
 
 /// The block in `path`, if there is one.
@@ -222,8 +258,9 @@ pub fn find(path: &Path) -> Result<Option<Block>, Error> {
 
 /// Removes it, if there is one. `Ok(false)` means there was nothing to remove.
 ///
-/// *"Remove these tags, **if present**"* — a file without one is left alone and
-/// is not an error, which is also what P45 says about every other reader here.
+/// Only a block that is present is removed: a file without one is left alone
+/// and is not an error, which is also what P45 says about every other reader
+/// here.
 /// A file that carries a *damaged* one is a reported error rather than a silent
 /// no-op: it is visibly tagged, and saying nothing happened would be false.
 ///
@@ -334,6 +371,37 @@ mod tests {
                 assert!(!remove(&path).unwrap(), "{label}: removed something twice");
                 assert_eq!(std::fs::read(&path).unwrap(), after);
             }
+        }
+    }
+
+    /// v2 has a six-digit size, so a block can run to 999 999 bytes — far past
+    /// the tail window that bounds v1. Timestamped lyrics reach 20 KB without
+    /// trying, and such a block used to be reported as damaged and left in
+    /// place.
+    #[test]
+    fn a_v2_block_larger_than_the_tail_window_is_found_and_removed() {
+        let dir = TempDir::new().unwrap();
+        let block = v2_block(&"[00:01.00]la la la\n".repeat(1000));
+        assert!(
+            block.len() as u64 > TAIL,
+            "the block must outgrow the window"
+        );
+        for with_id3v1 in [false, true] {
+            let (file, audio) = build(&block, with_id3v1);
+            let path = write(&dir, &format!("long{with_id3v1}.mp3"), &file);
+
+            let found = find(&path).unwrap().expect("a block");
+            assert_eq!(found.version, Version::V2);
+            assert_eq!(found.size(), block.len() as u64);
+
+            assert!(remove(&path).unwrap(), "{with_id3v1}: nothing removed");
+            let after = std::fs::read(&path).unwrap();
+            assert_eq!(&after[..audio.len()], &audio[..], "the audio changed");
+            assert_eq!(
+                after.len(),
+                audio.len() + if with_id3v1 { ID3V1_LEN as usize } else { 0 },
+                "{with_id3v1}: wrong number of bytes left"
+            );
         }
     }
 

@@ -211,27 +211,6 @@ fn every_field_round_trips_on_every_format() {
     }
 }
 
-/// Only MPEG audio has an MPEG version. D58 says a value lofty could not
-/// determine is *absent* rather than a confident default, and until there was a
-/// non-MP3 fixture the rule could only be asserted from the inside.
-#[test]
-fn only_mpeg_audio_reports_an_mpeg_version() {
-    for format in CORPUS {
-        let dir = TempDir::new().unwrap();
-        let path = (format.build)(dir.path(), "A", "B", "C");
-        let tags = read(&path);
-        if format.name == "mp3" {
-            assert!(tags.properties.mpeg.is_some(), "an MP3 has one");
-        } else {
-            assert_eq!(
-                tags.properties.mpeg, None,
-                "{} is not MPEG audio and must not claim to be",
-                format.name
-            );
-        }
-    }
-}
-
 // --- The hazards step 5 found and only documented ---------------------------
 //
 // All three are stopped by the *pair* of guards in `remove_tags` — a
@@ -340,4 +319,55 @@ fn a_tag_write_never_reaches_the_audio() {
         "the audio region is not what it was"
     );
     assert_eq!(read(&path).artist.as_deref(), Some("NewArtist"));
+}
+
+/// Whether `needle` occurs anywhere in `path`'s bytes.
+fn contains(path: &Path, needle: &[u8]) -> bool {
+    std::fs::read(path)
+        .unwrap()
+        .windows(needle.len())
+        .any(|w| w == needle)
+}
+
+/// D67's guarantee, for what the generic `Tag` has **no name for**.
+///
+/// lofty turns a Vorbis comment or APE tag into a generic `Tag` by splitting
+/// it, and throws away the half its `ItemKey` table cannot map: a rip's
+/// `CUESHEET`, a user's own key, an APE cover stored as a binary item. Saving
+/// the generic tag back then rebuilds the whole block from what is left. So
+/// the write has to keep that remainder itself; checked here with a byte scan,
+/// because reading back through the same generic API cannot see a field it
+/// never had a name for.
+#[test]
+fn a_one_field_write_keeps_the_fields_lofty_has_no_name_for() {
+    let dir = TempDir::new().unwrap();
+    let artist = [FieldWrite {
+        field: MusicField::Artist,
+        value: "NewArtist".into(),
+    }];
+
+    let cover = b"\xFF\xD8\xFF\xE0 not really a jpeg";
+    let flac = Flac::tagged("OldArtist", "OldTitle")
+        .field("CUESHEET", "FILE rip.wav WAVE")
+        .field("MY_OWN_KEY", "kept")
+        .cover(cover)
+        .write(dir.path(), "rip.flac");
+    write_fields(&flac, &artist).unwrap();
+    assert!(contains(&flac, b"CUESHEET=FILE rip.wav WAVE"), "CUESHEET");
+    assert!(contains(&flac, b"MY_OWN_KEY=kept"), "a user's own key");
+    assert!(contains(&flac, cover), "the FLAC's picture block");
+    assert_eq!(read(&flac).artist.as_deref(), Some("NewArtist"));
+    assert_eq!(read(&flac).title.as_deref(), Some("OldTitle"));
+
+    let cover = b"front.jpg\0\xFF\xD8\xFF\xE0 not really a jpeg";
+    let wv = WavPack::tagged("OldArtist", "OldTitle")
+        .binary("Cover Art (Front)", cover)
+        .field("MY_OWN_KEY", "kept")
+        .write(dir.path(), "track.wv");
+    write_fields(&wv, &artist).unwrap();
+    assert!(contains(&wv, b"Cover Art (Front)"), "the cover's key");
+    assert!(contains(&wv, cover), "the cover itself");
+    assert!(contains(&wv, b"MY_OWN_KEY"), "a user's own key");
+    assert_eq!(read(&wv).artist.as_deref(), Some("NewArtist"));
+    assert_eq!(read(&wv).title.as_deref(), Some("OldTitle"));
 }

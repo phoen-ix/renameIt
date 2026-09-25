@@ -1,12 +1,10 @@
 //! Reading the date a photograph was taken.
 //!
-//! Set Date & Time's worked example is the whole justification:
-//!
-//! > *"after editing your digital camera pictures with your image editor, the
-//! > modified date of the files has been changed […] Set the source to Exif."*
-//!
-//! So the point is the shutter time, not the last edit — which is what fixes
-//! the order the three candidate tags are tried in.
+//! The case this exists for: photographs edited in an image editor carry the
+//! date of the edit as their modified date, and Set Date with the Exif source
+//! is how they get the date they were taken back. So the point is the shutter
+//! time, not the last edit — which is what fixes the order the three
+//! candidate tags are tried in.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -34,7 +32,7 @@ use chrono::{NaiveDate, NaiveDateTime};
 ///
 /// `DateTimeOriginal` first because it is the shutter time and nothing rewrites
 /// it. `DateTime` (IFD0) last because that is precisely the one an image editor
-/// overwrites — the value the worked example is recovering *from*.
+/// overwrites — the value Set Date is recovering *from*.
 const DATE_TAGS: [exif::Tag; 3] = [
     exif::Tag::DateTimeOriginal,
     exif::Tag::DateTimeDigitized,
@@ -67,11 +65,12 @@ pub fn date_of_entry(entry: &crate::model::FileEntry) -> Option<NaiveDateTime> {
 }
 
 fn date_at(path: &Path, stamp: Stamp) -> Option<NaiveDateTime> {
-    // A directory has no meaningful size — Linux reports its block size,
-    // Windows reports **0** — so the gate that skips a file too small to be
-    // an image must not reject a folder. It did, and `<ExifDate>` on a folder
-    // quietly answered nothing on the platform that ships first.
-    if !stamp.is_dir && stamp.len < MIN_IMAGE_BYTES {
+    // A folder has no Exif of its own: the only way it gets a date is the
+    // peek, which is `folder_date_at`. Answered before the cache, because the
+    // peek caches under the same path — and where the two stamps agree, a
+    // cached refusal here answered the peek, or the peek's date answered Set
+    // Date with the peek switched off.
+    if stamp.is_dir || stamp.len < MIN_IMAGE_BYTES {
         return None;
     }
     dates().get_or_read(path, stamp, || read_uncached(path))
@@ -98,8 +97,8 @@ fn folder_date_at(dir: &Path, stamp: Stamp) -> Option<NaiveDateTime> {
 
 /// The same peek, for any Exif **field**.
 ///
-/// *"This also works on folders"* is written about the date, but nothing in it
-/// is specific to the date — and a folder answering `<ExifDate>` while
+/// The folder peek was first written for the date, but nothing in it is
+/// specific to the date — and a folder answering `<ExifDate>` while
 /// `<Exif-Model>` came back empty is an inconsistency the user has no way to
 /// explain. Same rule as [`folder_date`]: first by name among the direct
 /// children, and the first that actually *yields the field*, so an image with
@@ -136,6 +135,8 @@ fn candidates_in(dir: &Path, stamp: Stamp) -> Arc<[PathBuf]> {
                 .into_iter()
                 .flatten()
                 .filter_map(Result::ok)
+                // A subfolder named `2019.jpg` is not a photograph.
+                .filter(|e| e.file_type().is_ok_and(|t| !t.is_dir()))
                 .map(|e| e.path())
                 .filter(|p| super::folder::has_extension(p, &IMAGE_EXTENSIONS))
                 .collect();
@@ -202,9 +203,7 @@ fn fields_at(path: &Path, stamp: Stamp) -> Option<Arc<BTreeMap<String, String>>>
 
 fn read_fields(path: &Path) -> Option<BTreeMap<String, String>> {
     PARSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let file = std::fs::File::open(path).ok()?;
-    let mut reader = std::io::BufReader::new(file);
-    let exif = exif::Reader::new().read_from_container(&mut reader).ok()?;
+    let exif = open_exif(path)?;
 
     Some(
         exif.fields()
@@ -277,9 +276,7 @@ fn trim_decimal(value: f64) -> String {
 }
 
 fn read_uncached(path: &Path) -> Option<NaiveDateTime> {
-    let file = std::fs::File::open(path).ok()?;
-    let mut reader = std::io::BufReader::new(file);
-    let exif = exif::Reader::new().read_from_container(&mut reader).ok()?;
+    let exif = open_exif(path)?;
 
     // Always the primary IFD: the thumbnail carries its own dates, and they are
     // not the photograph's.
@@ -290,6 +287,59 @@ fn read_uncached(path: &Path) -> Option<NaiveDateTime> {
             _ => None,
         }
     })
+}
+
+/// How much of a TIFF-based file is read for its Exif first.
+///
+/// Camera RAWs — CR2, NEF, ARW, DNG — are TIFFs, and their metadata sits at
+/// the front, ahead of tens of megabytes of sensor data.
+const TIFF_PREFIX: u64 = 1024 * 1024;
+
+/// The largest TIFF-based file read whole when its metadata is not inside
+/// [`TIFF_PREFIX`]. A TIFF may put its directory after the image — scanning
+/// software often does — and such a file below this size still answers.
+/// Above it the answer is "no Exif": a gigabyte scan read whole, eight at a
+/// time from the parallel pass, is not a price a filename preview can pay.
+const MAX_WHOLE_TIFF: u64 = 64 * 1024 * 1024;
+
+fn open_exif(path: &Path) -> Option<exif::Exif> {
+    let file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    exif_from(&mut std::io::BufReader::new(file), len)
+}
+
+/// The Exif in a file `len` bytes long.
+///
+/// kamadak-exif's `read_from_container` walks a JPEG, PNG, HEIF or WebP to
+/// its Exif block, but reads anything with TIFF magic **whole** before
+/// parsing it. So a TIFF-based file is handled here: the first MiB is parsed
+/// on its own, which is where a camera writes, and only a file whose metadata
+/// is not in there is read further — whole, if it is small enough.
+fn exif_from<R: std::io::BufRead + std::io::Seek>(reader: &mut R, len: u64) -> Option<exif::Exif> {
+    use std::io::{Read, SeekFrom};
+
+    let magic = reader.fill_buf().ok()?;
+    if !(magic.starts_with(b"II*\0") || magic.starts_with(b"MM\0*")) {
+        return exif::Reader::new().read_from_container(reader).ok();
+    }
+
+    let mut head = Vec::new();
+    reader
+        .by_ref()
+        .take(TIFF_PREFIX)
+        .read_to_end(&mut head)
+        .ok()?;
+    let whole = (head.len() as u64) < TIFF_PREFIX;
+    if let Ok(exif) = exif::Reader::new().read_raw(head) {
+        return Some(exif);
+    }
+    if whole || len > MAX_WHOLE_TIFF {
+        return None;
+    }
+    reader.seek(SeekFrom::Start(0)).ok()?;
+    let mut all = Vec::new();
+    reader.take(MAX_WHOLE_TIFF).read_to_end(&mut all).ok()?;
+    exif::Reader::new().read_raw(all).ok()
 }
 
 /// `"YYYY:MM:DD HH:MM:SS"`, via the crate's own parser.
@@ -344,6 +394,7 @@ fn fields() -> &'static MetaCache<Option<Fields>> {
 /// while nothing was watching it.
 static PARSES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+#[cfg(any(test, feature = "testing"))]
 #[doc(hidden)]
 pub fn parses_so_far() -> usize {
     PARSES.load(std::sync::atomic::Ordering::Relaxed)
@@ -389,7 +440,7 @@ mod tests {
         assert_eq!(date_of(&path), Some(at(2008, 2, 17, 11, 23, 50)));
     }
 
-    /// The order is the worked example: an image editor rewrites
+    /// The order is the edited-photo case: an image editor rewrites
     /// `DateTime`, so the shutter time has to win.
     #[test]
     fn the_original_date_wins_over_the_one_an_editor_rewrote() {
@@ -446,14 +497,14 @@ mod tests {
         assert_eq!(date_of(Path::new("/nowhere/at/all.jpg")), None);
     }
 
-    /// *"On folders, it finds the first image inside the folder and uses its
-    /// Exif date"* — first by name, so two runs agree.
+    /// A folder takes the date of the first image inside it — first by name,
+    /// so two runs agree.
     ///
-    /// This test and the one below it are the two that catch the size gate in
-    /// `cached` being applied to a directory. They cannot discriminate on
-    /// Linux, where a directory reports its block size and sails past the gate;
-    /// on Windows it reports 0 and every folder was rejected. CI's Windows
-    /// runner is the check.
+    /// This test and the one below it are the two that catch a file's size
+    /// gate being applied to the folder itself, which once rejected every
+    /// folder on Windows, where a directory's length is 0. A folder's stamp
+    /// now records 0 on every platform (`Stamp::stat`), so they catch it here
+    /// too.
     #[test]
     fn a_folder_takes_the_date_of_the_first_image_inside_it() {
         let dir = TempDir::new().unwrap();
@@ -496,8 +547,8 @@ mod tests {
 
     /// A folder answers `<Exif-*>` the same way it answers `<ExifDate>`.
     ///
-    /// "This also works on folders" is written about the date, but
-    /// nothing in the rule is specific to the date — and a folder that answered
+    /// The folder peek was first written for the date, but nothing in the
+    /// rule is specific to the date — and a folder that answered
     /// `<ExifDate>` while `<Exif-DateTimeOriginal>` came back empty is an
     /// inconsistency the user has no way to explain.
     #[test]
@@ -545,6 +596,106 @@ mod tests {
         assert_eq!(
             folder_field(&inner, "DateTimeOriginal").as_deref(),
             Some("2008:02:17 11:23:50")
+        );
+    }
+
+    /// Set Date's folder peek, switched off and on for one folder.
+    ///
+    /// Peek off asks for the folder's own date, which it does not have; peek
+    /// on asks for the first image inside. Both are asked about the same path,
+    /// and where the two stamps agree — Windows reports a folder's length as
+    /// 0, as the listing does — a shared cache entry answered the second
+    /// question with the first one's answer.
+    #[test]
+    fn a_folder_has_no_date_of_its_own_whichever_question_came_first() {
+        let dir = TempDir::new().unwrap();
+        let inner = dir.path().join("holiday");
+        std::fs::create_dir(&inner).unwrap();
+        std::fs::write(
+            inner.join("a.jpg"),
+            jpeg_with_exif(Some("2008:02:17 11:23:50"), None, None),
+        )
+        .unwrap();
+        let entry = crate::model::FileEntry::from_path(&inner).unwrap();
+        let peeked = Some(at(2008, 2, 17, 11, 23, 50));
+
+        for peek_first in [true, false] {
+            forget_all();
+            if peek_first {
+                assert_eq!(date_of_entry(&entry), peeked);
+                assert_eq!(date_of(&inner), None, "the peek's answer leaked");
+            } else {
+                assert_eq!(date_of(&inner), None);
+                assert_eq!(date_of_entry(&entry), peeked, "the refusal leaked");
+            }
+        }
+    }
+
+    /// A reader over `head` followed by zeros up to `len`, counting the bytes
+    /// it hands out — a camera RAW without the disk space.
+    struct Padded {
+        head: Vec<u8>,
+        len: u64,
+        at: u64,
+        served: std::rc::Rc<std::cell::Cell<u64>>,
+    }
+
+    impl std::io::Read for Padded {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let left = self.len.saturating_sub(self.at);
+            let n = (buf.len() as u64).min(left) as usize;
+            for (i, byte) in buf[..n].iter_mut().enumerate() {
+                let at = self.at as usize + i;
+                *byte = self.head.get(at).copied().unwrap_or(0);
+            }
+            self.at += n as u64;
+            self.served.set(self.served.get() + n as u64);
+            Ok(n)
+        }
+    }
+
+    impl std::io::Seek for Padded {
+        fn seek(&mut self, to: std::io::SeekFrom) -> std::io::Result<u64> {
+            self.at = match to {
+                std::io::SeekFrom::Start(at) => at,
+                std::io::SeekFrom::End(back) => self.len.saturating_add_signed(back),
+                std::io::SeekFrom::Current(by) => self.at.saturating_add_signed(by),
+            };
+            Ok(self.at)
+        }
+    }
+
+    /// The TIFF block inside the fixture's APP1 segment: a TIFF-magic file
+    /// carrying Exif, the shape of every CR2, NEF, ARW and DNG.
+    fn tiff_with_date(date: &str) -> Vec<u8> {
+        let jpeg = jpeg_with_exif(Some(date), None, None);
+        let at = jpeg.windows(6).position(|w| w == b"Exif\0\0").unwrap() + 6;
+        jpeg[at..jpeg.len() - 2].to_vec()
+    }
+
+    /// A camera RAW is a TIFF, and kamadak-exif reads any TIFF-magic file
+    /// whole before looking at it: the shipped Exif-date preset over a card of
+    /// 45 MB raws read every byte of every one, eight at a time. The metadata
+    /// sits at the front, so the front is what is read.
+    #[test]
+    fn a_large_tiff_is_read_for_its_exif_without_reading_it_whole() {
+        let served = std::rc::Rc::new(std::cell::Cell::new(0));
+        let len = 200 * 1024 * 1024;
+        let raw = Padded {
+            head: tiff_with_date("2008:02:17 11:23:50"),
+            len,
+            at: 0,
+            served: served.clone(),
+        };
+        let exif = exif_from(&mut std::io::BufReader::new(raw), len).expect("its Exif");
+        assert!(
+            exif.get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY)
+                .is_some()
+        );
+        assert!(
+            served.get() <= 2 * 1024 * 1024,
+            "read {} bytes of a {len}-byte file",
+            served.get()
         );
     }
 

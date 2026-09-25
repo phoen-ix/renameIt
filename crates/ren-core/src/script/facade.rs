@@ -1,7 +1,13 @@
 //! `fr` — the object a script talks to, and the session it lives inside.
 //!
-//! `fr` is a read-only object with eleven members, in Koto's idiom:
-//! `fr.filename`, `fr.args`, `fr.seed` and the rest.
+//! `fr` is a map of fifteen members, in Koto's idiom: `fr.filename`,
+//! `fr.args`, `fr.seed` and the rest — the eleven a legacy script had, and
+//! four that replace what it did through unrestricted COM
+//! (`docs/MIGRATION-legacy-scripts.md`). It is an ordinary map, so a script
+//! *can* assign to a member; the engine never reads one back. What each
+//! member means is decided here and refreshed before every row, and the two
+//! that read files take no path from it (`args_file` reads the path captured
+//! when the session started, whatever `fr.args` says later).
 //!
 //! # A native function cannot borrow the row
 //!
@@ -28,7 +34,7 @@
 //! evaluation pass to run serially (D94), "in list order" is a guarantee a
 //! script may rely on rather than an accident of scheduling.
 
-use super::engine::{Compiled, ScriptError, hardened};
+use super::engine::{Compiled, SCRIPT_SETUP_DEADLINE, ScriptError, hardened, within};
 use crate::model::FileEntry;
 use crate::ops::{EvalCx, FileWrite, RunOutcome};
 use crate::run::RunContext;
@@ -98,11 +104,21 @@ fn parent_with_separator(entry: &FileEntry) -> String {
 }
 
 /// A running script.
+///
+/// **Two engines, one script.** koto fixes an engine's time limit when it is
+/// built, and the top level and `done` need a longer one than a row: they
+/// run once per session and are where whole-listing work belongs (see
+/// [`SCRIPT_SETUP_DEADLINE`]). So the top level runs on `setup`, built with
+/// that budget, and `done` runs there too; `rename` runs on `rows`, built
+/// with the per-row one. The two share the script's exports map — a map is
+/// shared by reference — and `fr`, so to the script they are one session.
 pub struct Session {
-    koto: Koto,
+    setup: Koto,
+    rows: Koto,
     fr: KMap,
     shared: Arc<Shared>,
     deadline: Duration,
+    setup_deadline: Duration,
     total: usize,
 }
 
@@ -118,9 +134,11 @@ impl Session {
     /// Start a session: build `fr`, run the script's top level, and check that
     /// it defines the one function that is not optional.
     ///
-    /// *"The path that is currently loaded in the file browser"* comes from the
-    /// run context rather than from a parameter: it is a property of the
-    /// listing, and nothing at the call site knows it that the run does not.
+    /// `deadline` is each row's budget; the top level and `done` get
+    /// [`SCRIPT_SETUP_DEADLINE`], or `deadline` if that is longer.
+    /// `fr.browser_path` comes from the run context rather than from a
+    /// parameter: it is a property of the listing, and nothing at the call site
+    /// knows it that the run does not.
     pub fn start(
         compiled: &Compiled,
         args: &str,
@@ -135,28 +153,35 @@ impl Session {
             row: RwLock::new(Row::default()),
         });
 
-        let mut koto = hardened(deadline);
+        let setup_deadline = SCRIPT_SETUP_DEADLINE.max(deadline);
+        let mut setup = hardened(setup_deadline);
         let fr = build_facade(&shared, args, entries.len());
-        koto.prelude().insert("fr", fr.clone());
+        setup.prelude().insert("fr", fr.clone());
 
         // Running the top level *is* init: `init` and top-level code are the
         // same event in Koto, where in VBScript they were two.
-        koto.run(compiled.chunk().clone())
-            .map_err(|e| ScriptError::from_run(&e, deadline))?;
+        within(setup_deadline, || setup.run(compiled.chunk().clone()))
+            .map_err(|e| ScriptError::from_run(&e, setup_deadline))?;
 
         // A missing `rename` is an error rather than a silent no-op. Leaving
         // it undefined-and-skip would be defensible where the function name is
         // a VBScript declaration the engine looks up — here a typo would make
         // every row silently unchanged with nothing to see.
-        if koto.exports().get("rename").is_none() {
+        if setup.exports().get("rename").is_none() {
             return Err(ScriptError::MissingFunction("rename".into()));
         }
 
+        let mut rows = hardened(deadline);
+        rows.prelude().insert("fr", fr.clone());
+        *rows.exports_mut() = setup.exports().clone();
+
         Ok(Self {
-            koto,
+            setup,
+            rows,
             fr,
             shared,
             deadline,
+            setup_deadline,
             total: entries.len(),
         })
     }
@@ -167,10 +192,11 @@ impl Session {
     /// string.
     pub fn rename(&mut self, index: usize, current: &str) -> Result<Option<String>, ScriptError> {
         self.point_at(index, current);
-        let value = self
-            .koto
-            .call_exported_function("rename", CallArgs::Separate(&[]))
-            .map_err(|e| ScriptError::from_run(&e, self.deadline))?;
+        let rows = &mut self.rows;
+        let value = within(self.deadline, || {
+            rows.call_exported_function("rename", CallArgs::Separate(&[]))
+        })
+        .map_err(|e| ScriptError::from_run(&e, self.deadline))?;
         self.coerce_name(value)
     }
 
@@ -188,21 +214,21 @@ impl Session {
     /// structurally incapable of writing, rather than leaving each script to
     /// remember to check a preview flag for itself.
     pub fn finish(&mut self) -> RunOutcome {
-        if self.koto.exports().get("done").is_none() {
+        if self.setup.exports().get("done").is_none() {
             return RunOutcome::default();
         }
         // A script that fails in `done` is a warning and the batch carries
         // on: the renames themselves already succeeded.
-        let value = match self
-            .koto
-            .call_exported_function("done", CallArgs::Separate(&[]))
-        {
+        let setup = &mut self.setup;
+        let value = match within(self.setup_deadline, || {
+            setup.call_exported_function("done", CallArgs::Separate(&[]))
+        }) {
             Ok(value) => value,
             Err(error) => {
                 return RunOutcome {
                     notes: vec![format!(
                         "script: done() failed: {}",
-                        ScriptError::from_run(&error, self.deadline)
+                        ScriptError::from_run(&error, self.setup_deadline)
                     )],
                     ..Default::default()
                 };
@@ -244,7 +270,7 @@ impl Session {
         if matches!(value, KValue::Null) {
             return RunOutcome::default();
         }
-        match self.koto.value_to_string(value) {
+        match self.setup.value_to_string(value) {
             Ok(text) if !text.is_empty() => RunOutcome {
                 notes: vec![text],
                 ..Default::default()
@@ -283,7 +309,7 @@ impl Session {
             KValue::Number(n) => Some(n.to_string()),
             other => {
                 let text = self
-                    .koto
+                    .rows
                     .value_to_string(other)
                     .map_err(|e| ScriptError::from_run(&e, self.deadline))?;
                 (!text.is_empty()).then_some(text)
@@ -294,8 +320,8 @@ impl Session {
 
 /// Build the `fr` object.
 ///
-/// The nine members that do not change per row are inserted once;
-/// [`Session::point_at`] refreshes the four that do.
+/// The ten members that do not change per row are inserted once;
+/// [`Session::point_at`] refreshes the five that do.
 fn build_facade(shared: &Arc<Shared>, args: &str, total: usize) -> KMap {
     let fr = KMap::default();
 
@@ -426,9 +452,13 @@ fn contents_of(shared: &Arc<Shared>) -> KValue {
 /// Lossy rather than refusing. A file that is not UTF-8 should still yield its
 /// ASCII content — plenty of text on disk is CP1252 or similar, so this is not
 /// a hypothetical.
+///
+/// Regular files only. A FIFO or a device reports a length of 0, which passes
+/// the cap, and reading one blocks until something writes to it — a preview
+/// that never finishes. `template::content` refuses them for the same reason.
 fn read_capped(path: &std::path::Path) -> String {
     match std::fs::metadata(path) {
-        Ok(meta) if meta.len() <= MAX_CONTENTS => std::fs::read(path)
+        Ok(meta) if meta.is_file() && meta.len() <= MAX_CONTENTS => std::fs::read(path)
             .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
             .unwrap_or_default(),
         _ => String::new(),
@@ -549,7 +579,7 @@ mod tests {
         );
     }
 
-    /// *"Return an empty string to skip renaming the file."*
+    /// An empty string back from `rename` leaves the file alone.
     #[test]
     fn an_empty_return_skips_the_file() {
         assert_eq!(run("rename = || ''", "", &["a", "b"]), [None, None]);
@@ -721,6 +751,52 @@ mod tests {
         let mut session =
             Session::start(&compiled, "", &entries, &run_cx, Duration::from_secs(5)).unwrap();
         assert_eq!(session.finish().notes, ["all finished"]);
+    }
+
+    /// The top level and `done` run once per session rather than once per
+    /// row, and get a budget to match: loading a table at the top or building
+    /// a playlist in `done` is whole-listing work, and a row's 10 ms made it
+    /// fail on a slow machine and pass on a fast one.
+    #[test]
+    fn the_top_level_and_done_get_more_time_than_a_row() {
+        let entries = entries(&["a"]);
+        let run_cx = RunContext::build(&entries, &RunSettings::default(), Answers::default());
+        let compiled = compile(
+            "table = {}\n\
+             for i in 0..100000\n  table.insert i, i\n\
+             rename = || '{size table}'\n\
+             done = ||\n  n = 0\n  for i in 0..100000\n    n += 1\n  'counted {n}'",
+        )
+        .unwrap();
+        let deadline = Duration::from_millis(10);
+        let mut session = Session::start(&compiled, "", &entries, &run_cx, deadline)
+            .expect("the top level was held to a row's budget");
+        assert_eq!(session.rename(0, "a").unwrap(), Some("100000".into()));
+        assert_eq!(session.finish().notes, ["counted 100000"]);
+    }
+
+    /// `fr.contents()` and `fr.args_file()` read a regular file or nothing.
+    /// A named pipe reports a length of 0, which passes the size cap, and
+    /// reading one blocks until a writer appears — a preview that never ends.
+    #[cfg(unix)]
+    #[test]
+    fn a_named_pipe_reads_as_empty_rather_than_blocking() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pipe");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("mkfifo runs");
+        assert!(made.success(), "mkfifo failed");
+
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = done.send(read_capped(&fifo));
+        });
+        let text = finished
+            .recv_timeout(Duration::from_secs(10))
+            .expect("reading a named pipe hung");
+        assert_eq!(text, "");
     }
 
     /// The deadline is per call, so one slow row does not poison the next.

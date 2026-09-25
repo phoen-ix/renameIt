@@ -5,11 +5,14 @@
 # is why every row's "new name" is a number. Returning a number rather than a
 # string is fine: the engine stringifies it (D98).
 #
-# `fr.args = '1'` is an exact string comparison, so ' 1' and 'true' do not
+# Characters are counted, not bytes: `size` of a string is its UTF-8 length,
+# which would make 'Björk.mp3' 10 long.
+#
+# `fr.args == '1'` is an exact string comparison, so ' 1' and 'true' do not
 # work.
 
 rename = ||
   if fr.args == '1'
-    size fr.path + fr.full_filename
+    (fr.path + fr.full_filename).chars().count()
   else
-    size fr.full_filename
+    fr.full_filename.chars().count()

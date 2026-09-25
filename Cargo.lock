@@ -2843,6 +2843,7 @@ dependencies = [
  "proptest",
  "rayon",
  "regex",
+ "ren-core",
  "ren-platform",
  "rust_decimal",
  "serde",

@@ -42,11 +42,17 @@ fn syncsafe(value: u32) -> [u8; 4] {
 /// null-terminated short description before its text — and neither is `USLT`.
 /// Getting that wrong produces a frame a parser skips, which looks exactly like
 /// a tag that was never written.
+///
+/// The description is empty unless the id says otherwise: `COMM:iTunNORM` is
+/// a `COMM` frame described `iTunNORM`, which is how iTunes stores its
+/// machine-written values beside the comment a player shows.
 fn text_frame(id: &str, value: &str) -> Vec<u8> {
+    let (id, description) = id.split_once(':').unwrap_or((id, ""));
     let mut body = vec![0x03]; // UTF-8
     if matches!(id, "COMM" | "USLT") {
         body.extend_from_slice(b"eng");
-        body.push(0x00); // empty short description
+        body.extend_from_slice(description.as_bytes());
+        body.push(0x00); // the short description ends here
     }
     body.extend_from_slice(value.as_bytes());
     let mut out = Vec::from(id.as_bytes());

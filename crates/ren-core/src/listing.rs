@@ -92,6 +92,26 @@ impl ListOptions {
             && (self.read_only || !seen.read_only)
     }
 
+    /// Whether the walk goes into this folder at all.
+    ///
+    /// A hidden or system folder that is not shown is not walked either: its
+    /// contents are hidden with it. The files inside are not hidden
+    /// themselves — `.git/HEAD` has no dot of its own, and Windows does not
+    /// inherit the attribute — so dropping only the folder's row listed
+    /// everything behind it. Read-only does not prune: a read-only folder's
+    /// children are not read-only. A folder whose metadata cannot be read is
+    /// walked, for the reason [`Self::shows`] shows such an entry.
+    fn enters(&self, entry: &walkdir::DirEntry) -> bool {
+        if (self.hidden && self.system) || !entry.file_type().is_dir() {
+            return true;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            return true;
+        };
+        let seen = ren_platform::visibility(entry.path(), &metadata);
+        (self.hidden || !seen.hidden) && (self.system || !seen.system)
+    }
+
     /// Interprets what the user typed in the pattern box. Empty, `*` and `*.*`
     /// all mean "everything", so they compile to no filter at all.
     pub fn with_pattern(mut self, text: &str) -> Self {
@@ -172,7 +192,10 @@ pub fn list_reporting_with(
 
     let mut entries = Vec::new();
     let mut problems = Vec::new();
-    for entry in walker {
+    for entry in walker
+        .into_iter()
+        .filter_entry(|entry| options.enters(entry))
+    {
         if stop() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Interrupted,
@@ -344,6 +367,42 @@ mod tests {
                 }
             ),
             ["plain.txt"]
+        );
+    }
+
+    /// A hidden folder's contents are hidden with it. The files inside are
+    /// not hidden themselves — `.git/HEAD` has no dot of its own — so a walk
+    /// that only dropped the folder's own row still listed, and renamed,
+    /// every file in the repository behind it.
+    #[cfg(unix)]
+    #[test]
+    fn with_hidden_off_a_hidden_folder_is_not_walked() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".git/refs")).unwrap();
+        std::fs::write(dir.path().join(".git/HEAD"), b"x").unwrap();
+        std::fs::write(dir.path().join(".git/refs/main"), b"x").unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/main.rs"), b"x").unwrap();
+
+        let deep = ListOptions {
+            folders: true,
+            subfolders: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            names_of(dir.path(), deep.clone()),
+            [".git", "HEAD", "refs", "main", "src", "main.rs"],
+            "shown by default (D126)"
+        );
+        assert_eq!(
+            names_of(
+                dir.path(),
+                ListOptions {
+                    hidden: false,
+                    ..deep
+                }
+            ),
+            ["src", "main.rs"]
         );
     }
 

@@ -9,7 +9,12 @@
 #    a defect rather than a feature;
 #  * '</ tag>' with a space is accepted as a closing tag;
 #  * the result is cut to 64 characters BEFORE newlines are stripped, so a
-#    value with newlines in its first 64 characters comes back shorter.
+#    value with newlines in its first 64 characters comes back shorter;
+#  * a '/' or '\' in the value becomes '-', as it does for <HtmlTitle>. What
+#    a script returns is obeyed like typed text, and a separator in a name is
+#    a move into a subfolder — right for a user who typed one, wrong for a
+#    page whose title is "HTTP/2". Any script that takes a name from a file's
+#    contents should do the same.
 #
 # Reading happens through fr.contents(), which can only ever read the file
 # being renamed — it takes no path — and applies a ~5 MB limit.
@@ -50,4 +55,6 @@ rename = ||
     .replace('\r', '')
     .replace('\n', '')
     .replace('\t', ' ')
+    .replace('/', '-')
+    .replace('\\', '-')
     .trim()

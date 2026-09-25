@@ -1,9 +1,8 @@
 //! Decoding a picture small enough to draw in a list.
 //!
 //! The sibling of [`super::image`] and deliberately not part of it: that module
-//! promises *"header-only, like every other reader here"*, and this one decodes
-//! every pixel. Keeping them apart keeps that promise true, and keeps the one
-//! expensive thing in `meta` obvious.
+//! reads headers only, and this one decodes every pixel. Keeping them apart
+//! keeps that true, and keeps the one expensive thing in `meta` obvious.
 //!
 //! It lives in `ren-core` rather than beside the widget that draws it for one
 //! reason: `image` is already a dependency here, and the GUI never needs to
@@ -29,10 +28,12 @@ use image::{DynamicImage, ImageDecoder, ImageReader, Limits};
 /// so it costs a header read and refuses before anything is allocated.
 const MAX_SOURCE_EDGE: u32 = 30_000;
 
-/// The most one decode may allocate.
+/// The most one decode may allocate: the decoded picture, plus — for a JPEG —
+/// the file itself, which `image`'s JPEG decoder holds in memory whole.
 ///
 /// With at most four decode threads the worst-case transient is 1 GiB, on a
-/// machine with enough cores to have four of them.
+/// machine with enough cores to have four of them. Nothing else full-size is
+/// allocated: the orientation is applied after the picture is scaled down.
 const MAX_ALLOC: u64 = 256 * 1024 * 1024;
 
 /// Below this there is no header to read — **P50**, the same gate and the same
@@ -111,17 +112,18 @@ pub fn thumbnail(path: &Path, max_edge: u32) -> Result<Thumbnail, NoThumbnail> {
     if !is_image(path) {
         return Err(NoThumbnail::NotAPicture);
     }
-    match std::fs::metadata(path) {
-        Ok(stamp) if stamp.is_file() && stamp.len() >= MIN_IMAGE_BYTES => {}
+    let len = match std::fs::metadata(path) {
+        Ok(stamp) if stamp.is_file() && stamp.len() >= MIN_IMAGE_BYTES => stamp.len(),
         Ok(_) => return Err(NoThumbnail::NotAPicture),
         Err(_) => return Err(NoThumbnail::Unreadable),
-    }
+    };
 
     // `image` aims not to panic on malformed input and does not guarantee it,
     // and this runs on a worker whose death would not look like a crash — it
     // would look like every later `settle()` stalling for its full deadline
     // (P75). A caught panic is just another file without a picture.
-    let decoded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode(path, max_edge)));
+    let decoded =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode(path, len, max_edge)));
 
     match decoded {
         Ok(result) => {
@@ -150,7 +152,7 @@ fn too_large_or_unreadable(error: image::ImageError) -> NoThumbnail {
     }
 }
 
-fn decode(path: &Path, max_edge: u32) -> Result<Thumbnail, NoThumbnail> {
+fn decode(path: &Path, len: u64, max_edge: u32) -> Result<Thumbnail, NoThumbnail> {
     // `Limits` is `#[non_exhaustive]`, so it is built by assignment rather
     // than by literal — which also means a future field arrives at its own
     // default rather than silently unset.
@@ -166,6 +168,16 @@ fn decode(path: &Path, max_edge: u32) -> Result<Thumbnail, NoThumbnail> {
         // file that reads perfectly.
         .with_guessed_format()
         .map_err(|_| NoThumbnail::Unreadable)?;
+
+    // **Before any of them: a JPEG's own bytes.** `image`'s JPEG decoder reads
+    // its whole input into memory inside `into_decoder`, before a limit below
+    // can act — for a file only *named* `.jpg` too, since the extension
+    // decides when the magic says nothing. So the file's length is charged to
+    // the same budget as the pixels, and a JPEG bigger than the budget is
+    // refused from its length alone.
+    if reader.format() == Some(image::ImageFormat::Jpeg) {
+        limits.reserve(len).map_err(|_| NoThumbnail::TooLarge)?;
+    }
 
     // Three gates follow, and only the middle one is load-bearing. Saying
     // which is which matters, because the obvious reading of this API is that
@@ -214,10 +226,7 @@ fn decode(path: &Path, max_edge: u32) -> Result<Thumbnail, NoThumbnail> {
         .orientation()
         .unwrap_or(image::metadata::Orientation::NoTransforms);
 
-    let mut image = DynamicImage::from_decoder(decoder).map_err(|_| NoThumbnail::Unreadable)?;
-    // Not a nicety: without it every photograph taken on a phone is sideways,
-    // which is the first thing anybody notices (P77).
-    image.apply_orientation(orientation);
+    let image = DynamicImage::from_decoder(decoder).map_err(|_| NoThumbnail::Unreadable)?;
 
     let (width, height) = fit((image.width(), image.height()), max_edge);
     if width == 0 || height == 0 {
@@ -226,7 +235,14 @@ fn decode(path: &Path, max_edge: u32) -> Result<Thumbnail, NoThumbnail> {
     // `thumbnail` is the fast integer box filter — the right trade for a
     // downscale of this ratio, where a Lanczos pass would cost far more and
     // show nothing at 128 pixels.
-    let scaled = image.thumbnail(width, height);
+    let mut scaled = image.thumbnail(width, height);
+    drop(image);
+    // Not a nicety: without it every photograph taken on a phone is sideways,
+    // which is the first thing anybody notices (P77). Applied to the small
+    // picture, not the decoded one: a quarter turn copies the whole image, and
+    // at full size that copy doubled the decode's peak memory. The box is
+    // square, so turning after scaling gives the same dimensions.
+    scaled.apply_orientation(orientation);
     let rgba = scaled.to_rgba8();
 
     Ok(Thumbnail {
@@ -251,6 +267,7 @@ pub fn is_image(path: &Path) -> bool {
 /// cache's hit rate is observable *only* through this counter, because nothing
 /// caches pixels on this side. A stopwatch cannot tell a warm cache from a busy
 /// machine, and here it cannot tell one from a small folder either.
+#[cfg(any(test, feature = "testing"))]
 #[doc(hidden)]
 pub fn decodes_so_far() -> usize {
     DECODES.load(Ordering::Relaxed)
@@ -261,6 +278,7 @@ pub fn decodes_so_far() -> usize {
 /// Counted apart from failures deliberately: a guard that refuses silently is
 /// indistinguishable from a corrupt file, and the only other test for it is one
 /// whose failure mode is the machine swapping.
+#[cfg(any(test, feature = "testing"))]
 #[doc(hidden)]
 pub fn refusals_so_far() -> usize {
     REFUSALS.load(Ordering::Relaxed)
@@ -495,6 +513,32 @@ mod tests {
             thumb.height > thumb.width,
             "a quarter turn swaps them: {thumb:?}"
         );
+    }
+
+    /// `image`'s JPEG decoder holds the whole file in memory before the
+    /// limits above are even set, so a JPEG's own length is charged against
+    /// the same budget as the pixels. A 300 MB "photograph" — or a video named
+    /// `.jpg` — is refused from its length, not read.
+    #[test]
+    fn a_jpeg_larger_than_the_decode_budget_is_refused_unread() {
+        let _counting = counting();
+        let dir = TempDir::new().unwrap();
+        let path = write(
+            &dir,
+            "huge.jpg",
+            &super::super::testing::image::jpeg_rotated(40, 20, 1),
+        );
+        // Sparse: the length is real and the disk is not spent.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(MAX_ALLOC + 1)
+            .unwrap();
+
+        let refusals = refusals_so_far();
+        assert_eq!(thumbnail(&path, 64), Err(NoThumbnail::TooLarge));
+        assert_eq!(refusals_so_far(), refusals + 1);
     }
 
     /// A refusal and a corruption are different answers, and the counters only

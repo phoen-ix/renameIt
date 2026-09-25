@@ -30,6 +30,7 @@ rfd.workspace = true
 serde = { workspace = true }
 
 [dev-dependencies]
+ren-core = { workspace = true, features = ["testing"] }
 egui_kittest.workspace = true
 # Only the Spike B examples parallelise anything here; the app's own
 # parallelism is the engine's (D134 keeps the thumbnail decoders off rayon).

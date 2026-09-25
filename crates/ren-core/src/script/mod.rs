@@ -4,7 +4,8 @@
 //! which is impractical to support cross-platform. Koto replaces it.
 //!
 //! So we keep the **shape** — the `init`/`rename`/`done` lifecycle, the eleven
-//! façade members, the description header, the Script folder — and change the
+//! façade members (plus four new ones, fifteen in all), the description
+//! header, the Script folder — and change the
 //! language to [Koto](https://koto.dev) (D92, which reverses D5's "Rhai only":
 //! rhai depends unconditionally on `smartstring`, which is MPL-2.0+ and outside
 //! D2's allowlist).

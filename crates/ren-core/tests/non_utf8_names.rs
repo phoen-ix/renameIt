@@ -14,10 +14,15 @@
 //!
 //! Nothing here could be reached by the property suite: its generator builds
 //! names as Rust `String`s, so an invalid name is unreachable by construction.
-#![cfg(unix)]
+//!
+//! Every test runs on both platforms, each with its own kind of odd name: a
+//! Latin-1 byte on Unix, an unpaired surrogate on Windows. The two take
+//! different branches of the journal's lossless path encoding, and Windows —
+//! the platform that ships first — is the one whose branch no other test
+//! reaches.
+#![cfg(any(unix, windows))]
 
-use std::ffi::OsStr;
-use std::os::unix::ffi::OsStrExt as _;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use ren_core::ops::{AddRemove, AddRemoveMode, OpKind};
@@ -27,9 +32,49 @@ use ren_core::{
 };
 use tempfile::TempDir;
 
-/// `café.txt` with the `é` as a single Latin-1 byte — not valid UTF-8.
-fn latin1_name() -> &'static OsStr {
-    OsStr::from_bytes(b"caf\xE9.txt")
+/// A name that is not valid Unicode: `café.txt` with the `é` as a single
+/// Latin-1 byte on Unix, and `c`, an unpaired high surrogate, `.txt` on
+/// Windows.
+fn odd_name() -> OsString {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        OsStr::from_bytes(b"caf\xE9.txt").to_owned()
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt as _;
+        OsString::from_wide(&[0x63, 0xD800, 0x2E, 0x74, 0x78, 0x74])
+    }
+}
+
+/// A folder name of the same kind.
+fn odd_folder_name() -> OsString {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        OsStr::from_bytes(b"h\xE9liday").to_owned()
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt as _;
+        OsString::from_wide(&[0x68, 0xDC00, 0x6C, 0x69, 0x64, 0x61, 0x79])
+    }
+}
+
+/// A name exactly as the filesystem holds it — bytes on Unix, UTF-16 units on
+/// Windows — so a comparison cannot pass on a lossy approximation.
+fn exact(name: &OsStr) -> Vec<u32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        name.as_bytes().iter().map(|b| u32::from(*b)).collect()
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt as _;
+        name.encode_wide().map(u32::from).collect()
+    }
 }
 
 fn suffix_pipeline() -> Pipeline {
@@ -63,10 +108,11 @@ fn names_in(dir: &Path) -> Vec<PathBuf> {
 /// The row is listed, is left alone, and says so — it is not mangled and it
 /// does not take the run down.
 #[test]
-fn a_name_that_is_not_utf8_is_left_alone_rather_than_mangled() {
+fn a_name_that_is_not_unicode_is_left_alone_rather_than_mangled() {
     let dir = TempDir::new().unwrap();
     let journal = TempDir::new().unwrap();
-    std::fs::write(dir.path().join(latin1_name()), b"payload").unwrap();
+    let odd_name = odd_name();
+    std::fs::write(dir.path().join(&odd_name), b"payload").unwrap();
     std::fs::write(dir.path().join("ordinary.txt"), b"payload").unwrap();
 
     let platform = ren_platform::host();
@@ -75,23 +121,23 @@ fn a_name_that_is_not_utf8_is_left_alone_rather_than_mangled() {
 
     let odd = entries
         .iter()
-        .find(|e| e.path.file_name() == Some(latin1_name()))
+        .find(|e| e.path.file_name() == Some(odd_name.as_os_str()))
         .expect("listed");
     assert!(
         odd.name_is_lossy,
         "the listing has to admit it lost something"
     );
     assert_eq!(
-        odd.path.file_name(),
-        Some(latin1_name()),
-        "the path stays byte-exact even though the name could not"
+        exact(odd.path.file_name().unwrap()),
+        exact(&odd_name),
+        "the path stays exact even though the name could not"
     );
 
     let p = plan(&entries, &suffix_pipeline(), platform.as_ref());
     let odd_item = p
         .items
         .iter()
-        .find(|i| i.source.file_name() == Some(latin1_name()))
+        .find(|i| i.source.file_name() == Some(odd_name.as_os_str()))
         .unwrap();
     assert_eq!(odd_item.state, RowState::Unchanged, "left alone");
     assert_eq!(odd_item.target, odd_item.source, "and not retargeted");
@@ -118,12 +164,12 @@ fn a_name_that_is_not_utf8_is_left_alone_rather_than_mangled() {
     assert!(report.is_success());
 
     assert_eq!(
-        names_in(dir.path()),
-        vec![
-            PathBuf::from(latin1_name()),
-            PathBuf::from("ordinary_v2.txt")
-        ],
-        "the odd name is byte-for-byte what it was"
+        names_in(dir.path())
+            .iter()
+            .map(|n| exact(n.as_os_str()))
+            .collect::<Vec<_>>(),
+        vec![exact(&odd_name), exact(OsStr::new("ordinary_v2.txt"))],
+        "the odd name is exactly what it was"
     );
 }
 
@@ -137,7 +183,7 @@ fn a_name_that_is_not_utf8_is_left_alone_rather_than_mangled() {
 fn such_a_file_can_be_renamed_by_hand_and_undone_exactly() {
     let dir = TempDir::new().unwrap();
     let journal = TempDir::new().unwrap();
-    let source = dir.path().join(latin1_name());
+    let source = dir.path().join(odd_name());
     std::fs::write(&source, b"payload").unwrap();
 
     let platform = ren_platform::host();
@@ -175,28 +221,29 @@ fn such_a_file_can_be_renamed_by_hand_and_undone_exactly() {
     let undo = undo_last(platform.as_ref(), journal.path()).unwrap();
     assert!(undo.is_complete(), "skipped: {:?}", undo.skipped);
 
-    // The bytes, not the lossy string. Comparing `to_string_lossy` would pass
-    // even if the byte had been replaced, which is exactly the bug that shipped.
+    // The exact name, not the lossy string. Comparing `to_string_lossy` would
+    // pass even if the odd unit had been replaced, which is exactly the bug
+    // that shipped.
     assert_eq!(
         names_in(dir.path())
             .iter()
-            .map(|n| n.as_os_str().as_bytes().to_vec())
+            .map(|n| exact(n.as_os_str()))
             .collect::<Vec<_>>(),
-        vec![latin1_name().as_bytes().to_vec()],
-        "undo has to put the original bytes back, not an approximation"
+        vec![exact(&odd_name())],
+        "undo has to put the original name back, not an approximation"
     );
 }
 
-/// A perfectly ordinary name inside a folder whose *own* name is not UTF-8.
+/// A perfectly ordinary name inside a folder whose *own* name is not Unicode.
 ///
 /// This is the case that used to poison a whole directory: `entry.path` is
-/// non-UTF-8 for every file under it, so every rename in the folder aborted on
+/// not Unicode for every file under it, so every rename in the folder aborted on
 /// the journal write even though every filename rendered perfectly.
 #[test]
-fn a_folder_whose_name_is_not_utf8_does_not_poison_the_files_in_it() {
+fn a_folder_whose_name_is_not_unicode_does_not_poison_the_files_in_it() {
     let dir = TempDir::new().unwrap();
     let journal = TempDir::new().unwrap();
-    let odd_folder = dir.path().join(OsStr::from_bytes(b"h\xE9liday"));
+    let odd_folder = dir.path().join(odd_folder_name());
     std::fs::create_dir(&odd_folder).unwrap();
     std::fs::write(odd_folder.join("photo.jpg"), b"payload").unwrap();
 

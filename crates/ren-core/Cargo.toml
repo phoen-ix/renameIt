@@ -35,7 +35,16 @@ thiserror.workspace = true
 toml.workspace = true
 walkdir.workspace = true
 
+[features]
+# The fixture writers in `meta::testing` and the `*_so_far` instruments, for
+# tests in this crate and the two front ends. Nothing a shipped build enables:
+# only dev-dependencies turn it on, so a release binary never compiles them.
+testing = []
+
 [dev-dependencies]
+# Ourselves, with the fixtures on, so the integration tests and the bench can
+# build tagged files the way the unit tests do.
+ren-core = { path = ".", features = ["testing"] }
 criterion.workspace = true
 proptest.workspace = true
 tempfile.workspace = true

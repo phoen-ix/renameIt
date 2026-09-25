@@ -97,8 +97,8 @@ fn fold(s: &str) -> String {
 
 /// Everything up to and including the last separator, gone.
 ///
-/// The current-name column may contain paths, full or relative — but only
-/// files in the listing are processed.
+/// The current-name column may hold paths, full or relative, and only the
+/// file name is matched: the listing decides what is processed, not the CSV.
 ///
 /// The path is tolerated, not resolved: the listing decides what is processed,
 /// so `C:\photos\lorem`, `photos/lorem` and `lorem` all key identically. Both
@@ -113,34 +113,35 @@ fn file_part(value: &str) -> &str {
 
 /// The same strip for the *new* column, blind to separators inside a `<tag>`.
 ///
-/// > *"Paths the the column with new names are ignored."*
+/// A path in the new-name column is reduced to its file name. Not a
+/// convenience: D31 makes `/` in a produced name a subfolder move, so without
+/// this a spreadsheet value of `2024/Some` silently relocates the file.
 ///
-/// Not a convenience: D31 makes `/` in a produced name a subfolder move, so
-/// without this a spreadsheet value of `2024/Some` silently relocates the file.
-///
-/// The tag-awareness is what keeps that from over-reaching. `<\>` is the tag
-/// that *means* a separator, and it contains a literal backslash — so a plain
-/// `rfind` would cut `2024<\>Some` down to `>Some` and quietly destroy the one
-/// way a user has of asking for a move. Depth tracking draws the line where it
-/// belongs: between what the data said and what the user wrote.
-///
-/// An unclosed `<` swallows the rest, so nothing is stripped. That is the safe
-/// direction, and the template will refuse to compile anyway (D29).
+/// Tag-aware, because `<\>` is the tag that *means* a separator and it
+/// contains a literal backslash — a plain `rfind` would cut `2024<\>Some` down
+/// to `>Some` and quietly destroy the one way a user has of asking for a move.
+/// So the value is split by the template engine's own lexer and only its
+/// literal text is searched: the line falls between what the data said and
+/// what the user wrote, exactly where the engine will draw it. That includes a
+/// `<` with no `>` after it, which the engine renders as literal text (D117),
+/// so a separator after one is stripped like any other.
 fn new_file_part(value: &str) -> &str {
-    let mut depth = 0usize;
+    use crate::template::lexer::{Piece, scan};
+
+    let mut at = 0;
     let mut cut = None;
-    for (at, ch) in value.char_indices() {
-        match ch {
-            '<' => depth += 1,
-            '>' => depth = depth.saturating_sub(1),
-            '/' | '\\' if depth == 0 => cut = Some(at + ch.len_utf8()),
-            _ => {}
+    for piece in scan(value) {
+        match piece {
+            Piece::Literal(text) => {
+                if let Some(separator) = text.rfind(['/', '\\']) {
+                    cut = Some(at + separator + 1);
+                }
+                at += text.len();
+            }
+            Piece::Tag { span, .. } => at = span.end,
         }
     }
-    match cut {
-        Some(at) => &value[at..],
-        None => value,
-    }
+    cut.map_or(value, |at| &value[at..])
 }
 
 /// CP1252 for the 0x80–0x9F range; everything else is Latin-1, i.e. identity.
@@ -170,6 +171,42 @@ fn decode(bytes: &[u8]) -> String {
     }
 }
 
+/// A UTF-16 file, recognised by its byte-order mark, as text.
+///
+/// Windows PowerShell 5 writes UTF-16 from `>` and `Out-File` unless told
+/// otherwise. Handed to the CSV reader as bytes, every field came out with a
+/// NUL between its letters, matched no file name, and raised no error. A file
+/// that carries the mark and is not valid UTF-16 is refused rather than
+/// guessed at: its names would come out wrong either way.
+fn utf16(bytes: &[u8]) -> Result<Option<String>, CsvError> {
+    let (rest, little_endian) = match bytes {
+        [0xFF, 0xFE, rest @ ..] => (rest, true),
+        [0xFE, 0xFF, rest @ ..] => (rest, false),
+        _ => return Ok(None),
+    };
+    let malformed = || CsvError::Malformed {
+        line: 0,
+        message: "the file is marked as UTF-16 but is not valid UTF-16".to_owned(),
+    };
+    if rest.len() % 2 != 0 {
+        return Err(malformed());
+    }
+    let units: Vec<u16> = rest
+        .chunks_exact(2)
+        .map(|pair| {
+            let pair = [pair[0], pair[1]];
+            if little_endian {
+                u16::from_le_bytes(pair)
+            } else {
+                u16::from_be_bytes(pair)
+            }
+        })
+        .collect();
+    String::from_utf16(&units)
+        .map(Some)
+        .map_err(|_| malformed())
+}
+
 fn parse(path: &Path, options: CsvOptions) -> Result<CsvTable, CsvError> {
     if options.old_column == 0 || options.new_column == 0 {
         return Err(CsvError::Malformed {
@@ -185,17 +222,20 @@ fn parse(path: &Path, options: CsvOptions) -> Result<CsvTable, CsvError> {
         path: path.to_path_buf(),
         message: e.to_string(),
     })?;
-    // Excel prefixes a BOM. Without this the first key is "\u{FEFF}Lorem" and
-    // row 1 silently never matches — which looks exactly like a typo in the
-    // spreadsheet, and is the single most common way a CSV import "just does
-    // nothing".
-    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes);
+    let decoded = utf16(&bytes)?;
+    let bytes = match &decoded {
+        Some(text) => text.as_bytes(),
+        // Excel prefixes a BOM. Without this the first key is
+        // "\u{FEFF}Lorem" and row 1 silently never matches — which looks
+        // exactly like a typo in the spreadsheet, and is the single most
+        // common way a CSV import "just does nothing".
+        None => bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes),
+    };
 
     let mut reader = csv::ReaderBuilder::new()
         .delimiter(options.separator)
-        // "will read and process all lines in the CSV file, including the
-        // first one" — so the header row, if there is one, is just a row that
-        // happens to match nothing.
+        // Every line is a row, the first included: a header row, if there is
+        // one, is just a row that happens to match no file.
         .has_headers(false)
         // A short row is a row that names no replacement, not a broken file.
         .flexible(true)
@@ -242,8 +282,7 @@ fn parse(path: &Path, options: CsvOptions) -> Result<CsvTable, CsvError> {
         } else {
             fold(&old)
         };
-        // "If the CSV file contains duplicate filenames in the old column, the
-        // first one found is used."
+        // Where the old-name column repeats a name, the first row wins.
         rows.entry(key).or_insert_with(|| TextTemplate::new(new));
     }
 
@@ -303,6 +342,13 @@ pub fn load(path: &Path, options: CsvOptions) -> Arc<Result<CsvTable, CsvError>>
     }
 
     let table = Arc::new(parse(path, options));
+    // A file that could not be read is asked again next time. Caching the
+    // refusal saves nothing — the key already costs a `stat` — and a fixed
+    // permission or a released lock changes neither the length nor the mtime,
+    // so the stale error would stand until the file was edited.
+    if matches!(*table, Err(CsvError::Io { .. })) {
+        return table;
+    }
     if let Ok(mut map) = cache.lock() {
         if map.len() >= PARSED_CAPACITY {
             map.clear();
@@ -337,7 +383,7 @@ mod tests {
         t.get(key).map(|v| v.as_str().to_owned())
     }
 
-    /// The documented list, read as a table.
+    /// A list with a header row: the header is a row like any other.
     #[test]
     fn the_first_line_is_processed_like_any_other() {
         let t = table(
@@ -383,8 +429,8 @@ mod tests {
         }
     }
 
-    /// *"The column with current names may contain paths, both full and
-    /// relative"* — and only the file name is used to match.
+    /// The current-name column may hold full or relative paths, and only the
+    /// file name is used to match.
     #[test]
     fn a_path_in_the_old_column_is_reduced_to_its_file_name() {
         let t = table("C:\\photos\\lorem,Some\nphotos/ipsum,example\n", comma());
@@ -392,8 +438,9 @@ mod tests {
         assert_eq!(value(&t, "ipsum").as_deref(), Some("example"));
     }
 
-    /// *"Paths the the column with new names are ignored."* D31 makes `/` a
-    /// subfolder move, so this is what stops a spreadsheet relocating files.
+    /// A path in the new-name column is reduced to its file name. D31 makes
+    /// `/` a subfolder move, so this is what stops a spreadsheet relocating
+    /// files.
     #[test]
     fn a_path_in_the_new_column_cannot_smuggle_a_subfolder_move() {
         let t = table("lorem,2024/Some\nipsum,C:\\elsewhere\\example\n", comma());
@@ -401,8 +448,6 @@ mod tests {
         assert_eq!(value(&t, "ipsum").as_deref(), Some("example"));
     }
 
-    /// The strip is on literal text, so the tag that means "a separator" still
-    /// works — a user asking to move files can still say so.
     /// The strip must not eat the tag that *means* a separator: `<\>` carries
     /// a literal backslash, and a plain `rfind` would cut the value to
     /// `>Some` — destroying the only way a user has of asking for a move.
@@ -419,6 +464,71 @@ mod tests {
     fn a_literal_path_is_stripped_even_when_a_tag_follows_it() {
         let t = table("a,2024/<Year><\\>x\n", comma());
         assert_eq!(value(&t, "a").as_deref(), Some("<Year><\\>x"));
+    }
+
+    /// A `<` with no `>` after it is literal text to the template engine
+    /// (D117), so a separator after one is a separator — and D31 would read
+    /// it as a move. The strip has to agree with the engine about what is a
+    /// tag.
+    #[test]
+    fn a_separator_after_an_unclosed_bracket_is_still_stripped() {
+        let t = table("lorem,Q<3/2024 report\nipsum,a<b\\c\n", comma());
+        assert_eq!(value(&t, "lorem").as_deref(), Some("2024 report"));
+        assert_eq!(value(&t, "ipsum").as_deref(), Some("c"));
+    }
+
+    /// Windows PowerShell 5's `>` and `Out-File` write UTF-16 with a BOM, and
+    /// a list made that way matched nothing and said nothing. Both byte
+    /// orders are read.
+    #[test]
+    fn a_utf16_csv_is_decoded() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("list.csv");
+        let text = "Björk,Jóga\r\nlorem,Some\r\n";
+        for (bom, encode) in [
+            ([0xFF, 0xFE], u16::to_le_bytes as fn(u16) -> [u8; 2]),
+            ([0xFE, 0xFF], u16::to_be_bytes),
+        ] {
+            let mut bytes = bom.to_vec();
+            bytes.extend(text.encode_utf16().flat_map(encode));
+            std::fs::write(&path, &bytes).unwrap();
+            let t = parse(&path, comma()).unwrap();
+            assert_eq!(value(&t, "lorem").as_deref(), Some("Some"), "{bom:?}");
+            assert_eq!(value(&t, "björk").as_deref(), Some("Jóga"), "{bom:?}");
+        }
+    }
+
+    /// A UTF-16 file that is not valid UTF-16 is refused out loud rather than
+    /// guessed at.
+    #[test]
+    fn a_broken_utf16_csv_is_an_error() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("list.csv");
+        std::fs::write(&path, [0xFF, 0xFE, b'a', 0, 0x00, 0xD8, b',', 0]).unwrap();
+        assert!(matches!(
+            parse(&path, comma()),
+            Err(CsvError::Malformed { line: 0, .. })
+        ));
+    }
+
+    /// A file that could not be read is asked again next time. A permissions
+    /// fix changes neither the length nor the mtime the cache is keyed on, so
+    /// a cached refusal outlived its cause until the file was edited.
+    #[cfg(unix)]
+    #[test]
+    fn a_read_error_is_not_cached() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("list.csv");
+        std::fs::write(&path, "lorem,Some\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read(&path).is_ok() {
+            return; // Running as root: no permission can make the read fail.
+        }
+
+        assert!(matches!(&*load(&path, comma()), Err(CsvError::Io { .. })));
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(load(&path, comma()).is_ok(), "the refusal was cached");
     }
 
     #[test]

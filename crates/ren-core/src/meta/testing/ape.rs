@@ -33,13 +33,25 @@ fn ape_footer(size: u32, items: u32, is_header: bool) -> Vec<u8> {
 
 /// A complete APEv2 tag: header, items, footer.
 pub fn ape_tag(fields: &[(&str, &str)]) -> Vec<u8> {
+    let items: Vec<(&str, &[u8], bool)> = fields
+        .iter()
+        .map(|(key, value)| (*key, value.as_bytes(), false))
+        .collect();
+    ape_tag_items(&items)
+}
+
+/// The same, with each item's value as bytes and a flag for **binary** —
+/// bits 1–2 of an item's flags say what its value is, and `1` there is the
+/// binary kind cover art is stored as.
+fn ape_tag_items(fields: &[(&str, &[u8], bool)]) -> Vec<u8> {
     let mut items = Vec::new();
-    for (key, value) in fields {
+    for (key, value, binary) in fields {
         items.extend_from_slice(&(value.len() as u32).to_le_bytes());
-        items.extend_from_slice(&0u32.to_le_bytes()); // flags: UTF-8 text
+        let flags: u32 = if *binary { 1 << 1 } else { 0 }; // 0 is UTF-8 text
+        items.extend_from_slice(&flags.to_le_bytes());
         items.extend_from_slice(key.as_bytes());
         items.push(0); // keys are null-terminated
-        items.extend_from_slice(value.as_bytes());
+        items.extend_from_slice(value);
     }
     let size = (items.len() + 32) as u32;
     let count = fields.len() as u32;
@@ -54,17 +66,26 @@ pub fn ape_tag(fields: &[(&str, &str)]) -> Vec<u8> {
 #[derive(Debug, Default, Clone)]
 pub struct WavPack {
     pub fields: Vec<(&'static str, String)>,
+    /// Binary items, after the text ones — `Cover Art (Front)` is the one a
+    /// real file carries: a file name, a NUL, then the image bytes.
+    pub binary: Vec<(&'static str, Vec<u8>)>,
 }
 
 impl WavPack {
     pub fn tagged(artist: &str, title: &str) -> Self {
         Self {
             fields: vec![("Artist", artist.to_owned()), ("Title", title.to_owned())],
+            binary: Vec::new(),
         }
     }
 
     pub fn field(mut self, key: &'static str, value: &str) -> Self {
         self.fields.push((key, value.to_owned()));
+        self
+    }
+
+    pub fn binary(mut self, key: &'static str, value: &[u8]) -> Self {
+        self.binary.push((key, value.to_vec()));
         self
     }
 
@@ -87,10 +108,14 @@ impl WavPack {
 
     pub fn bytes(&self) -> Vec<u8> {
         let mut out = self.block();
-        if !self.fields.is_empty() {
-            let fields: Vec<(&str, &str)> =
-                self.fields.iter().map(|(k, v)| (*k, v.as_str())).collect();
-            out.extend_from_slice(&ape_tag(&fields));
+        if !self.fields.is_empty() || !self.binary.is_empty() {
+            let items: Vec<(&str, &[u8], bool)> = self
+                .fields
+                .iter()
+                .map(|(k, v)| (*k, v.as_bytes(), false))
+                .chain(self.binary.iter().map(|(k, v)| (*k, v.as_slice(), true)))
+                .collect();
+            out.extend_from_slice(&ape_tag_items(&items));
         }
         out
     }
@@ -140,7 +165,6 @@ mod tests {
         let tags = crate::meta::audio::tags_of(&path).expect("readable audio");
         assert_eq!(tags.artist.as_deref(), Some("Metallica"));
         assert_eq!(tags.title.as_deref(), Some("One"));
-        assert_eq!(tags.properties.mpeg, None);
     }
 
     /// The size field counts the items and the footer but not the header. Get

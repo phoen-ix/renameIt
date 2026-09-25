@@ -1,21 +1,19 @@
 //! What an image says about itself: its size, its colour depth, its comment.
 //!
-//! The image tags:
-//!
-//! > *`<Width>` - Image Width*
-//! > *`<Height>` - Image Height*
-//! > *`<Depth>` - Image Color Depth (Colors)*
-//! > *`<Depthb>` - Image Color Depth (Bits)*
-//! > *`<JpgComment>` - Jpeg Comment*
+//! The image tags: `<Width>` and `<Height>` in pixels, `<Depthb>` the bits a
+//! pixel is stored in, `<Depth>` the number of colours those bits allow, and
+//! `<JpgComment>` a JPEG's comment segment.
 //!
 //! The four size/depth tags would mean the same things about a video frame.
 //! We answer for images only; the movie half stays deferred.
 //!
-//! Header-only, like every other reader here: `image` decodes just enough to
-//! answer, and `jpeg_comment` walks segment lengths without touching the
-//! entropy-coded data. Cached the way `meta::exif` is, and for the same reason
-//! — this is reached from the parallel evaluation pass, once per file per
-//! keystroke (P44).
+//! Header-only. A JPEG is never handed to `image` here: its JPEG decoder
+//! reads the whole file into memory before it parses a byte of header, so
+//! `jpeg_header` walks the segment chain itself for the size, depth and
+//! comment, and stops where the image data starts. Every other format's
+//! `image` decoder reads only its header. Cached the way `meta::exif` is, and
+//! for the same reason — this is reached from the parallel evaluation pass,
+//! once per file per keystroke (P44).
 
 use std::io::{BufReader, Read};
 
@@ -30,8 +28,11 @@ use super::cache::{MetaCache, Stamp};
 /// rather than a comfortable round number.
 const MIN_IMAGE_BYTES: u64 = 16;
 
-/// Extensions worth opening — exactly the formats the `image` feature list
-/// enables, so a file we cannot read is never opened hopefully.
+/// Extensions the folder peek opens — exactly the formats the `image`
+/// feature list enables, so a folder of documents is not opened file by file
+/// on the hope that one is a picture. A *listed* file is read whatever its
+/// name, because the magic bytes decide what it is; the read that finds it is
+/// not a picture costs a few bytes.
 ///
 /// PSD, PSP, AGP, ILBM/IFF and PCX are deliberately absent. See D122: those
 /// are formats without a maintained Rust decoder in the licence class D2
@@ -58,7 +59,7 @@ pub struct ImageInfo {
 }
 
 impl ImageInfo {
-    /// *"Color Depth (Colors)"* — the palette size the bit depth implies.
+    /// `<Depth>`: the number of colours the bit depth allows.
     ///
     /// Saturating at 63 bits keeps the shift defined; nothing real comes close,
     /// and a wrong-but-finite answer beats a panic in a filename preview.
@@ -85,7 +86,9 @@ pub fn info_of_entry(entry: &crate::model::FileEntry) -> Option<Arc<ImageInfo>> 
 }
 
 fn info_at(path: &Path, stamp: Stamp) -> Option<Arc<ImageInfo>> {
-    if !stamp.is_dir && stamp.len < MIN_IMAGE_BYTES {
+    // A folder's header comes only from the peek, which caches under the same
+    // path; see `exif::date_at` for what sharing that entry did.
+    if stamp.is_dir || stamp.len < MIN_IMAGE_BYTES {
         return None;
     }
     cache().get_or_read(path, stamp, || read_uncached(path).map(Arc::new))
@@ -115,6 +118,7 @@ fn folder_info_at(dir: &Path, stamp: Stamp) -> Option<Arc<ImageInfo>> {
 /// here for the reason **P52** gives and one more: F9 now clears this cache
 /// (D140), and a count is the only way to see that it did. A timing ratio
 /// cannot tell a warm cache from a busy machine.
+#[cfg(any(test, feature = "testing"))]
 #[doc(hidden)]
 pub fn parses_so_far() -> usize {
     PARSES.load(std::sync::atomic::Ordering::Relaxed)
@@ -131,37 +135,52 @@ fn read_uncached(path: &Path) -> Option<ImageInfo> {
         // `None` for a file that is perfectly readable.
         .with_guessed_format()
         .ok()?;
-    let is_jpeg = reader.format() == Some(image::ImageFormat::Jpeg);
+    if reader.format() == Some(image::ImageFormat::Jpeg) {
+        // Never `into_decoder` for a JPEG: it reads the whole file first.
+        // That includes a file only *named* `.jpg` — `with_guessed_format`
+        // keeps the extension's answer when the magic says nothing — which
+        // the walk turns away at its first two bytes.
+        return jpeg_header(reader.into_inner());
+    }
     let decoder = reader.into_decoder().ok()?;
 
     let (width, height) = decoder.dimensions();
     // `original_color_type` rather than `color_type`: the second reports what a
     // decode would *produce*, so every 1-bit and 4-bit image would answer 8.
     let bits = decoder.original_color_type().bits_per_pixel();
-    drop(decoder);
 
     Some(ImageInfo {
         width,
         height,
         bits,
-        comment: is_jpeg.then(|| jpeg_comment(path)).flatten(),
+        comment: None,
     })
 }
 
-/// The JPEG `COM` segment.
+/// A JPEG's size, depth and `COM` comment, from its header alone.
 ///
-/// Walked here rather than taken from `image`, which does not surface it. A
-/// JPEG is a chain of `FF <marker> <u16 length> <payload>` segments; the ones
+/// A JPEG is a chain of `FF <marker> <u16 length> <payload>` segments; the ones
 /// without a payload are the restart markers and `SOI`, and `SOS` starts the
-/// entropy-coded data, where segment lengths stop meaning anything. So the walk
-/// is short by construction — it never reaches the image itself.
+/// entropy-coded data, where segment lengths stop meaning anything. So the
+/// walk is short by construction — it stops at `SOS` and never reaches the
+/// image itself.
 ///
-/// The standard gives `COM` no encoding, and in practice it is ASCII or UTF-8.
-/// Lossy conversion is the honest reading: a comment we cannot decode becomes
-/// visible replacement characters rather than a silently missing tag.
-fn jpeg_comment(path: &Path) -> Option<String> {
-    let file = std::fs::File::open(path).ok()?;
-    let mut reader = BufReader::new(file);
+/// The size is the first start-of-frame segment's (`SOF0`–`SOF15`, less the
+/// three markers in that range that are something else), and the depth is its
+/// sample precision times its component count: 24 for colour, 8 for grey,
+/// 32 for CMYK — the bits a pixel is stored in, which is what `<Depthb>`
+/// reports for every other format.
+///
+/// The comment is the first `COM` segment, and `image` would not have
+/// surfaced it anyway. The standard gives it no encoding, and in practice it
+/// is ASCII or UTF-8. Lossy conversion is the honest reading: a comment we
+/// cannot decode becomes visible replacement characters rather than a
+/// silently missing tag.
+fn jpeg_header(reader: impl Read) -> Option<ImageInfo> {
+    let mut reader = BufReader::new(reader);
+    let skip = |reader: &mut BufReader<_>, n: usize| {
+        std::io::copy(&mut reader.by_ref().take(n as u64), &mut std::io::sink()).ok()
+    };
 
     let mut pair = [0u8; 2];
     reader.read_exact(&mut pair).ok()?;
@@ -169,6 +188,8 @@ fn jpeg_comment(path: &Path) -> Option<String> {
         return None; // Not SOI, so not a JPEG we can walk.
     }
 
+    let mut frame: Option<(u32, u32, u16)> = None;
+    let mut comment: Option<Option<String>> = None;
     let mut byte = [0u8; 1];
     loop {
         reader.read_exact(&mut byte).ok()?;
@@ -184,7 +205,7 @@ fn jpeg_comment(path: &Path) -> Option<String> {
 
         match marker {
             0x01 | 0xD0..=0xD8 => continue, // Standalone: no length follows.
-            0xD9 | 0xDA => return None,     // EOI, or the scan starts here.
+            0xD9 | 0xDA => break,           // EOI, or the scan starts here.
             _ => {}
         }
 
@@ -192,26 +213,45 @@ fn jpeg_comment(path: &Path) -> Option<String> {
         let length = u16::from_be_bytes(pair) as usize;
         let payload = length.checked_sub(2)?;
 
-        if marker != 0xFE {
-            std::io::copy(
-                &mut reader.by_ref().take(payload as u64),
-                &mut std::io::sink(),
-            )
-            .ok()?;
-            continue;
+        match marker {
+            // DHT, JPG and DAC share the range with the frames.
+            0xC0..=0xCF if !matches!(marker, 0xC4 | 0xC8 | 0xCC) && frame.is_none() => {
+                let mut sof = [0u8; 6];
+                reader.read_exact(&mut sof).ok()?;
+                let precision = u16::from(sof[0]);
+                let height = u32::from(u16::from_be_bytes([sof[1], sof[2]]));
+                let width = u32::from(u16::from_be_bytes([sof[3], sof[4]]));
+                frame = Some((width, height, precision * u16::from(sof[5])));
+                skip(&mut reader, payload.checked_sub(sof.len())?)?;
+            }
+            0xFE if comment.is_none() && payload <= MAX_COMMENT_BYTES => {
+                let mut buffer = vec![0u8; payload];
+                reader.read_exact(&mut buffer).ok()?;
+                // Trailing NULs are common — writers pad the segment.
+                let text = String::from_utf8_lossy(&buffer)
+                    .trim_matches(|c: char| c.is_whitespace() || c == '\0')
+                    .to_owned();
+                comment = Some((!text.is_empty()).then_some(text));
+            }
+            0xFE if comment.is_none() => {
+                comment = Some(None); // Too long to be a filename component.
+                skip(&mut reader, payload)?;
+            }
+            _ => {
+                skip(&mut reader, payload)?;
+            }
         }
-
-        if payload > MAX_COMMENT_BYTES {
-            return None;
-        }
-        let mut buffer = vec![0u8; payload];
-        reader.read_exact(&mut buffer).ok()?;
-        // Trailing NULs are common — writers pad the segment.
-        let text = String::from_utf8_lossy(&buffer)
-            .trim_matches(|c: char| c.is_whitespace() || c == '\0')
-            .to_owned();
-        return (!text.is_empty()).then_some(text);
     }
+
+    // A zero height is legal (a later segment supplies it) and is not an
+    // answer this walk can give; saying nothing beats saying 0.
+    let (width, height, bits) = frame.filter(|(w, h, _)| *w > 0 && *h > 0)?;
+    Some(ImageInfo {
+        width,
+        height,
+        bits,
+        comment: comment.flatten(),
+    })
 }
 
 /// Shared with every other reader through [`super::cache::MetaCache`], and
@@ -224,7 +264,8 @@ fn cache() -> &'static MetaCache<Option<Arc<ImageInfo>>> {
     READ.get_or_init(Default::default)
 }
 
-/// Drops every cached read. Tests only: two tempdirs can reuse a path.
+/// Drops every cached read: F9's full refresh (D140), and tests, where two
+/// tempdirs can reuse a path.
 pub fn forget_all() {
     if let Some(cache) = READ.get() {
         cache.clear();
@@ -339,8 +380,8 @@ mod tests {
         assert_eq!(info.colours(), 256);
     }
 
-    /// *"Color Depth (Colors)"* is the palette the bits imply, so a 24-bit
-    /// image answers with a number nobody would type by hand.
+    /// `<Depth>` is the number of colours the bits allow, so a 24-bit image
+    /// answers with a number nobody would type by hand.
     #[test]
     fn colours_follow_from_bits() {
         for (bits, colours) in [(1u16, 2u64), (8, 256), (24, 16_777_216)] {
@@ -377,7 +418,76 @@ mod tests {
         forget_all();
         let dir = TempDir::new().unwrap();
         let path = jpeg_with_comment(dir.path(), "plain.jpg", None);
-        assert_eq!(jpeg_comment(&path), None);
+        let file = std::fs::File::open(&path).unwrap();
+        assert_eq!(jpeg_header(file).unwrap().comment, None);
+    }
+
+    /// A reader that counts what it hands out.
+    struct Counted<R> {
+        inner: R,
+        served: std::rc::Rc<std::cell::Cell<usize>>,
+    }
+
+    impl<R: Read> Read for Counted<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.inner.read(buf)?;
+            self.served.set(self.served.get() + n);
+            Ok(n)
+        }
+    }
+
+    /// `image`'s JPEG decoder reads its whole input before it parses the
+    /// header, so `<Width>` over a folder of 8 MB photographs read every byte
+    /// of every one. The size is in the header, and the header is all that is
+    /// read.
+    #[test]
+    fn a_jpeg_is_measured_from_its_header_without_reading_the_image() {
+        let dir = TempDir::new().unwrap();
+        let jpeg = std::fs::read(jpeg_with_comment(dir.path(), "a.jpg", Some("hi"))).unwrap();
+        let served = std::rc::Rc::new(std::cell::Cell::new(0));
+        let photo = Counted {
+            inner: std::io::Cursor::new(jpeg).chain(std::io::repeat(0).take(64 << 20)),
+            served: served.clone(),
+        };
+        let info = jpeg_header(photo).expect("a JPEG header");
+        assert_eq!((info.width, info.height, info.bits), (4, 4, 24));
+        assert_eq!(info.comment.as_deref(), Some("hi"));
+        assert!(served.get() < 64 * 1024, "read {} bytes", served.get());
+    }
+
+    /// And the walk agrees with the decoder it replaced, on the depths a
+    /// camera or an editor writes.
+    #[test]
+    fn a_jpeg_header_agrees_with_the_decoder() {
+        let dir = TempDir::new().unwrap();
+        let grey = dir.path().join("grey.jpg");
+        image::GrayImage::new(5, 3).save(&grey).unwrap();
+        let colour = dir.path().join("colour.jpg");
+        image::RgbImage::new(7, 2).save(&colour).unwrap();
+
+        for path in [grey, colour] {
+            let decoder = image::ImageReader::open(&path)
+                .unwrap()
+                .into_decoder()
+                .unwrap();
+            let want = (
+                decoder.dimensions().0,
+                decoder.dimensions().1,
+                decoder.original_color_type().bits_per_pixel(),
+            );
+            let info = jpeg_header(std::fs::File::open(&path).unwrap()).unwrap();
+            assert_eq!((info.width, info.height, info.bits), want, "{path:?}");
+        }
+    }
+
+    /// A file named `.jpg` whose bytes are not a JPEG is not one.
+    #[test]
+    fn a_file_named_like_a_jpeg_is_not_read_as_one() {
+        forget_all();
+        let dir = TempDir::new().unwrap();
+        let fake = dir.path().join("clip.jpg");
+        std::fs::write(&fake, vec![0x42u8; 4096]).unwrap();
+        assert_eq!(info_of(&fake), None);
     }
 
     /// A PNG has no `COM` segment to find, and asking is not a failure.

@@ -33,10 +33,11 @@ const ENTITY_SCAN_CHARS: usize = 12;
 
 /// Extensions worth opening.
 ///
-/// The gate every other reader has and this one lacked: without it
-/// `<HtmlTitle>` opened *every* file in the listing — 64 KiB of each
-/// photograph and each track — on the first preview, and the extension is
-/// the only thing that says a file might be a page at all.
+/// The one reader gated on the name rather than the content. The others
+/// recognise their formats from a few magic bytes, but HTML has no magic:
+/// without this `<HtmlTitle>` opened *every* file in the listing — 64 KiB of
+/// each photograph and each track — on the first preview, and the extension
+/// is the only thing that says a file might be a page at all.
 pub const HTML_EXTENSIONS: [&str; 5] = ["html", "htm", "xhtml", "shtml", "xht"];
 
 /// The smallest thing that could possibly be a page with a title (P50):
@@ -189,7 +190,8 @@ fn numeric(body: &str) -> Option<char> {
 /// title is an `Arc<str>` so a hit is a refcount bump rather than a copy.
 static READ: OnceLock<MetaCache<Option<Arc<str>>>> = OnceLock::new();
 
-/// Drops every cached read. Tests only: two tempdirs can reuse a path.
+/// Drops every cached read: F9's full refresh (D140), and tests, where two
+/// tempdirs can reuse a path.
 pub fn forget_all() {
     if let Some(cache) = READ.get() {
         cache.clear();

@@ -161,7 +161,6 @@ mod tests {
         let tags = crate::meta::audio::tags_of(&path).expect("readable audio");
         assert_eq!(tags.artist.as_deref(), Some("Metallica"));
         assert_eq!(tags.title.as_deref(), Some("One"));
-        assert_eq!(tags.properties.mpeg, None, "an M4A is not MPEG audio");
     }
 
     /// The trap this fixture exists to avoid, pinned so nobody removes the

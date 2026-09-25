@@ -274,7 +274,7 @@ mod tests {
 
     fn write(dir: &Path, name: &str, source: &str) {
         store::forget_all();
-        std::fs::write(dir.join(name).with_extension("koto"), source).unwrap();
+        std::fs::write(dir.join(format!("{name}.koto")), source).unwrap();
     }
 
     fn entries(names: &[&str]) -> Vec<FileEntry> {

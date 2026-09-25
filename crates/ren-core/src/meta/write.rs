@@ -13,10 +13,17 @@
 //!    cover art*. Our contract is the opposite — a field whose box is clear is
 //!    not written and whatever the file already carries is left intact — so
 //!    every write here is a read-modify-write, and the read **clones the
-//!    existing tag** rather than
-//!    copying fields into a fresh one. On MP4 that is load-bearing beyond the
-//!    obvious: the cover lives in a companion the generic `Tag` API cannot see,
-//!    so a rebuilt tag drops it while a cloned one keeps it.
+//!    existing tag** rather than copying fields into a fresh one.
+//!
+//!    Cloning the generic `Tag` is enough only where lofty keeps what its
+//!    `ItemKey` table cannot name: ID3v2 and MP4 carry that in a companion
+//!    the generic API cannot see, so a clone keeps an MP4's cover and a
+//!    `TXXX` frame. **Vorbis comments and APE have no companion.** Their
+//!    generic view is a split that throws the unnamed half away — a FLAC
+//!    rip's `CUESHEET`, a user's own key, an APE cover stored as a binary
+//!    item — and saving it rebuilds the whole block from what is left. So
+//!    those two are read as their concrete tag, split, edited, and merged
+//!    back with the remainder they came with ([`Native`]).
 //!
 //! 2. **`TagType::remove_from_path` does not work.** On every format tried it
 //!    returns `Err("failed to write to file")` — `EINVAL` — and changes
@@ -38,11 +45,15 @@
 
 use std::path::Path;
 
-use lofty::config::WriteOptions;
-use lofty::file::{FileType, TaggedFileExt};
+use lofty::ape::ApeTag;
+use lofty::config::{ParseOptions, WriteOptions};
+use lofty::file::{AudioFile, FileType, TaggedFileExt};
+use lofty::flac::FlacFile;
+use lofty::ogg::tag::VorbisComments;
+use lofty::ogg::{OggPictureStorage, OpusFile, SpeexFile, VorbisFile};
 use lofty::prelude::*;
 use lofty::probe::Probe;
-use lofty::tag::{ItemKey, Tag, TagType};
+use lofty::tag::{ItemKey, ItemValue, MergeTag, SplitTag, Tag, TagItem, TagType};
 use serde::{Deserialize, Serialize};
 
 use super::lyrics3;
@@ -271,6 +282,137 @@ fn fits(field: MusicField, value: &str, tag_type: TagType) -> bool {
     matches!(value.parse::<u32>(), Ok(n) if (1..=255).contains(&n))
 }
 
+/// Sets one field in a generic tag.
+///
+/// Every field but one is a plain replace. **Comment is the exception**,
+/// because an ID3v2 tag holds several `COMM` frames told apart by their
+/// description, and only the one with *no* description is the comment a
+/// player shows. iTunes keeps its Sound Check (`iTunNORM`) and gapless
+/// (`iTunSMPB`) data in described ones. lofty's `insert_text` removes every
+/// item under the key, so it would delete those too; this removes only the
+/// undescribed comment. Every other format's comments have no description,
+/// where the two behave the same.
+fn put(tag: &mut Tag, key: ItemKey, value: String) {
+    if key == ItemKey::Comment {
+        tag.retain(|item| !(item.key() == ItemKey::Comment && item.description().is_empty()));
+        tag.push(TagItem::new(ItemKey::Comment, ItemValue::Text(value)));
+    } else {
+        tag.insert_text(key, value);
+    }
+}
+
+/// A lofty (or I/O) failure, as the text the row shows.
+fn lofty(error: impl std::fmt::Display) -> WriteError {
+    WriteError::Lofty(error.to_string())
+}
+
+/// The primary tag in its own format, for the two formats whose generic view
+/// loses what it cannot name (point 1 of the module docs).
+enum Native {
+    /// A FLAC, kept whole: its pictures are blocks of their own beside the
+    /// comments, and saving the comments alone would drop them. The `ID3v2`
+    /// tag lofty tolerates on a FLAC is taken off the in-memory copy, because
+    /// a FLAC save writes an ID3v2 by *removing* it from the file.
+    Flac(Box<FlacFile>),
+    /// An Ogg's comment header — Vorbis, Opus and Speex alike.
+    Ogg(VorbisComments),
+    /// WavPack, Musepack and Monkey's Audio.
+    Ape(ApeTag),
+}
+
+impl Native {
+    /// The concrete primary tag, or `None` for a format that needs no such
+    /// care — or a file that has no primary tag yet, where there is nothing
+    /// unnamed to keep and the generic path seeds a new block.
+    fn read(path: &Path, file_type: FileType) -> Result<Option<Self>, WriteError> {
+        let mut file = std::fs::File::open(path).map_err(lofty)?;
+        let options = ParseOptions::new().read_properties(false);
+        Ok(match file_type {
+            FileType::Flac => {
+                let mut flac = FlacFile::read_from(&mut file, options).map_err(lofty)?;
+                if flac.vorbis_comments().is_none() {
+                    return Ok(None);
+                }
+                flac.remove_id3v2();
+                Some(Self::Flac(Box::new(flac)))
+            }
+            FileType::Vorbis => Some(Self::Ogg(
+                VorbisFile::read_from(&mut file, options)
+                    .map_err(lofty)?
+                    .remove_vorbis_comments(),
+            )),
+            FileType::Opus => Some(Self::Ogg(
+                OpusFile::read_from(&mut file, options)
+                    .map_err(lofty)?
+                    .remove_vorbis_comments(),
+            )),
+            FileType::Speex => Some(Self::Ogg(
+                SpeexFile::read_from(&mut file, options)
+                    .map_err(lofty)?
+                    .remove_vorbis_comments(),
+            )),
+            FileType::WavPack => lofty::wavpack::WavPackFile::read_from(&mut file, options)
+                .map_err(lofty)?
+                .remove_ape()
+                .map(Self::Ape),
+            FileType::Mpc => lofty::musepack::MpcFile::read_from(&mut file, options)
+                .map_err(lofty)?
+                .remove_ape()
+                .map(Self::Ape),
+            FileType::Ape => lofty::ape::ApeFile::read_from(&mut file, options)
+                .map_err(lofty)?
+                .remove_ape()
+                .map(Self::Ape),
+            _ => None,
+        })
+    }
+
+    /// Sets `fields` through lofty's own split and merge, and saves.
+    ///
+    /// The split hands the fields it can name to a generic `Tag` and keeps the
+    /// rest; the merge puts the edited `Tag` back beside that rest. Pictures
+    /// inside Vorbis comments are lifted out first and put back as they were:
+    /// the merge re-derives each picture's dimensions from its bytes and drops
+    /// one it cannot measure, where leaving them alone keeps every one.
+    fn write(self, path: &Path, fields: &[(MusicField, String)]) -> Result<(), WriteError> {
+        let edit = |tag: &mut Tag| {
+            for (field, value) in fields {
+                put(tag, key_in(*field, tag.tag_type()), value.clone());
+            }
+        };
+        let edit_comments = |mut comments: VorbisComments| {
+            let pictures = comments.remove_pictures();
+            let (rest, mut tag) = comments.split_tag();
+            edit(&mut tag);
+            let mut merged = rest.merge_tag(tag);
+            for (picture, info) in pictures {
+                // With the information supplied this cannot fail; it only
+                // declines a second icon, which the format forbids anyway.
+                let _ = merged.insert_picture(picture, Some(info));
+            }
+            merged
+        };
+        match self {
+            Self::Flac(mut flac) => {
+                let comments = flac.remove_vorbis_comments().unwrap_or_default();
+                flac.set_vorbis_comments(edit_comments(comments));
+                flac.save_to_path(path, WriteOptions::default())
+                    .map_err(lofty)
+            }
+            Self::Ogg(comments) => edit_comments(comments)
+                .save_to_path(path, WriteOptions::default())
+                .map_err(lofty),
+            Self::Ape(ape) => {
+                let (rest, mut tag) = ape.split_tag();
+                edit(&mut tag);
+                rest.merge_tag(tag)
+                    .save_to_path(path, WriteOptions::default())
+                    .map_err(lofty)
+            }
+        }
+    }
+}
+
 /// Writes `fields` into `path`, leaving every other field alone.
 ///
 /// Returns the fields that were actually written — a value that will not
@@ -285,29 +427,34 @@ pub fn write_fields(path: &Path, fields: &[FieldWrite]) -> Result<Vec<MusicField
         .read()
         .map_err(|e| WriteError::Lofty(e.to_string()))?;
 
-    // **Clone, never rebuild.** Copying the enabled fields into a fresh `Tag`
-    // is the obvious implementation of per-field checkboxes and it silently
-    // deletes embedded cover art on every format — on MP4 through a companion
-    // the generic API does not even show.
-    let mut tag = existing_or_seeded(&tagged, tag_type);
+    let wanted: Vec<(MusicField, String)> = fields
+        .iter()
+        .filter_map(|FieldWrite { field, value }| {
+            let value = field.normalise(value)?;
+            fits(*field, &value, tag_type).then_some((*field, value))
+        })
+        .collect();
+    if wanted.is_empty() {
+        return Ok(Vec::new());
+    }
 
-    let mut written = Vec::new();
-    for FieldWrite { field, value } in fields {
-        let Some(value) = field.normalise(value) else {
-            continue;
-        };
-        if !fits(*field, &value, tag_type) {
-            continue;
+    match Native::read(path, file_type)? {
+        Some(native) => native.write(path, &wanted)?,
+        None => {
+            // **Clone, never rebuild.** Copying the enabled fields into a
+            // fresh `Tag` is the obvious implementation of per-field
+            // checkboxes and it silently deletes embedded cover art on every
+            // format — on MP4 through a companion the generic API does not
+            // even show.
+            let mut tag = existing_or_seeded(&tagged, tag_type);
+            for (field, value) in &wanted {
+                put(&mut tag, key_in(*field, tag_type), value.clone());
+            }
+            tag.save_to_path(path, WriteOptions::default())
+                .map_err(|e| WriteError::Lofty(e.to_string()))?;
         }
-        tag.insert_text(key_in(*field, tag_type), value);
-        written.push(*field);
     }
-    if written.is_empty() {
-        return Ok(written);
-    }
-
-    tag.save_to_path(path, WriteOptions::default())
-        .map_err(|e| WriteError::Lofty(e.to_string()))?;
+    let written = wanted.iter().map(|(field, _)| *field).collect();
 
     // The user's choice, in "update mode": ID3v2 always,
     // ID3v1 only where one is already there. A file that has a v1 trailer keeps
@@ -322,7 +469,7 @@ pub fn write_fields(path: &Path, fields: &[FieldWrite]) -> Result<Vec<MusicField
             if let Some(value) = field.normalise(value)
                 && fits(*field, &value, TagType::Id3v1)
             {
-                v1.insert_text(key_in(*field, TagType::Id3v1), value);
+                put(&mut v1, key_in(*field, TagType::Id3v1), value);
             }
         }
         v1.save_to_path(path, WriteOptions::default())
@@ -335,7 +482,7 @@ pub fn write_fields(path: &Path, fields: &[FieldWrite]) -> Result<Vec<MusicField
 
 /// Removes `kinds` from `path`. Returns what was actually removed.
 ///
-/// *"Remove these tags, if present"* — a kind that is not there is not an
+/// Only what is present is removed: a kind that is not there is not an
 /// error, and neither is a kind this format cannot carry.
 pub fn remove_tags(path: &Path, kinds: &[TagKind]) -> Result<Vec<TagKind>, WriteError> {
     let (file_type, _) = primary(path)?;
@@ -400,9 +547,8 @@ mod tests {
         crate::meta::audio::tags_of(path).expect("still readable audio")
     }
 
-    /// The contract, verbatim: *"If you do not enable this, the field will not
-    /// be written and the current value (assuming there is one) will be left
-    /// intact."*
+    /// The contract: a field whose box is clear is not written, and the value
+    /// the file already has, if any, is left intact.
     ///
     /// This is the test the whole module exists for. lofty's save replaces the
     /// tag wholesale, so the obvious implementation — build a `Tag`, set the
@@ -428,6 +574,38 @@ mod tests {
         assert_eq!(after.genre.as_deref(), Some("Jazz"), "genre was wiped");
         assert_eq!(after.comment.as_deref(), Some("OldComment"));
         assert_eq!(after.track.as_deref(), Some("7"), "track was wiped");
+    }
+
+    /// Whether `needle` occurs anywhere in `path`'s bytes.
+    fn contains(path: &Path, needle: &[u8]) -> bool {
+        std::fs::read(path)
+            .unwrap()
+            .windows(needle.len())
+            .any(|w| w == needle)
+    }
+
+    /// Comment is the one field an MP3 can hold several of. iTunes keeps its
+    /// gapless-playback (`iTunSMPB`) and Sound Check (`iTunNORM`) data in
+    /// `COMM` frames of their own, told apart by their description, so
+    /// writing the comment a player shows must leave those alone — lofty's
+    /// generic insert replaces every `COMM` at once.
+    #[test]
+    fn writing_the_comment_leaves_the_described_comment_frames_alone() {
+        let dir = TempDir::new().unwrap();
+        let path = Mp3::tagged("A", "B")
+            .frame("COMM:iTunNORM", " 00000A2F 00000B3C")
+            .frame("COMM:iTunSMPB", " 00000000 00000210")
+            .frame("COMM", "old comment")
+            .write(dir.path(), "itunes.mp3");
+
+        let written = write_fields(&path, &[field(MusicField::Comment, "new comment")]).unwrap();
+        assert_eq!(written, [MusicField::Comment]);
+
+        assert!(contains(&path, b"iTunNORM"), "Sound Check was deleted");
+        assert!(contains(&path, b" 00000A2F 00000B3C"));
+        assert!(contains(&path, b"iTunSMPB"), "the gapless data was deleted");
+        assert!(!contains(&path, b"old comment"), "the old comment stayed");
+        assert_eq!(tags(&path).comment.as_deref(), Some("new comment"));
     }
 
     /// A file with no tag at all gets one.

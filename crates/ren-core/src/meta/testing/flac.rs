@@ -57,6 +57,28 @@ pub struct Flac {
     /// the engine decodes audio, and the tests that matter compare this region
     /// byte for byte to prove a tag write never reached it.
     pub audio: Vec<u8>,
+    /// A front cover, as a `PICTURE` block of its own. FLAC keeps pictures
+    /// beside the comment block rather than inside it, which is exactly what
+    /// a comments-only save forgets.
+    pub cover: Option<Vec<u8>>,
+}
+
+/// A `PICTURE` block's payload: type 3 (front cover), a MIME type, no
+/// description, zero dimensions — "unknown", which the format allows — and
+/// the bytes.
+fn picture(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&3u32.to_be_bytes());
+    let mime = b"image/jpeg";
+    out.extend_from_slice(&(mime.len() as u32).to_be_bytes());
+    out.extend_from_slice(mime);
+    out.extend_from_slice(&0u32.to_be_bytes()); // description length
+    for _ in 0..4 {
+        out.extend_from_slice(&0u32.to_be_bytes()); // width, height, depth, colours
+    }
+    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    out.extend_from_slice(data);
+    out
 }
 
 impl Flac {
@@ -65,7 +87,13 @@ impl Flac {
         Self {
             fields: vec![("ARTIST", artist.to_owned()), ("TITLE", title.to_owned())],
             audio: vec![0xAA; 512],
+            cover: None,
         }
+    }
+
+    pub fn cover(mut self, data: &[u8]) -> Self {
+        self.cover = Some(data.to_vec());
+        self
     }
 
     pub fn field(mut self, key: &'static str, value: &str) -> Self {
@@ -81,7 +109,11 @@ impl Flac {
     pub fn bytes(&self) -> Vec<u8> {
         let mut out = Vec::from(*b"fLaC");
         let has_tags = !self.fields.is_empty();
-        out.extend_from_slice(&block(!has_tags, 0, &stream_info()));
+        let has_cover = self.cover.is_some();
+        out.extend_from_slice(&block(!has_tags && !has_cover, 0, &stream_info()));
+        if let Some(cover) = &self.cover {
+            out.extend_from_slice(&block(!has_tags, 6, &picture(cover)));
+        }
         if has_tags {
             let fields: Vec<(&str, &str)> =
                 self.fields.iter().map(|(k, v)| (*k, v.as_str())).collect();

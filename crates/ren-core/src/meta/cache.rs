@@ -13,7 +13,8 @@
 //! define the listing as the snapshot: F9 relists and forgets. So a lookup
 //! made on behalf of a listed entry uses the entry's own stamp and touches no
 //! syscall; only a path with no entry behind it (the folder peek's candidates)
-//! is stat-ed.
+//! is stat-ed — and a symlink row, whose own stamp describes the link rather
+//! than the file the readers open.
 //!
 //! **The map was behind a `Mutex`.** Eight rayon threads queued on one lock
 //! for every `<Artist>` row of every keystroke, and the whole point of the
@@ -42,7 +43,19 @@ pub(crate) struct Stamp {
 
 impl Stamp {
     /// The listing's own record of the file — no syscall.
+    ///
+    /// Except for a symlink, which is stamped by a fresh `stat` of its target.
+    /// The listing records the link itself, whose length is the path it
+    /// holds, while every reader opens what it points at: keyed on the link, a
+    /// short one fails the size gate however large its target, and the entry
+    /// never goes stale when the target changes. A dangling link keeps its own
+    /// stamp, and the read that follows finds nothing.
     pub(crate) fn of_entry(entry: &FileEntry) -> Self {
+        if entry.is_symlink
+            && let Some(target) = Self::stat(&entry.path)
+        {
+            return target;
+        }
         Self {
             len: entry.size,
             modified: entry
@@ -53,11 +66,17 @@ impl Stamp {
     }
 
     /// A fresh `stat`, for a path nothing listed: a folder peek's candidate,
-    /// a test. Follows symlinks, as the readers always have.
+    /// the folder a file row's `<Dir…>` tag describes, a test. Follows
+    /// symlinks, as the readers do.
+    ///
+    /// A directory's length is recorded as 0, as the listing records it
+    /// (`FileEntry::from_metadata`). Linux reports the block size instead, and
+    /// a folder looked up both ways — by its own row and from a file inside
+    /// it — would otherwise replace its cache entry on every lookup.
     pub(crate) fn stat(path: &Path) -> Option<Self> {
         let metadata = std::fs::metadata(path).ok()?;
         Some(Self {
-            len: metadata.len(),
+            len: if metadata.is_dir() { 0 } else { metadata.len() },
             modified: metadata
                 .modified()
                 .ok()
@@ -167,7 +186,11 @@ mod tests {
     }
 
     /// The listing's stamp and a fresh `stat` agree, which is what lets the
-    /// parallel pass skip the syscall.
+    /// parallel pass skip the syscall — for a folder too, which a `<Dir…>`
+    /// tag looks up by its row's stamp and by a `stat` from the files inside
+    /// it. Linux reports a directory's length as its block size and the
+    /// listing records 0; if the two disagreed, every lookup would replace
+    /// the other's entry and re-walk the folder.
     #[test]
     fn the_entry_stamp_matches_the_stat_stamp() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -175,5 +198,28 @@ mod tests {
         std::fs::write(&path, b"hello").unwrap();
         let entry = FileEntry::from_path(&path).unwrap();
         assert_eq!(Stamp::of_entry(&entry), Stamp::stat(&path).unwrap());
+
+        let folder = dir.path().join("sub");
+        std::fs::create_dir(&folder).unwrap();
+        let entry = FileEntry::from_path(&folder).unwrap();
+        assert_eq!(Stamp::of_entry(&entry), Stamp::stat(&folder).unwrap());
+    }
+
+    /// A symlink row's own size is the length of the path it holds (0 on
+    /// Windows), but every reader opens the file it points at. So the stamp
+    /// describes the target: otherwise the size gate turns a link to a tagged
+    /// track away as too small to hold a tag.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_is_stamped_as_the_file_it_points_at() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target = dir.path().join("target.bin");
+        std::fs::write(&target, vec![7u8; 4096]).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink("target.bin", &link).unwrap();
+
+        let entry = FileEntry::from_path(&link).unwrap();
+        assert_eq!(entry.size, "target.bin".len() as u64, "the row is the link");
+        assert_eq!(Stamp::of_entry(&entry), Stamp::stat(&target).unwrap());
     }
 }

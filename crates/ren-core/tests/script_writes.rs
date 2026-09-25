@@ -72,11 +72,7 @@ impl Fixture {
 
     fn script(&self, name: &str, source: &str) -> Script {
         ren_core::script::store::forget_all();
-        std::fs::write(
-            self.scripts.path().join(name).with_extension("koto"),
-            source,
-        )
-        .unwrap();
+        std::fs::write(self.scripts.path().join(format!("{name}.koto")), source).unwrap();
         Script::new(name).in_dir(self.scripts.path())
     }
 

@@ -166,6 +166,14 @@ fn length_of_filename_counts_the_whole_name_including_the_extension() {
     assert_eq!(fixture.names("Length of Filename", ""), ["8.txt"]);
 }
 
+/// Characters, not bytes. Koto's `size` of a string is its UTF-8 length, so
+/// `Björk.mp3` counted 10 and `日本.txt` counted 10.
+#[test]
+fn length_of_filename_counts_characters_not_bytes() {
+    let fixture = Fixture::new(&["Björk.mp3", "日本.txt"]);
+    assert_eq!(fixture.names("Length of Filename", ""), ["9.mp3", "6.txt"]);
+}
+
 /// Type 1 in the arguments to also include the path. An exact string
 /// comparison, so only `1` works.
 #[test]
@@ -328,6 +336,19 @@ fn get_html_xml_tags_cuts_to_sixty_four_characters() {
     let fixture = Fixture::with_bodies(&[("page.html", &format!("<title>{long}</title>"))]);
     let out = &fixture.names("Get HTML XML Tags", "title")[0];
     assert_eq!(out.trim_end_matches(".html").len(), 64, "{out}");
+}
+
+/// A title is data, so a separator in it is neutralised the way `<HtmlTitle>`
+/// does it (D61). A script's return value is obeyed like typed text, and D31
+/// reads `/` in a name as a move: `HTTP/2` would otherwise have created a
+/// folder `HTTP` and moved the page into it.
+#[test]
+fn get_html_xml_tags_never_turns_a_title_into_a_subfolder() {
+    let fixture = Fixture::with_bodies(&[("http2.html", "<title>HTTP/2 and back\\slash</title>")]);
+    assert_eq!(
+        fixture.names("Get HTML XML Tags", "title"),
+        ["HTTP-2 and back-slash.html"]
+    );
 }
 
 // --- 6. Unique Random Number -------------------------------------------------

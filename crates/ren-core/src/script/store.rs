@@ -117,9 +117,31 @@ impl ScriptStore {
         std::fs::read_to_string(self.path_of(name))
     }
 
-    /// Where a script of this name would live.
+    /// Where the script of this name lives: `<name>.koto`.
+    ///
+    /// The name is the file stem, dots and all, so `.koto` is appended — set
+    /// as an extension it would replace the `.2` of `Date v1.2`. And since
+    /// [`Self::list`] accepts `.koto` in any case, a script listed from
+    /// `Tidy.KOTO` has to load from it: when `<name>.koto` is not there the
+    /// folder is searched for the stem with any case of the extension. A name
+    /// nothing matches gets the `<name>.koto` it would be saved as.
     pub fn path_of(&self, name: &str) -> PathBuf {
-        self.dir.join(name).with_extension("koto")
+        let exact = self.dir.join(format!("{name}.koto"));
+        if exact.exists() {
+            return exact;
+        }
+        std::fs::read_dir(&self.dir)
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.file_stem() == Some(std::ffi::OsStr::new(name))
+                    && path
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("koto"))
+            })
+            .unwrap_or(exact)
     }
 
     /// Put the shipped scripts in the folder, without touching anything.
@@ -235,16 +257,21 @@ pub fn load(path: &Path) -> std::sync::Arc<Result<super::Compiled, super::Script
         return hit.clone();
     }
 
-    let compiled = std::sync::Arc::new(match std::fs::read_to_string(path) {
+    let source = match std::fs::read_to_string(path) {
+        Ok(source) => source,
         // Named rather than passed through as an io error: "no such file" says
-        // nothing about *which* script the card is pointing at.
-        Err(_) => Err(super::ScriptError::Compile(format!(
-            "no script named '{}' in {}",
-            path.file_stem().unwrap_or_default().to_string_lossy(),
-            path.parent().unwrap_or(path).display()
-        ))),
-        Ok(source) => super::compile(&source),
-    });
+        // nothing about *which* script the card is pointing at. And not
+        // cached, for the reason `csv_table::load` gives: a fixed permission
+        // or a released lock moves neither the length nor the mtime.
+        Err(_) => {
+            return std::sync::Arc::new(Err(super::ScriptError::Compile(format!(
+                "no script named '{}' in {}",
+                path.file_stem().unwrap_or_default().to_string_lossy(),
+                path.parent().unwrap_or(path).display()
+            ))));
+        }
+    };
+    let compiled = std::sync::Arc::new(super::compile(&source));
     if let Ok(mut map) = cache.lock() {
         if map.len() >= COMPILED_CAPACITY {
             map.clear();
@@ -256,6 +283,7 @@ pub fn load(path: &Path) -> std::sync::Arc<Result<super::Compiled, super::Script
 
 /// Drop the compile cache. Tests only — a stale entry would otherwise leak
 /// between them, since the key includes an mtime that a fast test can reuse.
+/// A user who edits a script moves its mtime, which is what the key is for.
 pub fn forget_all() {
     if let Some(cache) = COMPILED.get()
         && let Ok(mut map) = cache.lock()
@@ -397,10 +425,68 @@ mod tests {
     fn the_embedded_scripts_match_the_files_on_disk() {
         let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/scripts");
         for (name, embedded) in DEFAULTS {
-            let on_disk = std::fs::read_to_string(repo.join(name).with_extension("koto"))
+            let on_disk = std::fs::read_to_string(repo.join(format!("{name}.koto")))
                 .unwrap_or_else(|e| panic!("{name}: {e}"));
             assert_eq!(*embedded, on_disk, "{name} differs from the shipped file");
         }
+    }
+
+    /// A script's name is its file stem, dots and all. `Date v1.2` lives in
+    /// `Date v1.2.koto`, not in `Date v1.koto` — which is where replacing the
+    /// "extension" of `Date v1.2` pointed.
+    #[test]
+    fn a_script_whose_name_has_a_dot_is_found_by_that_name() {
+        let dir = TempDir::new().unwrap();
+        write(dir.path(), "Date v1.2.koto", "rename = || 'dated'");
+        write(dir.path(), "Mr. Smith fix.koto", "rename = || 'smith'");
+        let store = ScriptStore::new(dir.path());
+
+        let (scripts, _) = store.list();
+        for entry in &scripts {
+            assert_eq!(store.path_of(&entry.name), entry.path, "{}", entry.name);
+            assert!(store.source(&entry.name).is_ok(), "{}", entry.name);
+        }
+        forget_all();
+        assert!(load(&store.path_of("Date v1.2")).is_ok());
+    }
+
+    /// The picker lists a script by its stem whatever case its extension
+    /// is in, so choosing it has to load it — `Tidy.KOTO` copied from a
+    /// Windows machine included.
+    #[test]
+    fn a_script_with_an_upper_case_extension_loads_by_its_listed_name() {
+        let dir = TempDir::new().unwrap();
+        write(dir.path(), "Tidy.KOTO", "rename = || 'tidy'");
+        let store = ScriptStore::new(dir.path());
+
+        let (scripts, _) = store.list();
+        assert_eq!(scripts.len(), 1);
+        assert_eq!(scripts[0].name, "Tidy");
+        forget_all();
+        assert!(
+            load(&store.path_of("Tidy")).is_ok(),
+            "listed, but not loadable"
+        );
+    }
+
+    /// A script that could not be read is asked again next time, for the
+    /// reason `csv_table::load` gives.
+    #[cfg(unix)]
+    #[test]
+    fn a_script_that_could_not_be_read_is_read_again() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("Locked.koto");
+        std::fs::write(&path, "rename = || 'x'").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read(&path).is_ok() {
+            return; // Running as root: no permission can make the read fail.
+        }
+
+        forget_all();
+        assert!(load(&path).is_err());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(load(&path).is_ok(), "the refusal was cached");
     }
 
     /// A CP1252 `.frs` is not valid UTF-8. Reading it as a string fails

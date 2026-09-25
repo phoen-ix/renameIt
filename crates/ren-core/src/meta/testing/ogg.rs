@@ -168,7 +168,5 @@ mod tests {
         let tags = crate::meta::audio::tags_of(&path).expect("readable audio");
         assert_eq!(tags.artist.as_deref(), Some("Metallica"));
         assert_eq!(tags.title.as_deref(), Some("One"));
-        // Never MPEG, whatever the properties say (D58).
-        assert_eq!(tags.properties.mpeg, None);
     }
 }

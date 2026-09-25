@@ -1,7 +1,11 @@
 //! Reading the tags and properties a music file carries.
 //!
-//! Tags are read and written for mp3, ogg, mp4, flac, mpc, spx, wv, m4a, m4b,
-//! m4p and m4r.
+//! **Reading** goes by content: any listed file whose bytes lofty recognises
+//! — MP3, Ogg Vorbis, Opus, Speex, FLAC, Musepack, WavPack, Monkey's Audio,
+//! MP4/M4A — answers the music tags, whatever it is called. **Writing and
+//! removing** (Music Tagger, Remove Tags) touch only a file whose extension
+//! is in [`AUDIO_EXTENSIONS`] (P56); a `.mp4` or `.m4r` reads its tags but is
+//! never written to.
 //!
 //! WMA and TTA are **not** supported — lofty handles neither. Recorded rather
 //! than quietly absent: a WMA reads as untagged,
@@ -14,7 +18,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use lofty::config::ParseOptions;
-use lofty::file::{AudioFile, FileType, TaggedFileExt};
+use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::probe::Probe;
 use lofty::tag::{ItemKey, Tag};
 
@@ -22,11 +26,15 @@ use super::cache::{MetaCache, Stamp};
 use super::folder;
 use super::names;
 
-/// The formats worth opening when peeking inside a folder.
+/// The extensions of the music files the operations write to, and the ones a
+/// folder peek opens.
 ///
-/// A filter, not a claim: it is what stops a folder of ten thousand documents
-/// being probed one by one. `tags_of` itself sniffs content, so a file named
-/// `song` with an ID3 block still reads.
+/// Two jobs. For Music Tagger and Remove Tags it is the preview's cheap gate
+/// (P56): a file outside it is a row left alone, and the executor then checks
+/// the content. For the folder peek it is what stops a folder of ten thousand
+/// documents being probed one by one. Neither is a claim about reading:
+/// `tags_of` sniffs content, so a file named `song` with an ID3 block still
+/// reads.
 pub const AUDIO_EXTENSIONS: [&str; 13] = [
     "mp3", "mp2", "mp1", "ogg", "oga", "spx", "opus", "flac", "mpc", "wv", "m4a", "m4b", "m4p",
 ];
@@ -56,8 +64,8 @@ pub struct AudioTags {
     /// The track number as text.
     ///
     /// lofty parses `TRCK` numerically: the `"7/12"` form reads as `"7"` — which
-    /// suits us, since `<TrackN>` is documented as *"Track Nr., no zero
-    /// padding"* and rendering `7/12` there would be a surprise — and a
+    /// suits us, since `<TrackN>` is the track number without padding and
+    /// rendering `7/12` there would be a surprise — and a
     /// non-numeric track such as a vinyl rip's `"A1"` does not survive the
     /// parse at all, so the tag is simply *missing* for that file. Kept as text
     /// rather than a number anyway, so nothing is lost if another format
@@ -72,91 +80,20 @@ pub struct AudioTags {
 /// What the audio itself says, as opposed to what someone wrote about it.
 ///
 /// Every field is optional, and that is the whole point. lofty reports `0` for
-/// a bitrate it could not determine and a default MPEG version for a file that
-/// has none — which would make `<Bitrate>` render `0` and `<Mpeg>` render
-/// `MPEG-1` on a FLAC. A confident wrong answer is worse than no answer, and
-/// P32 already has a way to say "no answer": the tag is *missing* and the file
-/// is left alone.
+/// a bitrate it could not determine — which would make `<Bitrate>` render `0`.
+/// A confident wrong answer is worse than no answer, and P32 already has a way
+/// to say "no answer": the tag is *missing* and the file is left alone.
+///
+/// The MPEG header fields (`<Mpeg>`, `<Layer>`, `<SMode>`) are not here, and
+/// that is D64: lofty's generic properties drop them, reading them means
+/// opening every MP3 a second time, and a default filled in their place
+/// would call every MPEG-2 Layer II mono file "MPEG-1, Layer 3, Stereo".
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AudioProperties {
     pub duration: Option<Duration>,
     pub bitrate_kbps: Option<u32>,
     pub sample_rate_hz: Option<u32>,
     pub channels: Option<u8>,
-    /// `None` for anything that is not MPEG audio, which is what makes
-    /// `<Mpeg>`, `<Layer>` and `<SMode>` *missing* on a FLAC rather than wrong.
-    pub mpeg: Option<MpegInfo>,
-}
-
-/// Our own copy of lofty's MPEG enums.
-///
-/// Deliberately not a re-export: a lofty type crossing into the template engine
-/// would mean a lofty upgrade could change what a filename renders as.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MpegInfo {
-    pub version: MpegVersion,
-    pub layer: MpegLayer,
-    pub channel_mode: ChannelMode,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MpegVersion {
-    V1,
-    V2,
-    V2_5,
-    /// AAC, which lofty models here.
-    V4,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MpegLayer {
-    Layer1,
-    Layer2,
-    Layer3,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChannelMode {
-    Stereo,
-    JointStereo,
-    DualChannel,
-    /// lofty calls this `SingleChannel`; `<SMode>` renders it as "Mono".
-    Mono,
-}
-
-impl MpegVersion {
-    /// `<Mpeg>` — *"MPEG Version"*.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::V1 => "MPEG-1",
-            Self::V2 => "MPEG-2",
-            Self::V2_5 => "MPEG-2.5",
-            Self::V4 => "MPEG-4",
-        }
-    }
-}
-
-impl MpegLayer {
-    /// `<Layer>`.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Layer1 => "Layer 1",
-            Self::Layer2 => "Layer 2",
-            Self::Layer3 => "Layer 3",
-        }
-    }
-}
-
-impl ChannelMode {
-    /// `<SMode>` — *"MPEG Stereo Mode"*.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Stereo => "Stereo",
-            Self::JointStereo => "Joint Stereo",
-            Self::DualChannel => "Dual Channel",
-            Self::Mono => "Mono",
-        }
-    }
 }
 
 impl AudioTags {
@@ -211,7 +148,9 @@ pub fn tags_of_entry(entry: &crate::model::FileEntry) -> Option<Arc<AudioTags>> 
 }
 
 fn tags_at(path: &Path, stamp: Stamp) -> Option<Arc<AudioTags>> {
-    if stamp.len < MIN_AUDIO_BYTES {
+    // A folder's tags come only from the peek, which caches under the same
+    // path; see `exif::date_at` for what sharing that entry did.
+    if stamp.is_dir || stamp.len < MIN_AUDIO_BYTES {
         return None;
     }
     cache().get_or_read(path, stamp, || read_uncached(path))
@@ -237,6 +176,7 @@ fn folder_tags_at(dir: &Path, stamp: Stamp) -> Option<Arc<AudioTags>> {
 /// deterministic and says exactly the thing that matters.
 static PARSES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+#[cfg(any(test, feature = "testing"))]
 #[doc(hidden)]
 pub fn parses_so_far() -> usize {
     PARSES.load(std::sync::atomic::Ordering::Relaxed)
@@ -258,7 +198,8 @@ pub fn forget_all() {
 fn read_uncached(path: &Path) -> Option<Arc<AudioTags>> {
     PARSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let probe = Probe::open(path).ok()?.guess_file_type().ok()?;
-    let file_type = probe.file_type()?;
+    // Content lofty does not recognise is not audio, whatever its name.
+    probe.file_type()?;
 
     // Properties first, then tags without them if that failed.
     //
@@ -287,13 +228,13 @@ fn read_uncached(path: &Path) -> Option<Arc<AudioTags>> {
     }?;
 
     let mut tags = AudioTags {
-        properties: properties_of(&tagged, file_type),
+        properties: properties_of(&tagged),
         ..Default::default()
     };
     tags.artist = first_of(&tagged, &[ItemKey::TrackArtist, ItemKey::AlbumArtist]);
     tags.title = first_of(&tagged, &[ItemKey::TrackTitle]);
     tags.album = first_of(&tagged, &[ItemKey::AlbumTitle]);
-    tags.comment = first_of(&tagged, &[ItemKey::Comment]);
+    tags.comment = comment_of(&tagged);
     tags.genre = first_of(&tagged, &[ItemKey::Genre]);
     tags.track = first_of(&tagged, &[ItemKey::TrackNumber]);
     tags.year = year_of(&tagged);
@@ -327,6 +268,37 @@ fn first_of(tagged: &lofty::file::TaggedFile, keys: &[ItemKey]) -> Option<String
     })
 }
 
+/// `<Comment>` — the comment a player shows.
+///
+/// An ID3v2 tag can hold several `COMM` frames, told apart by a description.
+/// The one with no description is the user's; iTunes keeps machine-written
+/// data — Sound Check in `iTunNORM`, gapless playback in `iTunSMPB` — in
+/// described ones, and on a file with no comment of its own that hex would
+/// otherwise become the name. So an undescribed comment wins, a described one
+/// is the fallback, and iTunes' own are never an answer. Every other format's
+/// comments have no description, so there this is simply the first comment.
+fn comment_of(tagged: &lofty::file::TaggedFile) -> Option<String> {
+    let comments = || {
+        tagged
+            .tags()
+            .iter()
+            .flat_map(Tag::items)
+            .filter(|item| item.key() == ItemKey::Comment)
+    };
+    let text = |item: &lofty::tag::TagItem| {
+        let value = item.value().text()?.trim();
+        (!value.is_empty()).then(|| value.to_owned())
+    };
+    comments()
+        .filter(|item| item.description().is_empty())
+        .find_map(text)
+        .or_else(|| {
+            comments()
+                .filter(|item| !item.description().starts_with("iTun"))
+                .find_map(text)
+        })
+}
+
 /// `<Year>` — four digits, whatever shape the tag stores them in.
 ///
 /// ID3v2.4 has no year frame: `TDRC` is a full recording *date*, so an MP3
@@ -345,7 +317,7 @@ fn year_of(tagged: &lofty::file::TaggedFile) -> Option<String> {
     }
 }
 
-fn properties_of(tagged: &lofty::file::TaggedFile, file_type: FileType) -> AudioProperties {
+fn properties_of(tagged: &lofty::file::TaggedFile) -> AudioProperties {
     let properties = tagged.properties();
     AudioProperties {
         // Zero is lofty's "I could not tell", not a duration.
@@ -356,31 +328,6 @@ fn properties_of(tagged: &lofty::file::TaggedFile, file_type: FileType) -> Audio
             .filter(|b| *b > 0),
         sample_rate_hz: properties.sample_rate().filter(|r| *r > 0),
         channels: properties.channels().filter(|c| *c > 0),
-        mpeg: (file_type == FileType::Mpeg).then(|| mpeg_of(tagged)),
-    }
-}
-
-/// The MPEG-only properties.
-///
-/// Read through the generic view rather than by reopening as an `MpegFile`,
-/// because reopening would double the IO for three tags. lofty's generic
-/// `FileProperties` does not carry them, so this is the one place we accept its
-/// defaults — guarded by the `FileType::Mpeg` check above, so a FLAC never
-/// reaches it.
-fn mpeg_of(_tagged: &lofty::file::TaggedFile) -> MpegInfo {
-    // lofty's generic `FileProperties` drops the MPEG-specific header fields on
-    // the way out of `MpegFile`, so they are not reachable from a `TaggedFile`.
-    // Reading them means opening the file a second time as an `MpegFile`, which
-    // costs an open per file per keystroke for three rarely-used tags.
-    //
-    // Left as the honest default until a tag actually asks for it: M6's tag
-    // resolver treats `<Mpeg>`, `<Layer>` and `<SMode>` as unavailable, so this
-    // value is never rendered. Wiring it is a contained change if the tags turn
-    // out to matter.
-    MpegInfo {
-        version: MpegVersion::V1,
-        layer: MpegLayer::Layer3,
-        channel_mode: ChannelMode::Stereo,
     }
 }
 
@@ -458,13 +405,34 @@ mod tests {
         assert_eq!(tags.title.as_deref(), Some("Enter Sandman"));
     }
 
+    /// `<Comment>` is the comment a player shows — the `COMM` frame with no
+    /// description. iTunes' own frames (`iTunNORM`, `iTunSMPB`) are hex a
+    /// machine wrote, and on a file with no comment of its own they must not
+    /// land in the filename.
+    #[test]
+    fn the_comment_is_the_one_a_player_shows_and_not_itunes_data() {
+        let dir = TempDir::new().unwrap();
+        let machine_only = Mp3::tagged("A", "B").frame("COMM:iTunNORM", " 00000A2F 00000B3C");
+        let tags = read(&dir, "machine.mp3", &machine_only).expect("tags");
+        assert_eq!(
+            tags.comment, None,
+            "iTunes' Sound Check data is not a comment"
+        );
+
+        let both = Mp3::tagged("A", "B")
+            .frame("COMM:iTunSMPB", " 00000000 00000210")
+            .frame("COMM", "the real one");
+        let tags = read(&dir, "both.mp3", &both).expect("tags");
+        assert_eq!(tags.comment.as_deref(), Some("the real one"));
+    }
+
     /// `<Track>` pads and `<TrackN>` does not, so the raw value is kept and the
     /// number taken from it — which is also what makes `7/12` work.
     #[test]
     fn a_track_number_survives_however_it_is_written() {
         let dir = TempDir::new().unwrap();
         // lofty parses TRCK as a number: `7/12` reads as `7` — which is what
-        // `<TrackN>` ("Track Nr., no zero padding") should render anyway — and
+        // `<TrackN>`, the unpadded track number, should render anyway — and
         // a non-numeric track like a vinyl rip's `A1` does not survive the
         // parse at all. Recorded rather than worked around: the tag is
         // *missing* for such a file, which is what P32 wants, and inventing a
@@ -563,9 +531,9 @@ mod tests {
         assert_eq!(tags.artist.as_deref(), Some("A"));
     }
 
-    /// lofty reports `0` for a bitrate it could not work out and a default MPEG
-    /// version for a file that has none. A confident wrong answer is worse than
-    /// no answer — P32 already knows how to say "no answer".
+    /// lofty reports `0` for a bitrate it could not work out. A confident wrong
+    /// answer is worse than no answer — P32 already knows how to say "no
+    /// answer".
     #[test]
     fn properties_it_could_not_determine_are_absent_rather_than_zero() {
         let dir = TempDir::new().unwrap();
@@ -591,20 +559,6 @@ mod tests {
         let tags = read(&dir, "audio.mp3", &Mp3::tagged("A", "B")).expect("tags");
         let props = tags.properties;
         assert_eq!(props.sample_rate_hz, Some(44_100));
-        assert!(props.mpeg.is_some(), "an MP3 has MPEG properties");
-    }
-
-    /// A FLAC has no MPEG version, and saying it is `MPEG-1` would be a
-    /// confident lie. There is no FLAC fixture yet, so this pins the rule at
-    /// the only place it can be reached today.
-    #[test]
-    fn mpeg_properties_belong_only_to_mpeg_audio() {
-        let dir = TempDir::new().unwrap();
-        let tags = read(&dir, "audio.mp3", &Mp3::tagged("A", "B")).expect("tags");
-        assert!(tags.properties.mpeg.is_some());
-        assert_eq!(MpegVersion::V1.label(), "MPEG-1");
-        assert_eq!(MpegLayer::Layer3.label(), "Layer 3");
-        assert_eq!(ChannelMode::Mono.label(), "Mono");
     }
 
     /// The first music file inside a folder supplies the folder's tags.
@@ -620,6 +574,25 @@ mod tests {
 
         let tags = folder_tags(&inner).expect("a folder speaks through its first track");
         assert_eq!(tags.artist.as_deref(), Some("First"));
+    }
+
+    /// A symlink row is read through to the track it points at — the size
+    /// gate included. The link itself is only as long as the path it holds,
+    /// which is under the gate, so the row read as untagged.
+    #[cfg(unix)]
+    #[test]
+    fn a_short_symlink_to_a_tagged_track_reads_the_track() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir(dir.path().join("lib")).unwrap();
+        Mp3::tagged("Linked", "Song").write(&dir.path().join("lib"), "a.mp3");
+        let link = dir.path().join("link.mp3");
+        std::os::unix::fs::symlink("lib/a.mp3", &link).unwrap();
+        forget_all();
+
+        let entry = crate::model::FileEntry::from_path(&link).unwrap();
+        assert!(entry.size < MIN_AUDIO_BYTES, "the link itself is tiny");
+        let tags = tags_of_entry(&entry).expect("the target's tags");
+        assert_eq!(tags.artist.as_deref(), Some("Linked"));
     }
 
     /// The read is shared process-wide, or a 10 000-file listing is 10 000

@@ -9,7 +9,7 @@
 //! difference nobody notices until two tags on one folder contradict each other.
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use super::cache::{MetaCache, Stamp};
 
@@ -36,6 +36,8 @@ pub(crate) fn first_inside<T>(
     let mut candidates: Vec<PathBuf> = std::fs::read_dir(dir)
         .ok()?
         .filter_map(Result::ok)
+        // A subfolder named `Live.mp3` is not a track.
+        .filter(|entry| entry.file_type().is_ok_and(|t| !t.is_dir()))
         .map(|entry| entry.path())
         .filter(|path| has_extension(path, extensions))
         .collect();
@@ -111,6 +113,40 @@ mod tests {
         assert!(!has_extension(Path::new("/a/b"), &["jpeg"]));
     }
 
+    /// `<FirstFileInFolder>` on a file row asks about the file's own folder,
+    /// so a flat listing asks the same folder once per row per keystroke. It
+    /// is cached on the folder's mtime like the other folder answers (P44):
+    /// with the mtime put back after a new file appears, the old answer
+    /// stands, and once the mtime moves the new one does (D130).
+    ///
+    /// Unix only for the fixture's sake: putting a folder's mtime back needs a
+    /// handle with write-attribute access, which `File::open` on Windows does
+    /// not ask for.
+    #[cfg(unix)]
+    #[test]
+    fn the_first_file_is_read_once_per_folder_mtime() {
+        let dir = TempDir::new().unwrap();
+        write(&dir, "b.txt", b"x");
+        forget_all();
+        assert_eq!(first_file(dir.path(), true).as_deref(), Some("b.txt"));
+
+        let folder = std::fs::File::open(dir.path()).unwrap();
+        let mtime = folder.metadata().unwrap().modified().unwrap();
+        write(&dir, "a.txt", b"x");
+        folder.set_modified(mtime).unwrap();
+        assert_eq!(
+            first_file(dir.path(), true).as_deref(),
+            Some("b.txt"),
+            "the folder was read again at the same mtime"
+        );
+        assert_eq!(first_file(dir.path(), false).as_deref(), Some("b"));
+
+        folder
+            .set_modified(mtime + std::time::Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(first_file(dir.path(), true).as_deref(), Some("a.txt"));
+    }
+
     #[test]
     fn an_empty_or_unreadable_folder_says_nothing() {
         let dir = TempDir::new().unwrap();
@@ -124,14 +160,10 @@ mod tests {
 
 // --- Folder contents, for the `<Dir…>` tags (M8) ------------------------------
 
-/// What a folder holds — the Folders tag group.
-///
-/// > *`<DirSize>` - Size of Files in Folder (Auto)*
-/// > *`<DirFiles>` - Number of Files in Folder*
-/// > *`<DirDirs>` - Number of Folders in Folder*
-///
-/// and the `S`-prefixed trio, which are the same three counted through
-/// subfolders.
+/// What a folder holds — the Folders tag group: `<DirSize>` (the size of the
+/// files in it), `<DirFiles>` (how many files) and `<DirDirs>` (how many
+/// folders), and the `S`-prefixed trio, which are the same three counted
+/// through subfolders.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DirStats {
     pub files: u64,
@@ -194,25 +226,39 @@ fn walk(dir: &Path, recursive: bool) -> Option<DirStats> {
     Some(out)
 }
 
-/// > *`<FirstFileInFolder>` - First file in folder*
+/// `<FirstFileInFolder>`: the name of the first file in `dir`.
 ///
 /// First **by name**, for the reason `first_inside` gives: `read_dir` order is
 /// whatever the filesystem feels like, and a folder has to rename to the same
 /// thing twice. Files only — a subfolder is not a file — and `with_extension`
-/// chooses between the two documented spellings.
+/// chooses between the tag's two spellings.
+///
+/// Cached on the folder's own stamp, like [`stats`] and with the same known
+/// limit (D130). On a file row `dir` is the file's own folder, so a flat
+/// listing asks one folder once per row per keystroke — ten thousand
+/// `read_dir`s of ten thousand names each, uncached.
 pub fn first_file(dir: &Path, with_extension: bool) -> Option<String> {
-    let mut names: Vec<String> = std::fs::read_dir(dir)
-        .ok()?
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().map(|t| !t.is_dir()).unwrap_or(false))
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect();
-    names.sort();
-    let first = names.into_iter().next()?;
+    let stamp = Stamp::stat(dir)?;
+    if !stamp.is_dir {
+        return None;
+    }
+    let first = FIRST
+        .get_or_init(Default::default)
+        .get_or_read(dir, stamp, || first_name(dir))?;
     if with_extension {
-        return Some(first);
+        return Some(first.to_string());
     }
     Some(crate::split_file_name(&first).0.to_owned())
+}
+
+fn first_name(dir: &Path) -> Option<Arc<str>> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_ok_and(|t| !t.is_dir()))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .min()
+        .map(Arc::from)
 }
 
 /// One cache per depth, both shared through [`super::cache::MetaCache`]: the
@@ -222,11 +268,19 @@ pub fn first_file(dir: &Path, with_extension: bool) -> Option<String> {
 static SHALLOW: OnceLock<MetaCache<Option<DirStats>>> = OnceLock::new();
 static DEEP: OnceLock<MetaCache<Option<DirStats>>> = OnceLock::new();
 
-/// Drops every cached count. Tests only: two tempdirs can reuse a path.
+/// Each folder's first file name, which both `<FirstFileInFolder>` spellings
+/// derive from.
+static FIRST: OnceLock<MetaCache<Option<Arc<str>>>> = OnceLock::new();
+
+/// Drops every cached count and name: F9's full refresh (D140), and tests,
+/// where two tempdirs can reuse a path.
 pub fn forget_all() {
     for cache in [&SHALLOW, &DEEP] {
         if let Some(cache) = cache.get() {
             cache.clear();
         }
+    }
+    if let Some(cache) = FIRST.get() {
+        cache.clear();
     }
 }

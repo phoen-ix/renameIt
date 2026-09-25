@@ -7,9 +7,9 @@
 //! description=This script will replace non English characters with a base …
 //! ```
 //!
-//! `language=` was how you chose between the scripting engines installed on the
-//! machine — *"To use another language you must enter its name on the first
-//! line"*. We run one language, so that line has nothing to select and is
+//! `language=` chose between the scripting engines installed on the machine,
+//! by naming one on the first line. We run one language, so that line has
+//! nothing to select and is
 //! dropped; `.koto` says it instead, and editors and the koto LSP get to work
 //! without being told (D96).
 //!

@@ -236,6 +236,7 @@ impl PresetStore {
         &self.dir
     }
 
+    #[cfg(any(test, feature = "testing"))]
     #[doc(hidden)]
     pub fn listings_so_far(&self) -> usize {
         self.listings.load(std::sync::atomic::Ordering::Relaxed)
@@ -402,6 +403,10 @@ impl PresetStore {
     }
 
     /// Renames both the file and the name inside it, so the two cannot drift.
+    ///
+    /// The new name gets a file no other preset holds — "save over the one
+    /// you loaded" is [`Self::save`]'s rule, and renaming `Foo` to `Bar` is
+    /// not a save over `Bar`, so it lands in `Bar (2).toml` beside it.
     pub fn rename(&self, path: &Path, new_name: &str) -> Result<PathBuf, PresetError> {
         self.must_be_ours(path)?;
         if new_name.trim().is_empty() {
@@ -409,46 +414,75 @@ impl PresetStore {
         }
         let (mut preset, _) = self.load(path)?;
         preset.name = new_name.to_owned();
-        let target = self.path_for(&preset)?;
+        let target = self.free_path(&preset.name, Some(path))?;
+
+        // The file this preset is already in, perhaps spelt in another case.
+        // Written in place, then renamed for the case: on a volume that
+        // ignores case the two spellings are one file, and the write-new,
+        // remove-old below would delete the preset it had just written.
+        if same_file_name(&target, path) {
+            self.save_as(&preset, path)?;
+            if target != path {
+                std::fs::rename(path, &target).map_err(|source| PresetError::Io {
+                    path: path.to_path_buf(),
+                    source,
+                })?;
+                self.forget_listing();
+            }
+            return Ok(target);
+        }
+
         self.save_as(&preset, &target)?;
         // Reported, not ignored: a locked or read-only old file would
         // otherwise leave *two* presets in the drawer under "rename
         // succeeded". The new file is already written by this point, and the
         // message says so, because "rename failed" alone would send the user
         // looking for a preset that is in fact there.
-        if target != path
-            && let Err(source) = std::fs::remove_file(path)
-        {
+        if let Err(source) = std::fs::remove_file(path) {
             return Err(removal_failed(path, &target, source));
         }
         Ok(target)
     }
 
+    /// Saves a copy called `<name> (copy)` — or `(copy 2)` and on, so a second
+    /// copy neither overwrites the first nor shares its name.
     pub fn duplicate(&self, path: &Path) -> Result<PathBuf, PresetError> {
         self.must_be_ours(path)?;
         let (mut preset, _) = self.load(path)?;
-        preset.name = format!("{} (copy)", preset.name);
-        self.save(&preset)
+        let taken: std::collections::HashSet<String> = self
+            .list()
+            .0
+            .iter()
+            .map(|entry| entry.name.to_lowercase())
+            .collect();
+        let original = preset.name.clone();
+        preset.name = std::iter::once(format!("{original} (copy)"))
+            .chain((2..).map(|n| format!("{original} (copy {n})")))
+            .find(|name| !taken.contains(&name.to_lowercase()))
+            .unwrap_or_default();
+        let target = self.free_path(&preset.name, None)?;
+        self.save_as(&preset, &target)?;
+        Ok(target)
     }
 
-    /// Copies an outside file in, keeping whatever it can.
+    /// Copies an outside file in, keeping whatever it can — beside any preset
+    /// of the same name, never over it.
     pub fn import(&self, from: &Path) -> Result<(PathBuf, ImportNotes), PresetError> {
         let (mut preset, notes) = self.load(from)?;
         if preset.name.trim().is_empty() {
             preset.name = stem_of(from);
         }
-        Ok((self.save(&preset)?, notes))
+        let target = self.free_path(&preset.name, None)?;
+        self.save_as(&preset, &target)?;
+        Ok((target, notes))
     }
 
     pub fn export(&self, preset: &Preset, to: &Path) -> Result<(), PresetError> {
         self.save_as(preset, to)
     }
 
-    /// The file this preset belongs in.
     /// Writes the six presets a fresh install starts with, and returns how
     /// many it wrote.
-    ///
-    /// Six default presets ship with the app.
     ///
     /// **D6**: written as our own TOML rather than carried in some positional
     /// binary format nobody else will ever write.
@@ -481,25 +515,62 @@ impl PresetStore {
         Ok(written)
     }
 
+    /// The file [`Self::save`] writes: the one already holding a preset of
+    /// this name — "save over the one you loaded" — or a free one.
     fn path_for(&self, preset: &Preset) -> Result<PathBuf, PresetError> {
-        let stem = file_stem_for(&preset.name);
-        let first = self.dir.join(format!("{stem}.toml"));
-        if !first.exists() {
-            return Ok(first);
-        }
-        // Ours already? Then this is a save over the preset we loaded.
-        if let Ok((existing, _)) = self.load(&first)
-            && existing.name.eq_ignore_ascii_case(&preset.name)
+        let first = format!("{}.toml", file_stem_for(&preset.name)).to_lowercase();
+        let existing = self
+            .file_names()
+            .into_iter()
+            .find(|name| name.to_string_lossy().to_lowercase() == first)
+            .map(|name| self.dir.join(name));
+        if let Some(existing) = existing
+            && let Ok((held, _)) = self.load(&existing)
+            && held.name.eq_ignore_ascii_case(&preset.name)
         {
-            return Ok(first);
+            return Ok(existing);
         }
-        for n in 2..1000 {
-            let candidate = self.dir.join(format!("{stem} ({n}).toml"));
-            if !candidate.exists() {
-                return Ok(candidate);
-            }
-        }
-        Ok(self.dir.join(format!("{stem} (999).toml")))
+        self.free_path(&preset.name, None)
+    }
+
+    /// A file for a preset called `name` that holds no other preset:
+    /// `<stem>.toml`, or the first free `<stem> (n).toml` after it.
+    ///
+    /// Taken means taken **ignoring case**, because the volume may: on
+    /// Windows and macOS `bar.toml` *is* `Bar.toml`, and treating them as two
+    /// there overwrites a preset. On a volume that tells them apart the cost
+    /// is a ` (2)` that was not strictly needed. `source`, the file being
+    /// renamed, never counts as taken.
+    fn free_path(&self, name: &str, source: Option<&Path>) -> Result<PathBuf, PresetError> {
+        let stem = file_stem_for(name);
+        let source = source.and_then(Path::file_name);
+        let taken: std::collections::HashSet<String> = self
+            .file_names()
+            .into_iter()
+            .filter(|file| Some(file.as_os_str()) != source)
+            .map(|file| file.to_string_lossy().to_lowercase())
+            .collect();
+        std::iter::once(format!("{stem}.toml"))
+            .chain((2..1000).map(|n| format!("{stem} ({n}).toml")))
+            .find(|candidate| !taken.contains(&candidate.to_lowercase()))
+            .map(|free| self.dir.join(free))
+            .ok_or_else(|| PresetError::Io {
+                path: self.dir.join(format!("{stem}.toml")),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "a thousand presets already share this name",
+                ),
+            })
+    }
+
+    /// Every file name in the folder; none for a folder not made yet.
+    fn file_names(&self) -> Vec<std::ffi::OsString> {
+        std::fs::read_dir(&self.dir)
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .collect()
     }
 
     /// A path handed in by a UI list is not automatically ours to delete.
@@ -509,6 +580,17 @@ impl PresetStore {
         } else {
             Err(PresetError::Outside(path.to_path_buf()))
         }
+    }
+}
+
+/// Whether two paths name the same file ignoring case — the one test that
+/// holds on a volume that ignores case and is harmless on one that does not.
+fn same_file_name(a: &Path, b: &Path) -> bool {
+    match (a.file_name(), b.file_name()) {
+        (Some(a), Some(b)) => {
+            a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
+        }
+        _ => false,
     }
 }
 
@@ -842,6 +924,120 @@ mod tests {
         assert_eq!(store.listings_so_far(), before + 2);
     }
 
+    /// A preset of another name, with a pipeline to tell it apart.
+    fn named(name: &str, steps: usize) -> Preset {
+        let mut preset = sample();
+        preset.name = name.to_owned();
+        preset.steps.truncate(steps);
+        preset
+    }
+
+    /// Every preset file in the folder, by file name.
+    fn files(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".toml"))
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Renaming onto a name another preset already has must not overwrite
+    /// it: "save over the one you loaded" is `save`'s rule, and a rename is
+    /// not a save over anything.
+    #[test]
+    fn renaming_onto_another_presets_name_keeps_both() {
+        let dir = TempDir::new().unwrap();
+        let store = PresetStore::new(dir.path());
+        let foo = store.save(&named("Foo", 2)).unwrap();
+        let bar = store.save(&named("Bar", 1)).unwrap();
+
+        let moved = store.rename(&foo, "Bar").unwrap();
+        assert_ne!(moved, bar, "the rename landed on the other preset's file");
+        assert_eq!(store.load(&bar).unwrap().0.steps.len(), 1, "Bar was lost");
+        assert_eq!(store.load(&moved).unwrap().0.steps.len(), 2);
+        assert!(!foo.exists());
+        assert_eq!(files(dir.path()), ["Bar (2).toml", "Bar.toml"]);
+    }
+
+    /// A rename that only changes the case of a name writes the file in
+    /// place. On a case-insensitive volume the new name *is* the old file, and
+    /// the write-then-remove a rename otherwise does deleted the one file it
+    /// had just written. The same test runs everywhere; on Windows and macOS
+    /// it is the one that matters.
+    #[test]
+    fn a_rename_that_only_changes_case_keeps_exactly_one_file() {
+        let dir = TempDir::new().unwrap();
+        let store = PresetStore::new(dir.path());
+        let path = store.save(&named("photo cleanup", 2)).unwrap();
+
+        let moved = store.rename(&path, "Photo Cleanup").unwrap();
+        assert_eq!(files(dir.path()), ["Photo Cleanup.toml"]);
+        let (back, _) = store.load(&moved).unwrap();
+        assert_eq!(back.name, "Photo Cleanup");
+        assert_eq!(back.steps.len(), 2);
+    }
+
+    /// And on a case-*sensitive* volume, a different preset may already hold
+    /// the case-changed file name. That one is not the file being renamed.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_case_change_onto_a_different_file_of_that_spelling_keeps_both() {
+        let dir = TempDir::new().unwrap();
+        let store = PresetStore::new(dir.path());
+        let lower = store.save(&named("foo", 2)).unwrap();
+        let upper = dir.path().join("FOO.toml");
+        std::fs::write(&upper, named("FOO", 1).to_toml().unwrap()).unwrap();
+
+        let moved = store.rename(&lower, "FOO").unwrap();
+        assert_ne!(moved, upper);
+        assert_eq!(store.load(&upper).unwrap().0.steps.len(), 1, "FOO was lost");
+        assert_eq!(store.load(&moved).unwrap().0.steps.len(), 2);
+        assert_eq!(files(dir.path()).len(), 2);
+    }
+
+    /// Duplicating twice must not overwrite the first copy, which the user
+    /// may have edited since.
+    #[test]
+    fn duplicating_again_never_overwrites_an_earlier_copy() {
+        let dir = TempDir::new().unwrap();
+        let store = PresetStore::new(dir.path());
+        let original = store.save(&named("X", 2)).unwrap();
+
+        let first = store.duplicate(&original).unwrap();
+        let mut edited = store.load(&first).unwrap().0;
+        edited.steps.truncate(1);
+        store.save_as(&edited, &first).unwrap();
+
+        let second = store.duplicate(&original).unwrap();
+        assert_ne!(second, first);
+        assert_eq!(store.load(&first).unwrap().0.steps.len(), 1, "edits lost");
+        assert_eq!(store.list().0.len(), 3);
+    }
+
+    /// Importing a colleague's preset whose name matches one of yours adds
+    /// theirs beside yours.
+    #[test]
+    fn importing_a_preset_of_a_name_you_have_keeps_yours() {
+        let dir = TempDir::new().unwrap();
+        let elsewhere = TempDir::new().unwrap();
+        let store = PresetStore::new(dir.path());
+        let mine = store.save(&named("Photo cleanup", 1)).unwrap();
+
+        let theirs = elsewhere.path().join("Photo cleanup.toml");
+        std::fs::write(&theirs, named("Photo cleanup", 2).to_toml().unwrap()).unwrap();
+        let (imported, _) = store.import(&theirs).unwrap();
+
+        assert_ne!(imported, mine);
+        assert_eq!(
+            store.load(&mine).unwrap().0.steps.len(),
+            1,
+            "yours was lost"
+        );
+        assert_eq!(store.load(&imported).unwrap().0.steps.len(), 2);
+    }
+
     #[test]
     fn duplicating_appends_copy_and_keeps_both() {
         let dir = TempDir::new().unwrap();
@@ -1027,9 +1223,8 @@ pub const DEFAULTS: &[(&str, &str)] = &[
 mod default_tests {
     use super::*;
 
-    /// > *"Six default presets ship with the app."*
-    ///
-    /// And every one of them has to actually load, which is the half a count
+    /// Six presets ship with the app, and every one of them has to actually
+    /// load, which is the half a count
     /// would not catch: these are hand-written TOML compiled into the binary,
     /// so a typo in one is a preset nobody can use and nothing else notices.
     #[test]
