@@ -1,29 +1,41 @@
 //! The date format mini-language.
 //!
-//! The date/time format codes, which follow VB6's `Format`
-//! reference. It has genuine oddities that a naive chrono mapping would get
-//! wrong:
+//! The format codes are the Visual Basic `Format` date codes, a small language
+//! with genuine oddities that a naive chrono mapping would get wrong:
 //!
 //! * **`m` after `h` or `Hh` means *minute*, not month.** That is the
 //!   difference between `10:05` and `10:18`. Separators and literal text in
 //!   between do not break it — the default
 //!   `Hh:Mm:Ss` would otherwise render the month.
-//! * `N` and `Nn` are *also* minutes. We match those two **case-sensitively**,
-//!   exactly as documented, so ordinary words survive: a
-//!   case-insensitive `n` turns the literal "Taken" into "Take18".
-//! * `\` escapes the next character, so any token letter can be written
-//!   literally. VB6 has this; nothing documents it.
+//! * `N` and `Nn` are *also* minutes. Those two are matched **case-sensitively**
+//!   so that a lower-case `n` stays a letter: a case-insensitive `n` turns the
+//!   literal "Taken" into "Take18". Every other code is case-insensitive, so a
+//!   word such as `Shot` still has codes in it (`S`, `h`) — a letter that is a
+//!   code needs a `\` in front of it to be literal.
+//! * `\` escapes the next character, so any code letter can be written
+//!   literally.
 //! * `y` is the **day of the year** (1–366), not the year.
-//! * `w` is the weekday with **Sunday = 1**.
+//! * `w` is the weekday with **Sunday = 1**, and `ww` the week of the calendar
+//!   year on the same footing: weeks start on Sunday, and the week holding
+//!   1 January is week 1 (1–54).
 //! * `Hh` and `Ss` are the zero-padded forms; `h` and `S` are not.
 //! * Longer tokens win: `mmmm` before `mmm` before `mm` before `m`.
 //!
 //! **D30:** named formats render fixed, sortable output rather than following
 //! the machine's regional settings. The same job file then produces the same
-//! filenames everywhere — and a date can never emit `/`, which is illegal in a
-//! filename on Windows.
+//! filenames everywhere — and a date can never emit `:` or `/`, which are
+//! illegal in a Windows filename, and `/` would move the file into a subfolder
+//! (D31). That holds for an escaped `\/`, `\:` or `\\` too: each renders as the
+//! character its unescaped separator does.
+//!
+//! **A wall clock, not an instant, is what gets rendered.** A file's own
+//! timestamps are instants and are read in the machine's zone first; an Exif
+//! date is already a wall clock with no zone, and goes straight to
+//! [`DateFormat::render_naive`]. Sending it through the zone and back had no
+//! answer for a time that zone skips, so a photograph taken in the hour a
+//! daylight-saving change removes lost its date.
 
-use chrono::{DateTime, Datelike, Local, Timelike};
+use chrono::{Datelike, Local, NaiveDateTime, Timelike};
 
 /// `yyyy-mm-dd Hh:Mm:Ss` — ISO 8601, and the most useful default because a
 /// listing sorts correctly by it.
@@ -43,11 +55,11 @@ enum Token {
     Dddd,
     /// Complete short date.
     Ddddd,
-    /// Complete long date.
+    /// Complete long date — the `Long Date` named format.
     Dddddd,
     /// Weekday number, Sunday = 1.
     W,
-    /// Week of year.
+    /// Week of the calendar year, Sunday-first, 1 January in week 1.
     Ww,
     M,
     Mm,
@@ -83,10 +95,6 @@ pub struct DateFormat {
     source: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("unknown date format {0:?}")]
-pub struct UnknownFormat(pub String);
-
 const MONTHS: [&str; 12] = [
     "January",
     "February",
@@ -114,6 +122,8 @@ const WEEKDAYS: [&str; 7] = [
 
 impl DateFormat {
     /// Compiles a format string, or resolves one of the named formats.
+    ///
+    /// Never fails: every character is either a code or literal text.
     pub fn parse(spec: &str) -> Self {
         if let Some(expanded) = named(spec) {
             let mut format = Self::compile(expanded);
@@ -121,12 +131,6 @@ impl DateFormat {
             return format;
         }
         Self::compile(spec)
-    }
-
-    /// The named formats, rendered as fixed sortable strings
-    /// (D30) instead of following the machine's regional settings.
-    pub fn named(spec: &str) -> Option<&'static str> {
-        named(spec)
     }
 
     fn compile(spec: &str) -> Self {
@@ -139,9 +143,16 @@ impl DateFormat {
         let mut after_hour = false;
 
         while i < chars.len() {
-            // A backslash escapes the next character into a literal.
+            // A backslash escapes the next character into a literal — except a
+            // separator, which renders as its unescaped self does (D30): an
+            // escaped `/` in a name is a subfolder move (D31), and an escaped
+            // `:` or `\` is a name Windows refuses.
             if chars[i] == '\\' && i + 1 < chars.len() {
-                let literal = Token::Literal(chars[i + 1].to_string());
+                let literal = match chars[i + 1] {
+                    '/' | '\\' => Token::DateSeparator,
+                    ':' => Token::TimeSeparator,
+                    c => Token::Literal(c.to_string()),
+                };
                 match (literal, tokens.last_mut()) {
                     (Token::Literal(text), Some(Token::Literal(previous))) => {
                         previous.push_str(&text)
@@ -175,15 +186,28 @@ impl DateFormat {
         &self.source
     }
 
-    pub fn render(&self, time: std::time::SystemTime) -> String {
-        let local: DateTime<Local> = time.into();
-        // VB6's rule: an hour token is 12-hour when the format also carries an
-        // AM/PM designator, which is the only thing that makes "Medium Time"
-        // read as a clock rather than a duration.
+    /// Renders an instant as the machine's wall clock shows it.
+    ///
+    /// `None` for an instant outside the calendar chrono can hold — some
+    /// hundreds of thousands of years out, which a filesystem storing 64-bit
+    /// seconds (tmpfs, btrfs, a network share) can still report. The unchecked
+    /// `SystemTime` conversion panics there, and one such file took the whole
+    /// preview down; a date tag answers *missing* instead.
+    pub fn render(&self, time: std::time::SystemTime) -> Option<String> {
+        let stamp = crate::effect::TimeStamp::from_system(time);
+        let local = crate::datetime::to_local(&Local, stamp)?;
+        Some(self.render_naive(local))
+    }
+
+    /// Renders a wall-clock reading as it stands, with no zone involved.
+    pub fn render_naive(&self, at: NaiveDateTime) -> String {
+        // An hour token is 12-hour when the format also carries an AM/PM
+        // designator, which is the only thing that makes "Medium Time" read as
+        // a clock rather than a duration.
         let twelve_hour = self.tokens.iter().any(|t| matches!(t, Token::AmPm { .. }));
         let mut out = String::with_capacity(self.source.len() + 8);
         for token in &self.tokens {
-            render_token(token, &local, twelve_hour, &mut out);
+            render_token(token, &at, twelve_hour, &mut out);
         }
         out
     }
@@ -209,8 +233,8 @@ fn next_token(chars: &[char], at: usize, after_hour: bool) -> (Token, usize) {
     let rest: String = chars[at..].iter().collect();
     let lower = rest.to_ascii_lowercase();
 
-    // Case-sensitive forms first: the documented forms distinguish `Hh` from `hh` only
-    // by documenting `Hh`, and `AM/PM` from `am/pm` by case.
+    // Case-sensitive forms first: `AM/PM` and `am/pm` differ only by case,
+    // and so do `N` and `n`.
     for (pattern, token) in [
         (
             "AM/PM",
@@ -247,8 +271,8 @@ fn next_token(chars: &[char], at: usize, after_hour: bool) -> (Token, usize) {
                 short: false,
             },
         ),
-        // Case-sensitive, as documented: a case-insensitive `n`
-        // would eat the letter out of every literal word.
+        // Case-sensitive: a case-insensitive `n` would eat the letter out of
+        // every literal word.
         ("Nn", Token::Nn),
         ("N", Token::N),
     ] {
@@ -293,7 +317,7 @@ fn next_token(chars: &[char], at: usize, after_hour: bool) -> (Token, usize) {
     }
 }
 
-fn render_token(token: &Token, at: &DateTime<Local>, twelve_hour: bool, out: &mut String) {
+fn render_token(token: &Token, at: &NaiveDateTime, twelve_hour: bool, out: &mut String) {
     use std::fmt::Write;
     let hour = if twelve_hour {
         let h = at.hour() % 12;
@@ -315,21 +339,30 @@ fn render_token(token: &Token, at: &DateTime<Local>, twelve_hour: bool, out: &mu
         Token::Ddddd => {
             let _ = write!(out, "{:04}-{:02}-{:02}", at.year(), at.month(), at.day());
         }
+        // `Long Date` (`dddd d mmmm yyyy`), spelled out: the composite tokens
+        // say what their named formats say, as `ddddd` does for `Short Date`.
         Token::Dddddd => {
             let _ = write!(
                 out,
-                "{} {:02} {}",
-                MONTHS[at.month0() as usize],
+                "{} {} {} {:04}",
+                WEEKDAYS[weekday_index(at)],
                 at.day(),
+                MONTHS[at.month0() as usize],
                 at.year()
             );
         }
-        // "1 for Sunday through 7 for Saturday"
+        // 1 for Sunday through 7 for Saturday.
         Token::W => {
             let _ = write!(out, "{}", weekday_index(at) + 1);
         }
+        // The week of the year `yyyy` prints, counted the way `w` counts days:
+        // Sunday-first, with the week holding 1 January as week 1. An ISO week
+        // belongs to the ISO week-year instead, which no code renders, so
+        // `yyyy-ww` filed 1 January 2021 as `2021-53`.
         Token::Ww => {
-            let _ = write!(out, "{}", at.iso_week().week());
+            let ordinal0 = i64::from(at.ordinal0());
+            let jan1 = (weekday_index(at) as i64 - ordinal0).rem_euclid(7);
+            let _ = write!(out, "{}", (ordinal0 + jan1) / 7 + 1);
         }
         Token::M => {
             let _ = write!(out, "{}", at.month());
@@ -342,7 +375,7 @@ fn render_token(token: &Token, at: &DateTime<Local>, twelve_hour: bool, out: &mu
         Token::Q => {
             let _ = write!(out, "{}", (at.month() - 1) / 3 + 1);
         }
-        // "Display the day of the year as a number (1 - 366)"
+        // The day of the year, 1–366.
         Token::Y => {
             let _ = write!(out, "{}", at.ordinal());
         }
@@ -405,16 +438,16 @@ fn render_token(token: &Token, at: &DateTime<Local>, twelve_hour: bool, out: &mu
             };
             out.push_str(text);
         }
-        // A colon is illegal in a Windows filename, so the time separator
-        // renders as a period — the one place D30's "fixed output" rule has to
-        // deviate from the documented character.
+        // A colon is illegal in a Windows filename and a slash is a subfolder
+        // move (D31), so the two separators render as a period and a hyphen
+        // (D30).
         Token::TimeSeparator => out.push('.'),
         Token::DateSeparator => out.push('-'),
     }
 }
 
 /// Sunday = 0, matching the `w` numbering.
-fn weekday_index(at: &DateTime<Local>) -> usize {
+fn weekday_index(at: &NaiveDateTime) -> usize {
     at.weekday().num_days_from_sunday() as usize
 }
 
@@ -423,26 +456,25 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
 
-    /// 1977-05-09 10:18:00 — the example timestamp, a Monday.
+    /// 1977-05-09 10:18:05 local time: every field distinct, and a Monday.
     fn sample() -> std::time::SystemTime {
         let local = Local.with_ymd_and_hms(1977, 5, 9, 10, 18, 5).unwrap();
         local.into()
     }
 
     fn render(spec: &str) -> String {
-        DateFormat::parse(spec).render(sample())
+        DateFormat::parse(spec).render(sample()).unwrap()
     }
 
-    /// "Dates & times are by default returned in the format yyyy-mm-dd Hh:Mm:Ss,
-    /// for example 1977-05-09 10:18:00."
+    /// The defaults are ISO 8601 order, with the time's colons as periods.
     #[test]
-    fn the_default_format_is_the_documented_one() {
+    fn the_default_formats_are_iso_order() {
         assert_eq!(render(DEFAULT_DATE), "1977-05-09");
         assert_eq!(render(DEFAULT_TIME), "10.18.05");
     }
 
-    /// The single nastiest rule: "If m immediately follows h or hh, the minute
-    /// rather than the month is displayed."
+    /// The single nastiest rule: an `m` that follows `h` or `Hh` is the minute,
+    /// not the month.
     #[test]
     fn m_after_an_hour_means_minute() {
         assert_eq!(render("Hh:mm"), "10.18");
@@ -461,7 +493,7 @@ mod tests {
         assert_eq!(render("Hh:Nn:Ss"), "10.18.05");
     }
 
-    /// "y — Display the day of the year as a number (1 - 366)."
+    /// `y` is the day of the year, 1–366.
     #[test]
     fn lowercase_y_is_the_day_of_the_year() {
         assert_eq!(render("y"), "129");
@@ -469,7 +501,7 @@ mod tests {
         assert_eq!(render("yyyy"), "1977");
     }
 
-    /// "w — Display the day of the week as a number (1 for Sunday …)"
+    /// `w` is the weekday as a number, 1 for Sunday.
     #[test]
     fn w_numbers_the_weekday_from_sunday() {
         // 1977-05-09 was a Monday.
@@ -506,8 +538,8 @@ mod tests {
 
         let afternoon: std::time::SystemTime =
             Local.with_ymd_and_hms(1977, 5, 9, 15, 0, 0).unwrap().into();
-        assert_eq!(DateFormat::parse("AM/PM").render(afternoon), "PM");
-        assert_eq!(DateFormat::parse("a/p").render(afternoon), "p");
+        assert_eq!(DateFormat::parse("AM/PM").render(afternoon).unwrap(), "PM");
+        assert_eq!(DateFormat::parse("a/p").render(afternoon).unwrap(), "p");
     }
 
     /// D30: no separator a filename cannot contain.
@@ -520,9 +552,9 @@ mod tests {
         assert_eq!(render("ddddd"), "1977-05-09");
     }
 
-    /// The two worked examples.
+    /// A named format, and codes mixed with literal text.
     #[test]
-    fn the_worked_examples_render() {
+    fn a_named_format_and_a_mixed_one_render() {
         assert_eq!(render("Short Date"), "1977-05-09");
         assert_eq!(render("dddd m mmmm"), "Monday 5 May");
     }
@@ -538,11 +570,20 @@ mod tests {
             "Medium Time",
             "Short Time",
         ] {
-            assert!(DateFormat::named(name).is_some(), "{name}");
-            assert!(DateFormat::named(&name.to_uppercase()).is_some(), "{name}");
+            assert!(named(name).is_some(), "{name}");
+            assert!(named(&name.to_uppercase()).is_some(), "{name}");
             assert!(!render(name).is_empty(), "{name}");
         }
-        assert!(DateFormat::named("Nonsense Date").is_none());
+        assert!(named("Nonsense Date").is_none());
+    }
+
+    /// Every code but `N` and the designators is case-insensitive, so a word
+    /// with code letters in it needs them escaped (the tag reference's
+    /// example).
+    #[test]
+    fn a_word_made_of_code_letters_needs_them_escaped() {
+        assert_eq!(render("Shot yyyy"), "510ot 1977");
+        assert_eq!(render("\\S\\hot yyyy"), "Shot 1977");
     }
 
     #[test]
@@ -550,6 +591,52 @@ mod tests {
         assert_eq!(render("Taken yyyy"), "Taken 1977");
         assert_eq!(render("[yyyy]"), "[1977]");
         assert_eq!(render(""), "");
+    }
+
+    fn render_on(y: i32, m: u32, d: u32, spec: &str) -> String {
+        let noon: std::time::SystemTime = Local.with_ymd_and_hms(y, m, d, 12, 0, 0).unwrap().into();
+        DateFormat::parse(spec).render(noon).unwrap()
+    }
+
+    /// `ww` is the week of the *calendar* year that `yyyy` prints: weeks start
+    /// on Sunday, like `w`, and the week holding 1 January is week 1. An ISO
+    /// week belongs to the ISO week-year, which no token renders, so `yyyy-ww`
+    /// filed New Year's Day after the whole of its own year.
+    #[test]
+    fn ww_is_the_week_of_the_calendar_year() {
+        // A Friday, which ISO puts in week 53 of 2020.
+        assert_eq!(render_on(2021, 1, 1, "yyyy-ww"), "2021-1");
+        // A Tuesday, which ISO puts in week 1 of 2026.
+        assert_eq!(render_on(2025, 12, 30, "yyyy-ww"), "2025-53");
+        // A leap year that starts on a Saturday reaches a 54th week.
+        assert_eq!(render_on(2000, 1, 1, "ww"), "1");
+        assert_eq!(render_on(2000, 1, 2, "ww"), "2", "the first Sunday");
+        assert_eq!(render_on(2000, 12, 31, "ww"), "54");
+        assert_eq!(render("ww"), "20", "1977-05-09");
+    }
+
+    /// D30 holds for an escaped separator too: `\/` and `\:` render as the
+    /// separators they spell, and `\\` as a hyphen, so no format can put a
+    /// path separator into a name and move the file into a folder.
+    #[test]
+    fn an_escaped_separator_still_renders_as_a_legal_character() {
+        assert_eq!(render("yyyy\\/mm"), "1977-05");
+        assert_eq!(render("mm\\/dd\\/yyyy"), "05-09-1977");
+        assert_eq!(render("Hh\\:Nn"), "10.18");
+        assert_eq!(render("yyyy\\\\mm"), "1977-05");
+        // Every other escape is still a literal.
+        assert_eq!(render("\\d\\a\\y d"), "day 9");
+    }
+
+    /// `dddddd` is the complete long date, so it says what `Long Date` says —
+    /// as `ddddd` does for `Short Date`.
+    #[test]
+    fn the_complete_date_tokens_match_their_named_formats() {
+        assert_eq!(render("dddddd"), render("Long Date"));
+        assert_eq!(render("dddddd"), "Monday 9 May 1977");
+        assert_eq!(render("ddddd"), render("Short Date"));
+        assert_eq!(render("ttttt"), render("Long Time"));
+        assert_eq!(render("c"), render("General Date"));
     }
 
     #[test]

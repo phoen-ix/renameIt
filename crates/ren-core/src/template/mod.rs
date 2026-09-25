@@ -4,13 +4,19 @@
 //! the user stops typing, not once per file — into literals and [`Tag`]s, and
 //! then rendered against one [`EvalCx`]. Compiling up front buys two things
 //! beyond speed: the editor can report a bad tag while it is being typed (D29),
-//! and the [`TagNeeds`] set tells the engine what this template will cost, so a
-//! template that never mentions `<Crc32>` never opens a file.
+//! and the template can say what it will cost ([`TagNeeds`]).
+//!
+//! **What keeps files closed is laziness, not the needs set.** The resolver
+//! works out a tag's value only when the template reaches that tag, so a
+//! template that never mentions `<Crc32>` never opens a file. The needs set is
+//! a declaration of the same fact, for a caller that wants to know in advance;
+//! today the GUI reads one bit of it (`CLIPBOARD`, to fetch the clipboard
+//! before a run).
 //!
 //! Rendering never fails. A tag whose value is not available — a filesystem
 //! with no creation time, an `<Ask>` nobody has answered yet — renders as
-//! nothing and is reported in [`Rendered::missing`], which is what the Format
-//! tab's *"Only rename if all tags are available"* checkbox reads.
+//! nothing and is reported in [`Rendered::missing`], which is what the "Only
+//! rename if all tags are available" checkbox in Run Settings reads.
 
 use std::path::Path;
 
@@ -21,7 +27,9 @@ use crate::model::split_file_name;
 use crate::ops::EvalCx;
 use crate::run::AskSpec;
 
+pub mod content;
 pub mod dates;
+mod exif_names;
 pub mod lexer;
 pub mod tag;
 
@@ -51,7 +59,8 @@ enum Node {
 pub struct TemplateError {
     #[source]
     pub error: TagError,
-    /// Byte range of the offending `<…>` — the editor underlines this.
+    /// Byte range of the offending `<…>`, for a caller that wants to point at
+    /// it. The editor shows the message, which quotes the tag.
     pub at: std::ops::Range<usize>,
 }
 
@@ -72,7 +81,8 @@ pub struct Rendered {
 }
 
 impl Rendered {
-    /// *"Only rename if all tags are available"* reads exactly this.
+    /// Whether every tag had a value — what "Only rename if all tags are
+    /// available" reads.
     pub fn available(&self) -> bool {
         self.missing.is_empty()
     }
@@ -109,21 +119,6 @@ impl Template {
         })
     }
 
-    /// A template that is nothing but the text it was given.
-    pub fn literal(text: impl Into<String>) -> Self {
-        let source = text.into();
-        let nodes = if source.is_empty() {
-            Vec::new()
-        } else {
-            vec![Node::Literal(source.clone())]
-        };
-        Self {
-            source,
-            nodes,
-            needs: TagNeeds::NONE,
-        }
-    }
-
     pub fn source(&self) -> &str {
         &self.source
     }
@@ -147,7 +142,7 @@ impl Template {
 
     /// The whole template as fixed text, when it has no tags at all.
     ///
-    /// The overwhelmingly common case for a field like Add's *"Insert:"*, and
+    /// The overwhelmingly common case for a field like Add's insert box, and
     /// worth a borrow: rendering runs once per file per keystroke.
     pub fn literal_text(&self) -> Option<&str> {
         match self.nodes.as_slice() {
@@ -350,9 +345,9 @@ impl<'a> Resolver<'a> {
             F::Year => tags.year.clone(),
             F::Comment => tags.comment.clone(),
             F::Genre => tags.genre.clone(),
-            // *"Track Nr., zero-padded"*. Anything lofty handed over that is
-            // not a number renders as written rather than being padded to a
-            // width it has no digits for.
+            // The track number, zero-padded to two digits. Anything lofty
+            // handed over that is not a number renders as written rather than
+            // being padded to a width it has no digits for.
             F::Track => match tags.track_number() {
                 Some(n) => Some(format!("{n:02}")),
                 None => tags.track.clone(),
@@ -361,7 +356,7 @@ impl<'a> Resolver<'a> {
             F::Length => properties.duration.map(|d| long_duration(d.as_secs())),
             F::LengthShort => properties.duration.map(|d| short_duration(d.as_secs())),
             F::Bitrate => properties.bitrate_kbps.map(|b| b.to_string()),
-            // *"Stereo or Mono"*.
+            // Two channels or more is stereo.
             F::Stereo => properties
                 .channels
                 .map(|c| if c > 1 { "Stereo" } else { "Mono" }.to_owned()),
@@ -372,7 +367,8 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    /// The file name as the pipeline has it so far — *"Current Filename"*.
+    /// The file name as the pipeline has it so far, which an earlier step may
+    /// already have changed.
     fn current(&self) -> &str {
         self.cx.current
     }
@@ -403,7 +399,25 @@ impl<'a> Resolver<'a> {
             Tag::Size => Some(auto_size(self.cx.entry.size)),
             Tag::SizeBytes { pad } => Some(zero_pad(&self.cx.entry.size.to_string(), *pad)),
 
-            Tag::Stamp { source, format } => self.timestamp(*source).map(|at| format.render(at)),
+            Tag::Stamp { source, format } => {
+                let entry = self.cx.entry;
+                let instant = match source {
+                    TimeSource::Modified => entry.modified,
+                    TimeSource::Created => entry.created,
+                    TimeSource::Accessed => entry.accessed,
+                    TimeSource::Now => Some(self.cx.run.now),
+                    // The only source that opens the file — cached, and on a
+                    // folder it peeks inside for the first image, exactly as
+                    // Set Date does. Exif is a wall clock with no zone, so it
+                    // is rendered as it stands: sent through the machine's zone
+                    // and back, a time that zone skips had no answer at all.
+                    TimeSource::Exif => {
+                        return crate::meta::exif::date_of_entry(entry)
+                            .map(|at| format.render_naive(at));
+                    }
+                };
+                format.render(instant?)
+            }
 
             Tag::Counter => Some(self.cx.counter_text()),
             Tag::NumFiles => Some(self.cx.run.num_files.to_string()),
@@ -419,18 +433,17 @@ impl<'a> Resolver<'a> {
             Tag::Ask(slot) => self.cx.run.answers.ask(*slot).map(str::to_owned),
             Tag::Clipboard => self.cx.run.answers.clipboard.clone(),
 
-            Tag::Crc32 => crc32(&self.cx.entry.path),
-            Tag::DetectedExt => detected_extension(&self.cx.entry.path),
+            Tag::Crc32 => content::crc32_of_entry(self.cx.entry),
+            Tag::DetectedExt => content::detected_extension_of_entry(self.cx.entry),
 
             Tag::Audio(field) => self.audio_field(*field).map(|v| safe(&v)),
             Tag::Id3(name) => self
                 .audio_tags()
                 .and_then(|tags| tags.extended(name).map(safe)),
             Tag::Exif(name) => {
-                // A folder peeks inside, exactly as `<ExifDate>` does — the
-                // "This also works on folders" is written about the
-                // date, but nothing in it is specific to the date, and a folder
-                // that answers one Exif tag and not another is inexplicable.
+                // A folder peeks inside, exactly as `<ExifDate>` does: nothing
+                // about that peek is specific to the date, and a folder that
+                // answers one Exif tag and not another is inexplicable.
                 let entry = self.cx.entry;
                 if entry.is_dir {
                     crate::meta::exif::folder_field_of_entry(entry, name).map(|v| safe(&v))
@@ -530,27 +543,6 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    fn timestamp(&self, source: TimeSource) -> Option<std::time::SystemTime> {
-        match source {
-            TimeSource::Modified => self.cx.entry.modified,
-            TimeSource::Created => self.cx.entry.created,
-            TimeSource::Accessed => self.cx.entry.accessed,
-            TimeSource::Now => Some(self.cx.run.now),
-            // The only source that opens the file — cached, and on a folder it
-            // peeks inside for the first image, exactly as Set Date does.
-            TimeSource::Exif => {
-                let entry = self.cx.entry;
-                let found = crate::meta::exif::date_of_entry(entry)?;
-                // Exif is a wall clock with no zone, and `DateFormat::render`
-                // takes an instant — so it goes back through the same local
-                // reading `<Date>` uses, or the two would disagree by an offset.
-                crate::datetime::localise(&chrono::Local, found)
-                    .ok()
-                    .and_then(|stamp| stamp.to_system())
-            }
-        }
-    }
-
     /// A random value that is stable for (seed, file, tag position), so the
     /// preview and the rename that follows it agree (P16).
     fn random(&self, position: usize) -> u64 {
@@ -560,10 +552,12 @@ impl<'a> Resolver<'a> {
         key
     }
 
-    /// *"Limit filename length to # chars"* / *"…path and filename…"*.
-    ///
-    /// Applied to the text this template produced, once, at the end — which is
-    /// the only point at which the length is known.
+    /// `<FileMax-#>` and `<PathMax-#>` (P25): cut the text *this template*
+    /// produced, counting characters, once, at the end — the only length the
+    /// tag can know. `<PathMax>` also counts the folder the file is in and a
+    /// separator. Neither sees what the template did not produce: the
+    /// extension a name-scoped step keeps, or the rest of the name around a
+    /// partial field such as Add's insert.
     fn apply_limits(&self, text: &mut String) {
         if let Some(max) = self.file_max {
             truncate_chars(text, max);
@@ -641,8 +635,7 @@ fn slice(text: &str, from: usize, to: Option<usize>, backwards: bool) -> String 
 
 /// The three `<FLetter…>` variants.
 ///
-/// Only the labels are given — *"First letter in name"*, *"incl.
-/// numbers"*, *"incl. numbers subst."* — so this is our reading (P28): the
+/// Our reading of the three (P28): the
 /// plain form yields nothing for a name that does not start with a letter,
 /// `N1` accepts a digit as itself, and `N2` folds every digit onto `#`, which
 /// is the convention every music library uses for its numeric shelf.
@@ -662,7 +655,7 @@ fn first_letter(stem: &str, mode: LetterMode) -> Option<String> {
     }
 }
 
-/// *"N:th parent folder name (set # to 1-9)"*, where 1 is the folder the file
+/// The name of the `level`-th folder up (1–9), where 1 is the folder the file
 /// is in.
 fn parent_name(path: &Path, level: usize) -> Option<String> {
     let mut at = path.parent()?;
@@ -673,7 +666,7 @@ fn parent_name(path: &Path, level: usize) -> Option<String> {
         .map(|name| name.to_string_lossy().into_owned())
 }
 
-/// *"File size (Auto)"* — the largest binary unit that keeps the number at or
+/// `<Size>` — the largest binary unit that keeps the number at or
 /// above 1, with one decimal (P29). Fixed rather than locale-dependent, for the
 /// same reason dates are (D30).
 fn auto_size(bytes: u64) -> String {
@@ -718,7 +711,7 @@ fn safe(value: &str) -> String {
     value.replace(['/', '\\'], "-")
 }
 
-/// `<Length>` — *"Long"*.
+/// `<Length>` — `h:mm:ss`.
 fn long_duration(seconds: u64) -> String {
     format!(
         "{}:{:02}:{:02}",
@@ -728,34 +721,9 @@ fn long_duration(seconds: u64) -> String {
     )
 }
 
-/// `<LengthS>` — *"Short"*.
+/// `<LengthS>` — `m:ss`, the minutes running past 59.
 fn short_duration(seconds: u64) -> String {
     format!("{}:{:02}", seconds / 60, seconds % 60)
-}
-
-/// `<Crc32>` — eight uppercase hex digits, as VB6's `Hex$` produced.
-fn crc32(path: &Path) -> Option<String> {
-    use std::io::Read;
-
-    let mut file = std::fs::File::open(path).ok()?;
-    let mut hasher = crc32fast::Hasher::new();
-    let mut buffer = vec![0u8; 64 * 1024];
-    loop {
-        match file.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(read) => hasher.update(&buffer[..read]),
-            Err(_) => return None,
-        }
-    }
-    Some(format!("{:08X}", hasher.finalize()))
-}
-
-/// `<DetectedExt>` — the extension the file's *content* says it should have.
-fn detected_extension(path: &Path) -> Option<String> {
-    infer::get_from_path(path)
-        .ok()
-        .flatten()
-        .map(|kind| kind.extension().to_owned())
 }
 
 /// Truncates from the end, counting characters.
@@ -838,7 +806,7 @@ mod safety_tests {
     /// that is not a number is left as it is written rather than padded to a
     /// width it has no digits for.
     #[test]
-    fn track_padding_follows_the_manual() {
+    fn track_pads_to_two_digits_and_trackn_does_not() {
         let dir = TempDir::new().unwrap();
         // A non-numeric track does not survive lofty's TRCK parse, so both
         // tags are *missing* for it — the file is left alone rather than
@@ -864,7 +832,7 @@ mod safety_tests {
     }
 
     /// A tag the file cannot answer is *missing*, which is what lets
-    /// "only rename if all tags are available" leave the file alone (P32) —
+    /// "Only rename if all tags are available" leave the file alone (P32) —
     /// rather than rendering nothing and colliding every untagged track into
     /// one name.
     #[test]
@@ -879,9 +847,9 @@ mod safety_tests {
         assert_eq!(rendered.missing, ["<Artist>", "<Title>"]);
     }
 
-    /// Reading is allowed from the parallel pass, but only for a template that
-    /// asks for it — the bit is what stops a rename with no music tags in it
-    /// opening ten thousand files.
+    /// A template that reads files says so. The bit is a declaration: what
+    /// keeps a rename with no music tags from opening ten thousand files is
+    /// that the resolver only reads for a tag it reaches.
     #[test]
     fn a_template_with_music_tags_declares_that_it_opens_files() {
         let plain = Template::compile("<Name>-<Counter>").unwrap();
@@ -909,7 +877,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    /// 1977-05-09 10:18:05 UTC, the worked example timestamp.
+    /// 1977-05-09 10:18:05 UTC: every field distinct, and a Monday.
     fn stamp() -> SystemTime {
         UNIX_EPOCH + Duration::from_secs(231_934_685)
     }
@@ -938,18 +906,17 @@ mod tests {
         assert_eq!(text("", "a.txt"), "");
     }
 
-    /// "<Name> - Current Filename", "<Ext> - Current Extension",
-    /// "<FullName> - Current Full Filename"
+    /// The name as the pipeline has it, split at the last period.
     #[test]
-    fn the_three_name_tags_render_the_documented_pieces() {
+    fn the_three_name_tags_split_at_the_last_period() {
         assert_eq!(text("<Name>", "song.mp3"), "song");
         assert_eq!(text("<Ext>", "song.mp3"), "mp3");
         assert_eq!(text("<FullName>", "song.mp3"), "song.mp3");
     }
 
-    /// the Free Format worked example: "<PARENT>_<FULLNAME>".
+    /// Tags are case-insensitive, and literal text between them stays put.
     #[test]
-    fn the_free_format_example_renders() {
+    fn a_parent_and_name_template_renders() {
         assert_eq!(text("<PARENT>_<FULLNAME>", "0001.jpg"), "rock_0001.jpg");
     }
 
@@ -970,8 +937,8 @@ mod tests {
         assert_eq!(text("<Left-2>", "ÜÖÄ.txt"), "ÜÖ");
     }
 
-    /// P15's zero-based positions, applied to the tags: "<Mid-#> - Chars from
-    /// pos # to end".
+    /// P15's zero-based positions, applied to the tags: `<Mid-#>` runs from a
+    /// position to the end.
     #[test]
     fn mid_runs_from_a_position_to_the_end_or_to_another_position() {
         assert_eq!(text("<Mid-2>", "abcdef.txt"), "cdef");
@@ -980,7 +947,7 @@ mod tests {
         assert_eq!(text("<Mid-99>", "abcdef.txt"), "");
     }
 
-    /// "counting backwards" — position 0 is the very end, as everywhere else in
+    /// Counting backwards, position 0 is the very end, as everywhere else in
     /// the app.
     #[test]
     fn midrev_counts_from_the_end() {
@@ -1004,7 +971,7 @@ mod tests {
         assert_eq!(text("<FLetterN2>", "7abc.txt"), "#");
     }
 
-    /// "N:th parent folder name (set # to 1-9)"
+    /// `<Parent-#>` walks up one folder per step, 1 to 9.
     #[test]
     fn parent_walks_up_the_path() {
         let e = entry("/music/rock/live/song.mp3");
@@ -1031,7 +998,9 @@ mod tests {
         let e = entry("/music/rock/song.mp3");
         assert_eq!(
             render("<Date>", &e).text,
-            dates::DateFormat::parse(dates::DEFAULT_DATE).render(stamp())
+            dates::DateFormat::parse(dates::DEFAULT_DATE)
+                .render(stamp())
+                .unwrap()
         );
         // Nothing set the created time, so it is unavailable rather than wrong.
         assert_eq!(render("<CDate>", &e).missing, ["<CDate>"]);
@@ -1046,7 +1015,9 @@ mod tests {
             .render(&EvalCx::new(&e, 0, 1, &run));
         assert_eq!(
             out.text,
-            dates::DateFormat::parse(dates::DEFAULT_DATE).render(run.now)
+            dates::DateFormat::parse(dates::DEFAULT_DATE)
+                .render(run.now)
+                .unwrap()
         );
     }
 
@@ -1101,7 +1072,7 @@ mod tests {
         assert!(Template::compile("<Name>").unwrap().asks().is_empty());
     }
 
-    /// the worked Parts example, end to end through the template.
+    /// Parts, end to end through the template.
     #[test]
     fn the_parts_example_rearranges_the_name() {
         let e = FileEntry::synthetic("/music/01. Metallica (S&M) Nothing Else Matters.mp3");
@@ -1190,7 +1161,7 @@ mod tests {
         }
     }
 
-    /// "<FileMax-#> - Limit filename length to # chars"
+    /// P25: the limit cuts what the template produced.
     #[test]
     fn the_length_limits_truncate_what_the_template_produced() {
         assert_eq!(text("<Name><FileMax-3>", "abcdef.txt"), "abc");
@@ -1237,6 +1208,80 @@ mod tests {
         let e = FileEntry::synthetic("/nowhere/at/all.bin");
         assert!(!render("<Crc32>", &e).available());
         assert!(!render("<DetectedExt>", &e).available());
+    }
+
+    /// A named pipe in the listing is a row like any other, and `open(2)` on
+    /// one blocks until a writer appears — so reading it wedged the preview
+    /// worker for good. Only a regular file is read.
+    #[cfg(unix)]
+    #[test]
+    fn crc32_and_detected_ext_do_not_open_a_named_pipe() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pipe");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("mkfifo runs");
+        assert!(made.success(), "mkfifo failed");
+        let e = FileEntry::from_path(&fifo).unwrap();
+
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let crc = render("<Crc32>", &e).missing;
+            let ext = render("<DetectedExt>", &e).missing;
+            let _ = done.send((crc, ext));
+        });
+        let (crc, ext) = finished
+            .recv_timeout(Duration::from_secs(10))
+            .expect("rendering a named pipe hung");
+        assert_eq!(crc, ["<Crc32>"]);
+        assert_eq!(ext, ["<DetectedExt>"]);
+    }
+
+    /// P44: the two content readers are cached on the listing's stamp, like
+    /// every other reader, so a keystroke does not re-hash a folder of videos.
+    /// A file rewritten behind the listing's back keeps its answer until the
+    /// listing is refreshed (D140).
+    #[test]
+    fn crc32_and_detected_ext_are_read_once_per_listed_stamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data.bin");
+        std::fs::write(&path, b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR").unwrap();
+        let e = FileEntry::from_path(&path).unwrap();
+        let first = render("<Crc32> <DetectedExt>", &e).text;
+        assert!(first.ends_with(" png"), "{first}");
+
+        // Same length, different bytes: a GIF now.
+        std::fs::write(&path, b"GIF89a\0\0\0\0\0\0\0\0\0\0").unwrap();
+        assert_eq!(
+            render("<Crc32> <DetectedExt>", &e).text,
+            first,
+            "the same listed stamp answers from the cache"
+        );
+
+        // A new stamp — what a relist sees after the file changed — reads again.
+        let mut relisted = FileEntry::from_path(&path).unwrap();
+        relisted.modified = Some(stamp());
+        let second = render("<Crc32> <DetectedExt>", &relisted).text;
+        assert_ne!(second, first);
+        assert!(second.ends_with(" gif"), "{second}");
+    }
+
+    /// A filesystem can hand back a modified time far outside what chrono
+    /// represents (tmpfs and btrfs keep 64-bit seconds). The date tags answer
+    /// *missing* for it rather than panicking the whole pass.
+    #[test]
+    fn a_timestamp_beyond_the_calendar_is_missing_rather_than_a_panic() {
+        // Unrepresentable as a `SystemTime` on some platforms (Windows stops
+        // in the year 60056), in which case there is nothing to test.
+        let Some(far) = UNIX_EPOCH.checked_add(Duration::from_secs(100_000_000_000_000)) else {
+            return;
+        };
+        let mut e = entry("/music/rock/song.mp3");
+        e.modified = Some(far);
+        let out = render("<Name> <Date> <Time> <Date-yyyy>", &e);
+        assert_eq!(out.text, "song   ");
+        assert_eq!(out.missing, ["<Date>", "<Time>", "<Date-yyyy>"]);
     }
 
     #[test]
@@ -1288,8 +1333,7 @@ mod tests {
         assert_eq!(back.insert.as_str(), "<Counter>. <Name>");
     }
 
-    /// Tags read the name as the pipeline has it, not as it was on disk —
-    /// "<Name> - Current Filename".
+    /// Tags read the name as the pipeline has it, not as it was on disk.
     #[test]
     fn tags_see_the_name_the_earlier_steps_produced() {
         let e = entry("/music/rock/original.mp3");

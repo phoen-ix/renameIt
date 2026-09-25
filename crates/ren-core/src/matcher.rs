@@ -1,9 +1,9 @@
 //! The three ways a user can describe a piece of text.
 //!
-//! *"If you only enter a normal string
-//! (eg "hello") then files that contain this string are matched. You can also
-//! enter a wildcard string (eg "hello\*") for more advanced matches"* — plus a
-//! Regular Expression checkbox that *"disables the ordinary wildcards"*.
+//! A plain string (`hello`) matches wherever it occurs. A string with a
+//! wildcard in it (`hello*`) is read as a wildcard pattern instead — the
+//! metacharacter is what switches modes. And a regular expression is always an
+//! explicit choice, a checkbox, since it gives `*` and `?` different meanings.
 //!
 //! The include filter and the pre-processor's advanced filter both need this,
 //! and Replace's find box is the same three modes again.
@@ -62,11 +62,11 @@ impl MatchSpec {
     /// Compiles with **filter** semantics, where a wildcard string is a mask
     /// over the whole subject rather than a search.
     ///
-    /// The include filter is the one place this differs. `hello*` is the
-    /// example of a "more advanced match" than the plain string `hello` —
-    /// which is only true if the wildcard form is anchored. A plain
-    /// string still means *"files that contain this string"*, and a regex is
-    /// still a search, since the user has `^` and `$` to hand.
+    /// The include filter and the listing's pattern box (P24) are the two
+    /// places this differs (P19). There `hello*` is only a sharper tool than
+    /// the plain string `hello` if the wildcard form is anchored. A plain
+    /// string still means "contains this", and a regex is still a search,
+    /// since the user has `^` and `$` to hand.
     pub fn compile_for_filter(&self, case_sensitive: bool) -> Result<Matcher, RegexError> {
         self.compile_with(case_sensitive, true)
     }

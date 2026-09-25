@@ -1,4 +1,4 @@
-//! The counter — a global object, not an operation.
+//! The counter — run-wide settings, not an operation.
 //!
 //! The counter drives both the Add Counter operation
 //! and the `<Counter>` tag, which is why it lives here rather than in `ops/`.
@@ -13,27 +13,28 @@ use crate::model::FileEntry;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CounterSetup {
-    /// *"The counter will start at this value. Negative values are allowed."*
+    /// The first value. May be negative.
     pub start: i64,
-    /// *"The counter will increase or decrease with this value for each file."*
+    /// Added for each file; negative counts down.
     pub step: i64,
-    /// *"The count number will be padded with zeros to attain the number of
-    /// digits specified here."* 0 means no padding.
+    /// Zero-pad to this many digits. 0 means no padding.
     pub pad: usize,
-    /// *"Automatically pad the count number with zeros to ensure that all end
-    /// up the same length."*
+    /// Pad to the width of the longest value in the run instead, so every
+    /// name comes out the same length and sorts correctly.
     pub auto_pad: bool,
-    /// *"the start value is updated after each rename operation"* — persisted
-    /// by the caller, since the engine does not own settings storage.
+    /// Carry on from where the last run stopped: the start value is updated
+    /// after each rename — persisted by the caller, since the engine does not
+    /// own settings storage.
     pub running: bool,
-    /// *"Resets the counter to the start value if the folder name of the
-    /// renamed file is different from the previous file's."*
+    /// Back to the start whenever a file is in a different folder from the
+    /// one before it.
     pub reset_each_folder: bool,
-    /// *"resets when the base name changes […] the filename without any
-    /// numbers."*
+    /// Back to the start whenever the base name — the name with its digits
+    /// removed — differs from the one before it.
     pub reset_on_base_name: bool,
-    /// *"The counter will reset to the start value once the counter is equal or
-    /// passed this number."*
+    /// The last value the counter may produce (the lowest, counting down).
+    /// The next file goes back to the start, whether the step lands on the
+    /// limit or would jump past it.
     pub reset_at: Option<i64>,
 }
 
@@ -55,10 +56,8 @@ impl Default for CounterSetup {
 }
 
 impl CounterSetup {
-    /// The counter value for every entry, in listing order.
-    ///
-    /// *"The first file will get the initial number and then this number is
-    /// increased for each file."*
+    /// The counter value for every entry, in listing order: the first file gets
+    /// the start value, and each file after it one step more.
     pub fn sequence(&self, entries: &[FileEntry]) -> Vec<i64> {
         let mut values = Vec::with_capacity(entries.len());
         let mut current = self.start;
@@ -92,15 +91,20 @@ impl CounterSetup {
     ///
     /// Extracted so the sequence and [`RunContext::next_start`] cannot disagree
     /// — and they did. `next_start` used to be a bare `last + step`, which
-    /// ignores *"will reset to the start value once the counter is equal or
-    /// passed this number"* entirely, so a **running** counter with a Reset at
-    /// stored a value past the limit and the next run began outside its own
-    /// range instead of back at the start.
+    /// ignored Reset at entirely, so a **running** counter with one stored a
+    /// value past the limit and the next run began outside its own range
+    /// instead of back at the start.
+    ///
+    /// The limit is a ceiling (a floor, counting down), not a value the step
+    /// has to hit: with start 1, step 4 and Reset at 10 the sequence is
+    /// 1, 5, 9, 1 — never 13.
     pub fn advance(&self, current: i64) -> i64 {
+        let next = current.saturating_add(self.step);
         match self.reset_at {
-            // The limit is the last value *used*, not the next one produced.
-            Some(limit) if passed(current, limit, self.step) => self.start,
-            _ => current.saturating_add(self.step),
+            Some(limit) if passed(current, limit, self.step) || beyond(next, limit, self.step) => {
+                self.start
+            }
+            _ => next,
         }
     }
 
@@ -129,7 +133,17 @@ fn passed(value: i64, limit: i64, step: i64) -> bool {
     }
 }
 
-/// *"The base filename is simply the filename without any numbers."*
+/// Whether `value` is strictly past the limit — a value the counter must not
+/// produce.
+fn beyond(value: i64, limit: i64, step: i64) -> bool {
+    if step < 0 {
+        value < limit
+    } else {
+        value > limit
+    }
+}
+
+/// The base name the reset compares: the file name with its digits removed.
 fn base_name(file_name: &str) -> String {
     file_name.chars().filter(|c| !c.is_ascii_digit()).collect()
 }
@@ -168,8 +182,6 @@ mod tests {
             .collect()
     }
 
-    /// "The first file will get the initial number and then this number is
-    /// increased for each file."
     #[test]
     fn the_sequence_starts_at_the_start_value_and_steps() {
         let setup = CounterSetup::default();
@@ -200,7 +212,6 @@ mod tests {
         );
     }
 
-    /// "Negative values are allowed."
     #[test]
     fn a_negative_start_value_is_allowed() {
         let setup = CounterSetup {
@@ -213,8 +224,6 @@ mod tests {
         );
     }
 
-    /// "Resets the counter to the start value if the folder name of the renamed
-    /// file is different from the previous file's."
     #[test]
     fn reset_each_folder_restarts_when_the_folder_changes() {
         let setup = CounterSetup {
@@ -232,8 +241,8 @@ mod tests {
         assert_eq!(setup.sequence(&files), vec![1, 2, 3]);
     }
 
-    /// "resets when the base name changes […] The base filename is simply the
-    /// filename without any numbers."
+    /// The base name is the name without its digits, so numbering within
+    /// one series does not reset it.
     #[test]
     fn reset_on_base_name_change_ignores_the_numbers_in_the_name() {
         let setup = CounterSetup {
@@ -251,9 +260,7 @@ mod tests {
         assert_eq!(setup.sequence(&files), vec![1, 2, 3, 1, 2]);
     }
 
-    /// "The counter will reset to the start value once the counter is equal or
-    /// passed this number", and that value "will be the last number in the
-    /// sequence".
+    /// The limit is the last number in the sequence.
     #[test]
     fn reset_at_makes_that_value_the_last_in_the_sequence() {
         let setup = CounterSetup {
@@ -276,8 +283,33 @@ mod tests {
         assert_eq!(setup.sequence(&files), vec![3, 2, 1, 3, 2]);
     }
 
-    /// "Automatically pad the count number with zeros to ensure that all end up
-    /// the same length."
+    /// A step that jumps over the limit resets instead of producing a value
+    /// past it: the limit is a ceiling (a floor, counting down), whether or
+    /// not the step lands on it exactly.
+    #[test]
+    fn reset_at_never_produces_a_value_past_the_limit() {
+        let files = in_one_folder(&["a", "b", "c", "d", "e", "f"]);
+        let up = CounterSetup {
+            start: 1,
+            step: 4,
+            reset_at: Some(10),
+            ..Default::default()
+        };
+        assert_eq!(up.sequence(&files), vec![1, 5, 9, 1, 5, 9]);
+
+        let down = CounterSetup {
+            start: 10,
+            step: -4,
+            reset_at: Some(1),
+            ..Default::default()
+        };
+        assert_eq!(down.sequence(&files), vec![10, 6, 2, 10, 6, 2]);
+
+        // The running counter's next start agrees with the sequence.
+        assert_eq!(up.advance(9), 1);
+        assert_eq!(down.advance(2), 10);
+    }
+
     #[test]
     fn auto_padding_takes_its_width_from_the_longest_value() {
         let setup = CounterSetup::default();
@@ -291,8 +323,7 @@ mod tests {
         assert_eq!(setup.width_for(&setup.sequence(&hundred)), 3);
     }
 
-    /// "3 digits would result in 001, 010 and 100. Set zero padding to 0 if you
-    /// don't want any zeros."
+    /// Three digits give 001, 010 and 100; zero means no padding at all.
     #[test]
     fn a_fixed_width_overrides_the_automatic_one() {
         let setup = CounterSetup {

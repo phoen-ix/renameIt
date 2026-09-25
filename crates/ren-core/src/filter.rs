@@ -1,18 +1,18 @@
-//! The include filter: deciding whether a file takes part at all.
+//! The include filter: deciding whether a file takes part in a step at all.
 //!
-//! *"The include filter tests each
-//! filename before renaming, to determine if it is to be renamed or not."*
+//! Two boxes, include and exclude, each read as plain text, a wildcard mask or
+//! a regular expression. A file takes part when it matches the include (or
+//! there is none) and does not match the exclude — the exclude is applied
+//! second, so it carves files back out of what the include let in.
 //!
-//! * *"The include filter will always test matches against the filename, but
-//!   you can also tell it to test again the whole path and/or filename
-//!   extension."*
-//! * *"Exclude files matching / containg — This is the opposite of the include
-//!   filter above. […] If run together, it is applied **after** the include
-//!   filter."*
+//! **What is tested.** The stem is always a subject. The extension option
+//! adds the bare extension *and the whole name* (`stem.ext`), so a mask across
+//! the dot — `*.bak`, `*.mp3` — means what it says; without it only the stem
+//! is tested (P19 decides how a mask reads; this decides what it reads). The
+//! whole-path option adds the full path.
 //!
-//! The filter is per-step, and it sees the *current*
-//! name: *"Preset items running before can thus modify the filename in a way
-//! the the include filter in the next preset item reacts upon."*
+//! The filter is per-step, and it sees the *current* name: a step earlier in
+//! the pipeline can rename a file into or out of a later step's filter.
 
 use serde::{Deserialize, Serialize};
 
@@ -24,13 +24,14 @@ use crate::regex_flavor::RegexError;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct IncludeFilter {
-    /// *"Only matching files will be processed by rename function."*
+    /// Only files matching this take part.
     pub include: Option<MatchSpec>,
     /// Applied after `include`.
     pub exclude: Option<MatchSpec>,
     /// Also test the full path, not just the name.
     pub whole_path: bool,
-    /// Also test the extension. The stem is always tested.
+    /// Also test the extension, and the whole name with it. The stem is
+    /// always tested.
     pub extension: bool,
     pub case_sensitive: bool,
 
@@ -58,14 +59,14 @@ impl IncludeFilter {
         Self::default()
     }
 
-    /// *"Include only files matching / containing"*.
+    /// Only files matching `spec` take part.
     pub fn including(mut self, spec: MatchSpec) -> Self {
         self.include = Some(spec);
         self.compiled = Cached::new();
         self
     }
 
-    /// *"Exclude files matching / containg"*, applied after the include.
+    /// Files matching `spec` are left out, applied after the include.
     pub fn excluding(mut self, spec: MatchSpec) -> Self {
         self.exclude = Some(spec);
         self.compiled = Cached::new();
@@ -78,7 +79,7 @@ impl IncludeFilter {
         self
     }
 
-    /// Also test the extension. The stem is always tested.
+    /// Also test the extension and the whole name. The stem is always tested.
     pub fn testing_extension(mut self, yes: bool) -> Self {
         self.extension = yes;
         self
@@ -94,11 +95,6 @@ impl IncludeFilter {
         self.include.is_none() && self.exclude.is_none()
     }
 
-    /// Does this file take part?
-    ///
-    /// `path` is the full path; `file_name` is the *current* name, which may
-    /// already differ from the path's last component because an earlier step
-    /// changed it.
     fn compiled(&self) -> Result<&Compiled, RegexError> {
         self.compiled
             .get_or_init(|| {
@@ -119,6 +115,11 @@ impl IncludeFilter {
             .map_err(Clone::clone)
     }
 
+    /// Does this file take part?
+    ///
+    /// `path` is the full path; `file_name` is the *current* name, which may
+    /// already differ from the path's last component because an earlier step
+    /// changed it.
     pub fn accepts(&self, path: &str, file_name: &str) -> Result<bool, RegexError> {
         let compiled = self.compiled()?;
         if let Some(include) = &compiled.include
@@ -147,11 +148,19 @@ impl IncludeFilter {
         if matcher.is_match(stem)? {
             return Ok(true);
         }
-        if self.extension
-            && let Some(ext) = ext
-            && matcher.is_match(ext)?
-        {
-            return Ok(true);
+        if self.extension {
+            if let Some(ext) = ext
+                && matcher.is_match(ext)?
+            {
+                return Ok(true);
+            }
+            // The whole name as well. A wildcard is an anchored mask here
+            // (P19), so `*.bak` can match neither `old` nor `bak` on its own —
+            // without this subject the classic file mask matched nothing, and
+            // an exclude of `*.bak` let every backup through.
+            if ext.is_some() && matcher.is_match(file_name)? {
+                return Ok(true);
+            }
         }
         if self.whole_path && matcher.is_match(path)? {
             return Ok(true);
@@ -175,7 +184,6 @@ mod tests {
         assert!(accepts(&f, "/music/song.mp3", "song.mp3"));
     }
 
-    /// "Only matching files will be processed by rename function."
     #[test]
     fn include_keeps_only_matching_files() {
         let f = IncludeFilter::new().including(MatchSpec::Substring("live".into()));
@@ -183,9 +191,8 @@ mod tests {
         assert!(!accepts(&f, "/m/studio.mp3", "studio.mp3"));
     }
 
-    /// "it is applied after the include filter, so you can tell the program to
-    /// first include a certain file set, and then from this set exclude some of
-    /// the files"
+    /// The exclude is applied after the include, so it removes files from the
+    /// set the include let in.
     #[test]
     fn exclude_runs_after_include() {
         let f = IncludeFilter::new()
@@ -203,9 +210,7 @@ mod tests {
         assert!(!accepts(&f, "/a/tmp.txt", "tmp.txt"));
     }
 
-    /// "The include filter will always test matches against the filename, but
-    /// you can also tell it to test again the whole path and/or filename
-    /// extension."
+    /// The stem is always tested; the extension only when asked.
     #[test]
     fn the_extension_is_only_tested_when_asked() {
         let f = IncludeFilter::new().including(MatchSpec::Substring("mp3".into()));
@@ -224,9 +229,8 @@ mod tests {
         assert!(accepts(&f, "/music/Bootlegs/song.mp3", "song.mp3"));
     }
 
-    /// "You can also enter a wildcard string (eg "hello*") for more advanced
-    /// matches" — which only means anything if the wildcard form is a mask over
-    /// the whole subject rather than another substring search.
+    /// A wildcard is a mask over the whole subject (P19): `hello*` is only a
+    /// sharper tool than the plain string `hello` if it is anchored.
     #[test]
     fn a_wildcard_filter_is_a_mask_over_the_whole_name() {
         let f = IncludeFilter::new().including(MatchSpec::auto("track ?"));
@@ -239,9 +243,44 @@ mod tests {
     fn the_classic_file_mask_works_when_the_extension_is_tested() {
         let f = IncludeFilter::new()
             .including(MatchSpec::auto("*.mp3"))
-            .testing_whole_path(true);
+            .testing_extension(true);
         assert!(accepts(&f, "/m/song.mp3", "song.mp3"));
         assert!(!accepts(&f, "/m/song.flac", "song.flac"));
+    }
+
+    /// The exclude box is where a mask across the dot matters most: `*.bak`
+    /// with the extension option on must keep the backup out of the run.
+    #[test]
+    fn an_exclude_mask_across_the_dot_works_when_the_extension_is_tested() {
+        let f = IncludeFilter::new()
+            .excluding(MatchSpec::auto("*.bak"))
+            .testing_extension(true);
+        assert!(!accepts(&f, "/a/old.bak", "old.bak"));
+        assert!(accepts(&f, "/a/keep.txt", "keep.txt"));
+        // The name is the *current* one: a step that already renamed the file
+        // is judged by what it is called now.
+        assert!(!accepts(&f, "/a/old.txt", "old.txt.bak"));
+    }
+
+    /// A regex gets the whole name too, so `\.bak$` means what it says.
+    #[test]
+    fn a_regex_sees_the_whole_name_when_the_extension_is_tested() {
+        let f = IncludeFilter::new()
+            .including(MatchSpec::Regex(r"\.mp3$".into()))
+            .testing_extension(true);
+        assert!(accepts(&f, "/m/song.mp3", "song.mp3"));
+        assert!(!accepts(&f, "/m/song.flac", "song.flac"));
+    }
+
+    /// With the option off only the stem is tested, so a mask that spans the
+    /// dot matches nothing. Pinned, because it is the behaviour the option
+    /// exists to change.
+    #[test]
+    fn without_the_extension_option_a_mask_across_the_dot_matches_nothing() {
+        let f = IncludeFilter::new().including(MatchSpec::auto("*.mp3"));
+        assert!(!accepts(&f, "/m/song.mp3", "song.mp3"));
+        let f = IncludeFilter::new().excluding(MatchSpec::auto("*.bak"));
+        assert!(accepts(&f, "/a/old.bak", "old.bak"));
     }
 
     #[test]

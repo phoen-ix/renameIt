@@ -3,7 +3,7 @@
 //! Parts is how you say what shape your filenames already have: the pieces are
 //! separated by characters common to all of them.
 //!
-//! The worked example is the specification:
+//! One example shows all of it:
 //!
 //! ```text
 //! name    01. Metallica (S&M) Nothing Else Matters
@@ -39,7 +39,7 @@ impl PartsSpec {
     ///
     /// Returns slot → text for slots 1–9. A slot the pattern does not mention,
     /// or that the name does not reach, is absent — which is what makes
-    /// *"only rename if all tags are available"* able to skip a file.
+    /// "Only rename if all tags are available" able to skip a file.
     ///
     /// Compiles the pattern every call. The engine does not go through here:
     /// `RunContext::build` compiles once per run and hands
@@ -56,17 +56,16 @@ impl PartsSpec {
         }
     }
 
-    /// *"Click on the magic wand button to automatically detect the parts of
-    /// the filename that is selected in the preview box!"*
+    /// The magic wand: guesses a parts pattern from one sample name.
     ///
-    /// Separators are the list recovered from the binary's
-    /// `AutoDetectPartsSeparators` tweak. Earliest match wins; at the same
+    /// The separators are the fourteen that bracket or divide a filename — a
+    /// spaced dash, a dot and a space, and each bracket pair, open and closed,
+    /// with and without a space outside it. Earliest match wins; at the same
     /// position the longest does, so `" ("` beats `"("`.
     ///
     /// All fourteen, not the five this used to carry. The closers were missing,
     /// which meant the wand could open a bracketed part and never close it —
-    /// so it could not reproduce the pattern the worked example
-    /// shows.
+    /// so it could not reproduce the pattern in the module example.
     pub fn detect(sample: &str) -> Self {
         const SEPARATORS: [&str; 14] = [
             " - ", ". ", " (", ") ", "(", ")", " [", "] ", "[", "]", " {", "} ", "{", "}",
@@ -240,9 +239,9 @@ fn extract(segments: &[Segment], name: &str) -> Vec<(u8, String)> {
 mod tests {
     use super::*;
 
-    /// The worked example, end to end.
+    /// The module example, end to end.
     #[test]
-    fn the_worked_example_splits_as_documented() {
+    fn the_module_example_splits_into_four_parts() {
         let spec = PartsSpec::new("<%1>. <%2> (<%3>) <%4>");
         let parts = spec.split("01. Metallica (S&M) Nothing Else Matters");
 
@@ -252,8 +251,6 @@ mod tests {
         assert_eq!(parts.get(4), Some("Nothing Else Matters"));
     }
 
-    /// "In the image above you can see that the parts have been defined as
-    /// <%1>-<%2>."
     #[test]
     fn a_two_part_pattern_splits_on_its_separator() {
         let spec = PartsSpec::new("<%1>-<%2>");
@@ -310,12 +307,11 @@ mod tests {
         assert_eq!(spec.split("Song 07").get(1), None);
     }
 
-    /// "Click on the magic wand button to automatically detect the parts"
+    /// The wand, on the module example's name.
     #[test]
-    fn auto_detect_produces_the_documented_pattern_shape() {
+    fn auto_detect_reproduces_the_module_example_pattern() {
         let sample = "01. Metallica (S&M) Nothing Else Matters";
         let spec = PartsSpec::detect(sample);
-        // Detected against the recovered separator list.
         let parts = spec.split(sample);
         assert_eq!(parts.get(1), Some("01"), "pattern was {:?}", spec.pattern);
         assert_eq!(
@@ -327,11 +323,11 @@ mod tests {
         // The bracketed part is *closed*, which is the half that needed all
         // fourteen separators. With only the five openers the wand could open
         // `(` and never find `)`, so everything after it collapsed into one
-        // part and the worked example could not be reproduced.
+        // part and the module example could not be reproduced.
         assert_eq!(parts.get(3), Some("S&M"), "pattern {:?}", spec.pattern);
     }
 
-    /// Every closer the tweak names, not just the openers.
+    /// Every closer in the separator list, not just the openers.
     #[test]
     fn the_wand_closes_the_brackets_it_opens() {
         for (sample, inner) in [

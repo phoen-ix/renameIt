@@ -17,8 +17,8 @@ use std::ops::Range;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Piece<'a> {
     Literal(&'a str),
-    /// The text between the angle brackets, plus where the whole `<…>` sat, so
-    /// the editor can underline exactly what is wrong.
+    /// The text between the angle brackets, plus where the whole `<…>` sat,
+    /// for a caller that wants to point at a bad tag.
     Tag {
         body: &'a str,
         span: Range<usize>,
@@ -58,16 +58,6 @@ pub fn scan(input: &str) -> Vec<Piece<'_>> {
     pieces
 }
 
-/// Whether `input` contains anything the template engine would treat as a tag.
-///
-/// Lets a caller keep the fast path for the overwhelmingly common case of a
-/// field holding plain text.
-pub fn has_tags(input: &str) -> bool {
-    scan(input)
-        .iter()
-        .any(|piece| matches!(piece, Piece::Tag { .. }))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,7 +88,6 @@ mod tests {
         assert!(scan("").is_empty());
     }
 
-    /// the Free Format worked example: `<PARENT>_<FULLNAME>`.
     #[test]
     fn tags_and_literals_alternate() {
         assert_eq!(tags("<PARENT>_<FULLNAME>"), ["PARENT", "FULLNAME"]);
@@ -148,13 +137,5 @@ mod tests {
             other => panic!("expected a tag, got {other:?}"),
         }
         assert_eq!(pieces[2], Piece::Literal("cd"));
-    }
-
-    #[test]
-    fn has_tags_answers_the_cheap_question() {
-        assert!(has_tags("<Name>"));
-        assert!(has_tags("x<>y"));
-        assert!(!has_tags("plain text"));
-        assert!(!has_tags("a < b"));
     }
 }

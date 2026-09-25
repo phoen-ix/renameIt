@@ -1,8 +1,8 @@
 //! **Spike A** — M0's regex spike.
 //!
 //! Question: does `fancy-regex` reproduce the JScript/VBScript regex dialect?
-//! That metacharacter reference is the contract, and every row of it is a case
-//! below.
+//! That dialect's metacharacter table is the contract, and every row of it is
+//! a case below.
 //!
 //! The verdict lives in `docs/spikes/regex.md`; every deviation is recorded
 //! under P7 in `docs/DECISIONS.md`. These tests are the executable half: if a
@@ -28,11 +28,11 @@ fn check(pattern: &str, subject: &str, replacement: &str, expected: &str) {
     assert_eq!(actual, expected, "pattern {pattern} on {subject:?}");
 }
 
-// --- The appendix table, row by row -----------------------------------------
+// --- The metacharacter table, row by row -------------------------------------
 
 #[test]
 fn backslash_marks_the_next_character_as_a_literal() {
-    // "The sequence '\\' matches "\" and "\(" matches "(""
+    // `\\` matches a backslash, and `\(` a parenthesis.
     check(r"\\", r"a\b", "/", "a/b");
     check(r"\(", "a(b", "[", "a[b");
 }
@@ -45,27 +45,27 @@ fn caret_matches_the_beginning_and_dollar_the_end_of_the_input_string() {
 
 #[test]
 fn star_plus_and_question_repeat_the_preceding_subexpression() {
-    // "zo* matches "z" and "zoo""
+    // `zo*` matches "z" and "zoo".
     check("zo*", "z zo zoo", "X", "X X X");
-    // "'zo+' matches "zo" and "zoo", but not "z""
+    // `zo+` matches "zo" and "zoo", but not "z".
     check("zo+", "z zo zoo", "X", "z X X");
-    // ""do(es)?" matches the "do" in "do" or "does""
+    // `do(es)?` matches "do" and "does".
     check("do(es)?", "do does", "X", "X X");
 }
 
 #[test]
 fn braces_repeat_an_exact_or_bounded_number_of_times() {
-    // "'o{2}' does not match the 'o' in "Bob," but matches the two o's in "food""
+    // `o{2}` matches the two o's in "food" but not the one in "Bob".
     check("o{2}", "Bob food", "X", "Bob fXd");
-    // "'o{2,}' does not match the "o" in "Bob" and matches all the o's in "foooood""
+    // `o{2,}` matches every o in "foooood" but not the one in "Bob".
     check("o{2,}", "Bob foooood", "X", "Bob fXd");
-    // ""o{1,3}" matches the first three o's in "fooooood""
+    // `o{1,3}` takes at most three o's at a time.
     check("o{1,3}", "fooooood", "X", "fXXd");
 }
 
 #[test]
 fn a_trailing_question_mark_makes_a_quantifier_non_greedy() {
-    // "in the string "oooo", 'o+?' matches a single "o", while 'o+' matches all"
+    // Over "oooo", `o+?` matches one o at a time, and `o+` all four at once.
     check("o+?", "oooo", "X", "XXXX");
     check("o+", "oooo", "X", "X");
 }
@@ -73,27 +73,27 @@ fn a_trailing_question_mark_makes_a_quantifier_non_greedy() {
 #[test]
 fn dot_matches_any_single_character_except_newline() {
     check("a.c", "abc a\nc", "X", "X a\nc");
-    // "To match any character including the '\n', use a pattern such as '[.\n]'"
+    // A class of `.` and `\n` is how a newline is matched too.
     check("[.\n]", "a.b\nc", "X", "aXbXc");
 }
 
 #[test]
 fn parentheses_capture_and_question_colon_does_not() {
     check("(ab)c", "abc", "<$1>", "<ab>");
-    // "'industr(?:y|ies)' is a more economical expression"
+    // `(?:…)` groups without capturing.
     check("industr(?:y|ies)", "industries", "X", "X");
 }
 
 #[test]
 fn lookahead_matches_without_consuming() {
-    // "'Windows (?=95|98|NT|2000)' matches "Windows" in "Windows 2000""
+    // A positive lookahead: "Windows" only where 95, 98, NT or 2000 follows.
     check(
         "Windows (?=95|98|NT|2000)",
         "Windows 2000 Windows 3.1",
         "X",
         "X2000 Windows 3.1",
     );
-    // "'Windows (?!95|98|NT|2000)' matches "Windows" in "Windows 3.1""
+    // A negative lookahead: "Windows" only where none of them follows.
     check(
         "Windows (?!95|98|NT|2000)",
         "Windows 2000 Windows 3.1",
@@ -104,11 +104,11 @@ fn lookahead_matches_without_consuming() {
 
 #[test]
 fn alternation_and_character_sets_behave_as_documented() {
-    // "'(z|f)ood' matches "zood" or "food""
+    // `(z|f)ood` matches "zood" and "food".
     check("(z|f)ood", "zood food", "X", "X X");
-    // "'[abc]' matches the 'a' in "plain""
+    // `[abc]` matches the a in "plain".
     check("[abc]", "plain", "X", "plXin");
-    // "'[^abc]' matches the 'p' in "plain""
+    // `[^abc]` matches every other letter of it.
     check("[^abc]", "plain", "X", "XXaXX");
     check("[a-z]", "aZb", "X", "XZX");
     check("[^a-z]", "aZb", "X", "aXb");
@@ -116,9 +116,9 @@ fn alternation_and_character_sets_behave_as_documented() {
 
 #[test]
 fn word_boundaries_behave_as_documented() {
-    // "'er\b' matches the 'er' in "never" but not the 'er' in "verb""
+    // `er\b` matches the er in "never" but not the one in "verb".
     check(r"er\b", "never verb", "X", "nevX verb");
-    // "'er\B' matches the 'er' in "verb" but not the 'er' in "never""
+    // `er\B` is the other way round.
     check(r"er\B", "never verb", "X", "never vXb");
 }
 
@@ -143,7 +143,8 @@ fn the_control_character_escapes_behave_as_documented() {
 
 #[test]
 fn hex_escapes_are_exactly_two_digits_long() {
-    // "'\x41' matches "A". '\x041' is equivalent to '\x04' & "1""
+    // `\x41` is "A", and `\x041` is `\x04` followed by "1": exactly two
+    // hex digits.
     check(r"\x41", "ABA", "X", "XBX");
     check(r"\x041", "A1 A", "X", "A1 A");
     check(r"\x041", "\u{04}1", "X", "X");
@@ -151,14 +152,14 @@ fn hex_escapes_are_exactly_two_digits_long() {
 
 #[test]
 fn numbered_backreferences_work() {
-    // "'(.)\1' matches two consecutive identical characters"
+    // `(.)\1` matches two identical characters in a row.
     check(r"(.)\1", "aabc", "X", "Xbc");
 }
 
 #[test]
 fn capture_groups_one_to_nine_are_available_in_the_replacement() {
     check("(a)(b)(c)(d)(e)(f)(g)(h)(i)", "abcdefghi", "$9$8$1", "iha");
-    // The doc's own example, from the shipped batch-replace list.
+    // The contraction repair the shipped batch-replace list is built from.
     check(r"( don)[ `´]?(t)", " dont ", "$1'$2", " don't ");
     check(r"( don)[ `´]?(t)", " don`t ", "$1'$2", " don't ");
     check(r"( don)[ `´]?(t)", " don´t ", "$1'$2", " don't ");
@@ -166,7 +167,7 @@ fn capture_groups_one_to_nine_are_available_in_the_replacement() {
 
 #[test]
 fn a_capture_group_reference_may_be_followed_by_text() {
-    // Not from the appendix, but implied by "$1-$9": JScript reads exactly one
+    // Not in the table, but implied by `$1`–`$9`: JScript reads exactly one
     // digit. Rust does not — see translate_replacement.
     check("(a)(b)", "ab", "$1x", "ax");
     check("(a)(b)", "ab", "$12", "a2");
@@ -180,9 +181,9 @@ fn case_insensitive_replacement_preserves_the_captured_casing() {
     assert_eq!(p.replace_all(" Dont ", "$1'$2").unwrap(), " Don't ");
 }
 
-// --- Deviations. These tests document what does NOT match the appendix. ------
+// --- Deviations. These tests record where we do NOT match JScript. ---------
 
-/// `\cx` — "Matches the control character indicated by x."
+/// `\cx` — in JScript, the control character x.
 ///
 /// `fancy-regex` rejects the escape outright. Impact: nil for filenames, which
 /// cannot contain control characters on any platform we support.
@@ -195,8 +196,8 @@ fn deviation_control_character_escapes_are_not_supported() {
     );
 }
 
-/// `\n`, `\nm`, `\nml` — "Identifies either an octal escape value or a
-/// backreference."
+/// `\n`, `\nm`, `\nml` — in JScript, either an octal escape or a
+/// backreference.
 ///
 /// The backreference half works. The octal fallback does not: `\7` with fewer
 /// than seven groups is a compile error rather than U+0007. Impact: nil for
@@ -294,7 +295,7 @@ fn the_shipped_batch_replace_defaults_parse_and_compile() {
                 .unwrap_or_else(|e| panic!("literal rule {:?} failed: {e}", rule.find));
         }
     }
-    // The underscore rule, verbatim from the spec.
+    // The underscore rule comes first: `_` to a space, literally.
     let underscore = &defaults.rule[0];
     assert_eq!(
         (underscore.find.as_str(), underscore.replace.as_str()),

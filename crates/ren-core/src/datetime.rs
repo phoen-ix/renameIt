@@ -2,16 +2,16 @@
 //!
 //! Generic over [`chrono::TimeZone`] on purpose. Production passes `Local`;
 //! tests pass `Utc` for determinism and a hand-built zone for the two daylight
-//! saving cases, which are otherwise unreachable — both CI runners are UTC, and
-//! setting `TZ` from a test is `unsafe` in edition 2024 and racy across threads.
+//! saving cases, which are otherwise unreachable — CI runs under UTC and
+//! Asia/Kolkata (P61), neither of which has daylight saving, and setting `TZ`
+//! from a test is `unsafe` in edition 2024 and racy across threads.
 
 use chrono::{Datelike, Days, Months, NaiveDate, NaiveDateTime, TimeZone, Timelike};
 
 use crate::effect::TimeStamp;
 
-/// > *"Currently the dates are limited to be in between January 1st 1980 to
-/// > December 31st 2099. If you try to set the date outside these limits, an
-/// > error will occur."*
+/// Set Date's range: 1 January 1980 to 31 December 2099. A date outside it is
+/// an error on that row (D46).
 ///
 /// Enforced here, universally, rather than per platform — deliberately stricter
 /// than NTFS (1601–9999) *and* ext4 (1901–2446). Three reasons: preview must
@@ -22,11 +22,8 @@ use crate::effect::TimeStamp;
 pub const YEAR_MIN: i32 = 1980;
 pub const YEAR_MAX: i32 = 2099;
 
-/// Which parts of a date a change touches.
-///
-/// > *"These filters allow you to choose exactly what parts of each date to
-/// > change. You can for example choose to only change the hour, and leave the
-/// > rest unchanged."*
+/// Which parts of a date a change touches — change only the hour, say, and
+/// leave the rest as it was.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DateComponents {
@@ -95,9 +92,8 @@ fn days_in_month(year: i32, month: u32) -> u32 {
 /// Merges the components the mask selects from `candidate` into `previous`.
 ///
 /// The day is **clamped**, never rolled: setting the month to February on a
-/// file dated the 31st gives the 28th or 29th, not the 2nd of March. Rolling —
-/// which VB6's own `DateSerial` does — would silently change the very month the
-/// user just set.
+/// file dated the 31st gives the 28th or 29th, not the 2nd of March. Rolling
+/// would silently change the very month the user just set.
 ///
 /// Sub-second precision rides with the `Sec.` box: ticked, it comes from the
 /// source; unticked, the previous nanoseconds survive. Nothing in the dialog
@@ -223,7 +219,7 @@ pub fn shift(base: NaiveDateTime, amount: i64, unit: IntervalUnit) -> Option<Nai
     }
 }
 
-/// Rejects anything outside the documented range.
+/// Rejects anything outside the supported range.
 pub fn check_range(when: NaiveDateTime) -> Result<(), DateProblem> {
     if (YEAR_MIN..=YEAR_MAX).contains(&when.year()) {
         Ok(())
@@ -274,13 +270,15 @@ pub fn format(when: NaiveDateTime) -> String {
 /// Reads a two-digit year through a DOS-style window: 80–99 are 19xx, 00–79 are
 /// 20xx.
 ///
-/// The window is the documented range's own: `Photo 99-12-31.jpg` means 1999,
-/// and `Photo 05-01-02.jpg` means 2005. Anything with three or more digits is
-/// taken at face value, so a real year is never re-interpreted.
+/// The window is the supported range's own (D42): `Photo 99-12-31.jpg` means
+/// 1999, and `Photo 05-01-02.jpg` means 2005. Anything *written* with three or
+/// more digits is taken at face value, leading zeros included: `0017` is more
+/// likely a sequence number than a year, and at face value D46's range check
+/// reports it instead of it quietly becoming 2017.
 pub fn widen_year(text: &str) -> Option<i32> {
     let digits = text.trim();
     let value: i32 = digits.parse().ok()?;
-    if digits.trim_start_matches('0').len() <= 2 && (0..=99).contains(&value) {
+    if digits.len() <= 2 && (0..=99).contains(&value) {
         Some(if value >= 80 {
             1900 + value
         } else {
@@ -396,8 +394,7 @@ mod tests {
         mask
     }
 
-    /// The documented behaviour, as a test: *"You can for example choose to
-    /// only change the hour, and leave the rest unchanged."*
+    /// Change only the hour, and leave the rest as it was.
     #[test]
     fn only_change_the_hour_and_leave_the_rest_unchanged() {
         let previous = at(1999, 5, 9, 10, 18, 5);
@@ -408,8 +405,8 @@ mod tests {
         );
     }
 
-    /// The documented second worked example: a second pass that sets only the
-    /// year, after the Exif date has supplied the rest.
+    /// A second pass that sets only the year, after the Exif date has
+    /// supplied the rest.
     #[test]
     fn the_second_pass_sets_only_the_year() {
         assert_eq!(
@@ -466,7 +463,8 @@ mod tests {
         );
     }
 
-    /// Recovered from `cmbDatesAddSub` in the binary: six units, no `Week(s)`.
+    /// Six units and no weeks: a week is seven days, which `Day(s)` already
+    /// says.
     #[test]
     fn the_interval_units_are_the_six_the_dialog_offers() {
         assert_eq!(
@@ -521,7 +519,7 @@ mod tests {
     }
 
     #[test]
-    fn the_documented_range_is_enforced() {
+    fn the_supported_range_is_enforced() {
         assert!(check_range(at(1980, 1, 1, 0, 0, 0)).is_ok());
         assert!(check_range(at(2099, 12, 31, 23, 59, 59)).is_ok());
         assert!(check_range(at(1979, 12, 31, 23, 59, 59)).is_err());
@@ -592,7 +590,19 @@ mod tests {
         assert_eq!(widen_year("not a year"), None);
     }
 
-    /// Every widened two-digit year lands inside the documented range, which is
+    /// Only a year *written* with two digits is widened. `0017` is four digits
+    /// — a sequence number, most likely — and is taken at face value, so D46's
+    /// range check can report it instead of it silently becoming 2017.
+    #[test]
+    fn a_zero_padded_long_year_is_not_widened() {
+        assert_eq!(widen_year("0012"), Some(12));
+        assert_eq!(widen_year("0017"), Some(17));
+        assert_eq!(widen_year("005"), Some(5));
+        assert_eq!(widen_year("000"), Some(0));
+        assert_eq!(widen_year("5"), Some(2005), "one digit is still short");
+    }
+
+    /// Every widened two-digit year lands inside the supported range, which is
     /// what makes the window the right one rather than an arbitrary choice.
     #[test]
     fn every_two_digit_year_lands_inside_the_supported_range() {

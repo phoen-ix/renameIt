@@ -14,9 +14,9 @@
 
 /// Do any of the three metacharacters appear in `pattern`?
 ///
-/// Two things hang off this: Swap Mode is "ignored if wildcards are used in the
-/// find box", and a filter string containing wildcards switches from substring
-/// matching to wildcard matching.
+/// Two things hang off this: Swap Mode does nothing when the find box holds a
+/// wildcard (a pattern has no fixed text to swap with), and a filter string
+/// containing wildcards switches from substring matching to wildcard matching.
 pub fn has_wildcards(pattern: &str) -> bool {
     pattern.contains(['*', ':', '?'])
 }
@@ -24,9 +24,9 @@ pub fn has_wildcards(pattern: &str) -> bool {
 /// Translates a wildcard pattern into an equivalent regular expression.
 ///
 /// The result is **unanchored**: a wildcard pattern is searched for, not
-/// matched against the whole string. The pre-processor's worked example
-/// proves it — `is*` against `Batch Renamer is fantastic!` yields
-/// `is fantastic!`, not the whole name.
+/// matched against the whole string (P19) — `is*` against
+/// `Batch Renamer is fantastic!` finds `is fantastic!`, not the whole name.
+/// The include filter anchors it where a mask is wanted.
 pub fn to_regex(pattern: &str) -> String {
     let mut out = String::with_capacity(pattern.len() * 2);
     for c in pattern.chars() {
@@ -94,7 +94,7 @@ mod tests {
 
     #[test]
     fn matching_is_a_search_not_a_whole_string_match() {
-        // The pre-processor's worked example.
+        // The pre-processor's search (P19).
         assert!(matches("is*", "Batch Renamer is fantastic!"));
         assert!(matches("hello*", "say hello world"));
     }

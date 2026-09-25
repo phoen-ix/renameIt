@@ -1,6 +1,6 @@
 //! The regular-expression engine, wrapped so P7 can be honoured.
 //!
-//! Two things this wrapper exists for:
+//! Three things this wrapper exists for:
 //!
 //! 1. **A step budget.** `fancy-regex` backtracks, so a user pattern can be
 //!    exponential — and in RenameIt it runs once per file per keystroke.
@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn capture_groups_are_referenced_as_dollar_one_to_nine() {
-        // The worked example from the metacharacter reference.
+        // The contraction repair the shipped batch-replace list is built from.
         let p = Pattern::compile(r"( don)[ `´]?(t)", PatternOptions::default()).unwrap();
         assert_eq!(p.replace_all(" dont ", "$1'$2").unwrap(), " don't ");
         assert_eq!(p.replace_all(" don`t ", "$1'$2").unwrap(), " don't ");

@@ -1,8 +1,8 @@
 //! The tags themselves: what they are called, and what each one needs.
 //!
-//! The Format Tag Reference, plus the
-//! tag-menu strings recovered from the binary, which spell several of them more
-//! precisely (`<PathMax-260>`, not `<PathMax-260#>`).
+//! Every tag has one canonical spelling — the one [`Tag`]'s `Display` prints
+//! and the tag menu inserts (`<PathMax-260>`, `<FLetterN2>`) — and is parsed
+//! without regard to case (D62).
 //!
 //! **D29: an unrecognised tag is a compile error.** Silently rendering nothing
 //! is how a whole folder ends up named `.mp3` across a batch. Here a typo stops
@@ -20,26 +20,14 @@ pub enum TimeSource {
     Modified,
     Created,
     Accessed,
-    /// *"Time at start of rename"* — one instant for the whole run.
+    /// The moment the run started — one instant for the whole run.
     Now,
     /// The date the photograph was taken.
     ///
     /// A fifth source rather than a sixth `Tag` variant, so `<ExifDate-yyyy>`
-    /// gets the whole VB6 date mini-language for nothing — `<ExifDate-fmt>`
+    /// gets the whole date format language for nothing — `<ExifDate-fmt>`
     /// belongs in the same list as `<Date-fmt>` and `<CDate-fmt>`.
     Exif,
-}
-
-impl TimeSource {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Modified => "modified",
-            Self::Created => "created",
-            Self::Accessed => "accessed",
-            Self::Now => "now",
-            Self::Exif => "Exif",
-        }
-    }
 }
 
 /// Which of a music file's named tags a tag reads.
@@ -55,16 +43,16 @@ pub enum AudioField {
     Year,
     Comment,
     Genre,
-    /// `<Track>` — *"Track Nr., zero-padded"*.
+    /// `<Track>` — the track number, zero-padded to two digits.
     Track,
-    /// `<TrackN>` — *"Track Nr., no zero padding"*.
+    /// `<TrackN>` — the track number as written, no padding.
     TrackNoPad,
-    /// `<Length>` — *"Long"*, `h:mm:ss`.
+    /// `<Length>` — the long form, `h:mm:ss`.
     Length,
-    /// `<LengthS>` — *"Short"*, `m:ss`.
+    /// `<LengthS>` — the short form, `m:ss`.
     LengthShort,
     Bitrate,
-    /// `<Stereo>` — *"Stereo or Mono"*, from the channel count.
+    /// `<Stereo>` — `Stereo` or `Mono`, from the channel count.
     Stereo,
     /// `<Freq>` — Hz.
     Frequency,
@@ -122,9 +110,9 @@ impl AudioField {
 pub enum LetterMode {
     /// `<FLetter>` — letters only.
     Letters,
-    /// `<FLetterN1>` — *"First letter incl. numbers"*.
+    /// `<FLetterN1>` — a digit counts as a first letter too.
     WithNumbers,
-    /// `<FLetterN2>` — *"First letter incl. numbers subst."*
+    /// `<FLetterN2>` — a digit counts, and is substituted by `#`.
     NumbersSubstituted,
 }
 
@@ -134,25 +122,25 @@ pub enum Tag {
     Name,
     Ext,
     FullName,
-    /// *"Left # characters in filename"*.
+    /// The first `#` characters of the name.
     Left(usize),
     Right(usize),
-    /// *"Chars from pos # to end"* / *"from pos #1 to #2"*.
+    /// From a position to the end, or between two positions (P15).
     Mid {
         from: usize,
         to: Option<usize>,
     },
-    /// The same, *"counting backwards"*.
+    /// The same, counting backwards from the end.
     MidRev {
         from: usize,
         to: Option<usize>,
     },
     FirstLetter(LetterMode),
-    /// `<Parent>` is `<Parent-1>`: *"N:th parent folder name (set # to 1-9)"*.
+    /// `<Parent>` is `<Parent-1>`, the folder the file is in; up to 9 levels.
     Parent(usize),
-    /// *"File size (Auto)"*.
+    /// The file size in the largest unit that keeps it at or above 1 (P29).
     Size,
-    /// *"File size (Bytes)"*, optionally *"padded with # zeros"*.
+    /// The file size in bytes, optionally zero-padded to `#` digits.
     SizeBytes {
         pad: usize,
     },
@@ -161,9 +149,10 @@ pub enum Tag {
         format: DateFormat,
     },
     Counter,
-    /// *"Random Character (A-Z)"*.
+    /// A random letter, A–Z.
     RandomLetter,
-    /// `<Rnd#>`, `<Rnd#-Low-High>`, `<RndZ#-Low-High>`.
+    /// `<Rnd#>`, `<Rnd#-Low-High>`, `<RndZ#-Low-High>`. Either bound may be
+    /// negative: `<Rnd3--5-5>`.
     RandomNumber {
         digits: usize,
         range: Option<(i64, i64)>,
@@ -177,11 +166,12 @@ pub enum Tag {
     DetectedExt,
     /// `<%1>`…`<%9>`.
     Part(u8),
-    /// `<\>` — *"Move To SubFolder"* (D31).
+    /// `<\>` — move the file into a subfolder (D31).
     SubFolder,
-    /// *"Limit filename length to # chars"*.
+    /// Cut the text this template produced to `#` characters (P25).
     FileMax(usize),
-    /// *"Limit path and filename length to # chars"*.
+    /// Cut it so that the folder, a separator and the text fit in `#`
+    /// characters (P25).
     PathMax(usize),
     /// `<Artist>`, `<Title>`, `<Bitrate>` … — a music file's own account of
     /// itself.
@@ -191,7 +181,8 @@ pub enum Tag {
     /// The name is carried rather than resolved at parse time so the table in
     /// [`crate::meta::names`] stays the single place that knows them.
     Id3(String),
-    /// `<Exif-ImageWidth>` and anything else the image carries.
+    /// `<Exif-Make>` and every other field the Exif reader names, checked
+    /// against its list when the template compiles (D29).
     Exif(String),
     /// `<Width> <Height> <Depth> <Depthb> <JpgComment>` — the image's own
     /// header, as opposed to the Exif block a camera wrote into it.
@@ -201,14 +192,14 @@ pub enum Tag {
     /// `<DirSize> <DirFiles> <DirDirs>` and the rest of the Folders group.
     Folder {
         field: FolderField,
-        /// The `S` prefix: *"in Folder && Subfolders"*.
+        /// The `S` prefix: count through subfolders too.
         recursive: bool,
-        /// `<DirSizeB-#>` — *"padded to # zeros"*.
+        /// `<DirSizeB-#>` — zero-padded to `#` digits.
         pad: usize,
     },
 }
 
-/// The Folders group — *"Size of Files in Folder"* and its neighbours.
+/// The Folders group — the size and counts of a folder's contents.
 ///
 /// **Which folder**: for a folder row, itself; for a file row, the folder it is
 /// in. Both readings are what the tag name says out loud, and a file answering
@@ -216,17 +207,17 @@ pub enum Tag {
 /// the row *is* a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FolderField {
-    /// *"Size of Files in Folder (Auto)"*, formatted like `<Size>`.
+    /// The size of the files in the folder, formatted like `<Size>`.
     Size,
-    /// *"(Bytes)"*, optionally zero padded.
+    /// The same in bytes, optionally zero padded.
     SizeBytes,
-    /// *"Number of Files in Folder"*.
+    /// How many files the folder holds.
     Files,
-    /// *"Number of Folders in Folder"*.
+    /// How many folders it holds.
     Dirs,
-    /// *"First file in folder"*, without its extension.
+    /// The name of the first file in the folder, without its extension.
     FirstFile,
-    /// *"First file in folder with extension"*.
+    /// The same, with its extension.
     FirstFileWithExtension,
 }
 
@@ -236,21 +227,24 @@ pub enum FolderField {
 /// answer for images; the movie half stays deferred.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ImageField {
-    /// *"Image Width"*.
+    /// Width in pixels.
     Width,
-    /// *"Image Height"*.
+    /// Height in pixels.
     Height,
-    /// *"Image Color Depth (Colors)"* — the palette the bit depth implies.
+    /// Colour depth as a number of colours — the palette the bit depth implies.
     Colours,
-    /// *"Image Color Depth (Bits)"*.
+    /// Colour depth in bits.
     Bits,
-    /// *"Jpeg Comment"*.
+    /// The comment stored inside a JPEG.
     JpegComment,
 }
 
 impl Tag {
-    /// What this tag costs to resolve, so a template that never mentions
-    /// `<Crc32>` never opens a file.
+    /// What this tag costs to resolve.
+    ///
+    /// A declaration, not a gate: the resolver is lazy, and that is what keeps
+    /// a template that never mentions `<Crc32>` from opening a file. See
+    /// [`TagNeeds`] for which bits anything reads.
     pub fn needs(&self) -> TagNeeds {
         match self {
             Self::Counter => TagNeeds::COUNTER,
@@ -266,8 +260,7 @@ impl Tag {
                     TagNeeds::TIMESTAMPS
                 }
             },
-            // Everything that opens the file. `<Crc32>` has always been here;
-            // M6's readers join it, which is what the bit is for.
+            // Everything that opens the file.
             Self::Crc32
             | Self::DetectedExt
             | Self::Audio(_)
@@ -280,10 +273,8 @@ impl Tag {
             | Self::Folder { .. } => TagNeeds::FILE_CONTENT,
             Self::SubFolder => TagNeeds::SUBFOLDER,
             Self::FileMax(_) | Self::PathMax(_) => TagNeeds::LIMITS,
-            // Exhaustive from here on purpose. The catch-all this replaced
-            // would have answered `NONE` for all three of M6's families —
-            // silently, so nothing would have declared that music tags open
-            // files and no test would have noticed.
+            // Exhaustive from here on purpose, so a new tag has to state its
+            // cost rather than inherit `NONE` from a catch-all.
             Self::Name
             | Self::Ext
             | Self::FullName
@@ -302,6 +293,12 @@ impl Tag {
 
 /// The costs a whole template adds up to.
 ///
+/// A declaration of what the template will touch, kept for a caller that wants
+/// to know in advance (DESIGN §2–3). Nothing is gated on it — the resolver is
+/// lazy, which is what actually keeps files closed. Today one bit is read in
+/// production: the GUI checks `CLIPBOARD` to fetch the clipboard once before a
+/// run. The rest are tested but consulted by nothing yet.
+///
 /// A hand-rolled bit set rather than a dependency: nine flags do not justify
 /// one, and D2 makes every added crate a licence decision.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -317,9 +314,10 @@ impl TagNeeds {
     /// Reads a timestamp captured with the listing — free, but absent on some
     /// filesystems, which is what makes a date tag *unavailable*.
     pub const TIMESTAMPS: Self = Self(1 << 5);
-    /// Opens the file. The expensive one.
+    /// Opens the file, or walks a folder. The expensive one (P44).
     pub const FILE_CONTENT: Self = Self(1 << 6);
-    /// Produces a path separator, so the planner must create directories.
+    /// Produces a path separator (D31). The planner splits on every `/`
+    /// whether or not this is set.
     pub const SUBFOLDER: Self = Self(1 << 7);
     pub const LIMITS: Self = Self(1 << 8);
 
@@ -359,8 +357,8 @@ pub enum TagError {
 impl Tag {
     /// Parses the text between the angle brackets.
     ///
-    /// *"Most tags are not case sensitive, so you can write e.g. `<Date>`
-    /// `<date>` `<DATE>` with the same result."*
+    /// The head is matched without regard to case, so `<Date>`, `<date>` and
+    /// `<DATE>` are one tag (D62).
     pub fn parse(body: &str) -> Result<Self, TagError> {
         if body.is_empty() {
             return Err(TagError::Empty);
@@ -404,6 +402,9 @@ impl Tag {
             return Ok(Self::Id3(name.to_owned()));
         }
         if let Some(name) = strip_family(&key, "exif", arg) {
+            if !super::exif_names::is_known(name) {
+                return Err(TagError::Unknown(body.to_owned()));
+            }
             return Ok(Self::Exif(name.to_owned()));
         }
         if arg.is_none()
@@ -417,10 +418,15 @@ impl Tag {
             return Ok(Self::HtmlTitle);
         }
         if let Some(tag) = folder_tag(&key, arg) {
-            return tag.map_err(|_| TagError::Unknown(body.to_owned()));
+            // A real folder tag with an argument it does not take is the wrong
+            // shape, not an unknown name.
+            return tag.map_err(|()| TagError::BadArgument {
+                tag: body.to_owned(),
+                message: "only <DirSizeB-#> and <SDirSizeB-#> take a number, and \
+                          <FirstFileInFolder> only -Ext"
+                    .to_owned(),
+            });
         }
-        // Before the deferred gate, which still lists these names for the
-        // *movie* half of the family they share (`deferred_feature`).
         if arg.is_none() {
             let image = match key.as_str() {
                 "width" => Some(ImageField::Width),
@@ -445,6 +451,19 @@ impl Tag {
         // `<Rnd>`, `<Rnd3>`, `<Rnd3-1-100>`, `<RndZ3-1-100>` all start here.
         if let Some(rest) = key.strip_prefix("rnd") {
             return random(body, rest, arg);
+        }
+
+        // A date head with an empty format — a format deleted, or not yet
+        // typed — would render nothing and still count as available, so the
+        // date would vanish from every name without a missing-tag marker.
+        if let ("date" | "cdate" | "adate" | "nowdate" | "exifdate", Some(format)) =
+            (key.as_str(), arg)
+            && format.trim().is_empty()
+        {
+            return Err(TagError::BadArgument {
+                tag: body.to_owned(),
+                message: "needs a format, as in <Date-yyyy-mm-dd>".to_owned(),
+            });
         }
 
         match (key.as_str(), arg) {
@@ -479,16 +498,26 @@ impl Tag {
             ("atime", None) => Ok(stamp(TimeSource::Accessed, DEFAULT_TIME)),
             ("nowdate", None) => Ok(stamp(TimeSource::Now, DEFAULT_DATE)),
             ("nowtime", None) => Ok(stamp(TimeSource::Now, DEFAULT_TIME)),
-            // *"`<ExifDate>`/`<ExifTime>` are 'smart' (find date across the
-            // varying Exif date fields)"* — the smartness lives in
-            // `meta::exif`, which already tries DateTimeOriginal, then
-            // DateTimeDigitized, then DateTime.
+            // Whichever Exif date the image has: `meta::exif` tries
+            // DateTimeOriginal, then DateTimeDigitized, then DateTime.
             ("exifdate", None) => Ok(stamp(TimeSource::Exif, DEFAULT_DATE)),
             ("exiftime", None) => Ok(stamp(TimeSource::Exif, DEFAULT_TIME)),
             ("date", Some(f)) => Ok(stamp(TimeSource::Modified, f)),
             ("cdate", Some(f)) => Ok(stamp(TimeSource::Created, f)),
             ("adate", Some(f)) => Ok(stamp(TimeSource::Accessed, f)),
             ("exifdate", Some(f)) => Ok(stamp(TimeSource::Exif, f)),
+            ("nowdate", Some(f)) => Ok(stamp(TimeSource::Now, f)),
+            // A time is a date format too: `<Date-Hh.Nn>`. The time heads are
+            // fixed spellings of that, so an argument on one is a real tag in
+            // the wrong shape.
+            ("time" | "ctime" | "atime" | "nowtime" | "exiftime", Some(_)) => {
+                Err(TagError::BadArgument {
+                    tag: body.to_owned(),
+                    message: "takes no format — use the date form with a time format, \
+                              as in <Date-Hh.Nn>"
+                        .to_owned(),
+                })
+            }
             ("counter", None) => Ok(Self::Counter),
             ("numfiles", None) => Ok(Self::NumFiles),
             ("ask", None) => Ok(Self::Ask(0)),
@@ -572,7 +601,15 @@ fn random(body: &str, rest: &str, arg: Option<&str>) -> Result<Tag, TagError> {
     let range = match arg {
         None => None,
         Some(text) => {
-            let Some((low, high)) = text.split_once('-') else {
+            // Either bound may carry its own minus sign, so the separator is
+            // the first hyphen *after* the low bound's first character:
+            // `-5-5` is -5 to 5, and `-9--1` is -9 to -1.
+            let separator = text
+                .char_indices()
+                .skip(1)
+                .find(|&(_, c)| c == '-')
+                .map(|(at, _)| at);
+            let Some((low, high)) = separator.map(|at| (&text[..at], &text[at + 1..])) else {
                 return Err(bad("a range needs both ends, as in <Rnd3-1-100>"));
             };
             let parse = |s: &str| {
@@ -592,10 +629,10 @@ fn random(body: &str, rest: &str, arg: Option<&str>) -> Result<Tag, TagError> {
 
 /// The argument of `<Family-Name>`, when `key` is that family.
 ///
-/// The argument is handed back with its **original case**, because `Tag::parse`
-/// folds only the head — which is what makes `<Exif-CameraSettings:MacroMode>`
-/// and `<Exif-Capture Mode>` work without the lexer knowing anything about
-/// them.
+/// The argument is handed back **as typed**, because `Tag::parse` folds only
+/// the head — so `<Exif-GPSLatitude>` renders back in the user's spelling, and
+/// a family whose names are not all letters needs nothing from the lexer. The
+/// family's own table decides whether the name is real.
 fn strip_family<'a>(key: &str, family: &str, arg: Option<&'a str>) -> Option<&'a str> {
     (key == family).then_some(arg?).filter(|a| !a.is_empty())
 }
@@ -612,16 +649,14 @@ fn deferred_feature(key: &str) -> Option<&'static str> {
     const PDF: &str = "PDF tags are not implemented";
     const FOLDER: &str = "the length of the music in a folder is not implemented (D129)";
 
-    // `id3` and `exif` are gone from this list: M6 implements them, and a
-    // *prefix* entry would have swallowed them whole. `exiftool` has to be
-    // tested before `xif` would have matched it — the old list had `exif`
-    // ahead of `exiftool`, so the longer name was unreachable and every
-    // `<ExifTool-…>` reported the wrong feature. Longest first, always.
+    // Prefixes must not shadow one another or the families `Tag::parse`
+    // tests before this list. `exif` is not here for that reason: as a prefix
+    // it swallowed `exiftool`, so every `<ExifTool-…>` reported the wrong
+    // feature, and it would swallow `<Exif-…>` and `<ExifDate>` today.
     let prefixed = [
         ("exiftool", "the ExifTool bridge is not implemented (P8)"),
-        // Not IMAGE: `<Xif-*>` is a legacy INI-driven Exif reader, waived by
-        // P8. Reusing the image-dimension message told a
-        // user Exif had not arrived, which has been false since M6.
+        // `<Xif-*>` is a legacy INI-driven Exif reader, not built (P8). Its
+        // message points at the family that is.
         (
             "xif",
             "the legacy INI-driven Exif reader is not implemented (P8) — use <Exif-…>",
@@ -774,8 +809,7 @@ fn folder_tag(key: &str, arg: Option<&str>) -> Option<Result<Tag, ()>> {
         });
     }
 
-    // The `S` prefix is *"in Folder && Subfolders"*, and `<SDirSize>` has to be
-    // tested before `<DirSize>` or the shorter name never matches.
+    // The `S` prefix counts through subfolders too.
     let (recursive, rest) = match key.strip_prefix("sdir") {
         Some(rest) => (true, rest),
         None => (false, key.strip_prefix("dir")?),
@@ -824,8 +858,7 @@ mod tests {
         assert_eq!(parse("FullName"), Tag::FullName);
     }
 
-    /// "Most tags are not case sensitive, so you can write e.g. <Date> <date>
-    /// <DATE> with the same result."
+    /// D62: a tag is one tag however it is capitalised.
     #[test]
     fn tags_are_not_case_sensitive() {
         assert_eq!(parse("name"), parse("NAME"));
@@ -856,7 +889,7 @@ mod tests {
         );
     }
 
-    /// "N:th parent folder name (set # to 1-9)"
+    /// `<Parent-#>` is 1 to 9.
     #[test]
     fn parent_defaults_to_the_immediate_parent_and_is_limited_to_nine() {
         assert_eq!(parse("Parent"), Tag::Parent(1));
@@ -897,8 +930,7 @@ mod tests {
         ));
     }
 
-    /// "<Date-Short Date>, <Date-dddd m mmmm>" — the argument is taken whole,
-    /// hyphens and all.
+    /// A format argument is taken whole, hyphens and spaces and all.
     #[test]
     fn a_custom_date_format_keeps_its_hyphens() {
         let Tag::Stamp { format, .. } = parse("Date-yyyy-mm-dd") else {
@@ -964,14 +996,13 @@ mod tests {
         assert!(Tag::parse("%12").is_err());
     }
 
-    /// "<\> - Move To SubFolder"
+    /// D31: the one tag that is punctuation.
     #[test]
     fn the_subfolder_tag_is_a_backslash() {
         assert_eq!(parse("\\"), Tag::SubFolder);
     }
 
-    /// The canonical spelling is `<PathMax-260>`; `<PathMax-260#>` is a
-    /// typo in the help file.
+    /// The canonical spelling is `<PathMax-260>`: a bare number.
     #[test]
     fn the_length_limits_take_a_character_count() {
         assert_eq!(parse("FileMax-64"), Tag::FileMax(64));
@@ -1044,9 +1075,8 @@ mod tests {
         }
     }
 
-    /// The argument keeps its case, which is what makes
-    /// `<Exif-CameraSettings:MacroMode>` and `<Exif-Capture Mode>` work without
-    /// the lexer knowing anything about them.
+    /// The argument keeps its case: only the head is folded, so a name comes
+    /// back in the spelling the user typed.
     #[test]
     fn a_metadata_family_takes_its_argument_whole_and_unfolded() {
         assert_eq!(
@@ -1054,12 +1084,12 @@ mod tests {
             Ok(Tag::Exif("ImageWidth".to_owned()))
         );
         assert_eq!(
-            Tag::parse("exif-CameraSettings:MacroMode"),
-            Ok(Tag::Exif("CameraSettings:MacroMode".to_owned()))
+            Tag::parse("exif-ExposureBiasValue"),
+            Ok(Tag::Exif("ExposureBiasValue".to_owned()))
         );
         assert_eq!(
-            Tag::parse("EXIF-Capture Mode"),
-            Ok(Tag::Exif("Capture Mode".to_owned()))
+            Tag::parse("EXIF-GPSLatitude"),
+            Ok(Tag::Exif("GPSLatitude".to_owned()))
         );
         assert_eq!(
             Tag::parse("ID3-AlbumArtist"),
@@ -1085,7 +1115,7 @@ mod tests {
 
     /// The regression this test exists for: deleting `deferred_feature`'s
     /// `exif` prefix row for M6 left `<ExifDate>` matching nothing at all, so
-    /// it reported *"is not a tag"* — telling the user their spelling was
+    /// it reported "is not a tag" — telling the user their spelling was
     /// wrong when it was not, for a tag that exists. It has to resolve, not
     /// merely stop being deferred.
     #[test]
@@ -1132,11 +1162,14 @@ mod tests {
             "ExifTime",
             "ID3-AlbumArtist",
             "Exif-Make",
-            // Documented and deliberately not implemented — deferred, which
-            // names a reason, rather than unknown, which blames the speller.
+            // Implemented by M8.
+            "Width",
+            "DirFiles",
+            "HtmlTitle",
+            // Deliberately not implemented — deferred, which names a reason,
+            // rather than unknown, which blames the speller.
             "BrMode",
             "Mpeg",
-            "Width",
             "PdfPages",
             "Iptc-Keywords",
             "GeoTiff-ModelType",
@@ -1162,6 +1195,119 @@ mod tests {
             let text = tag.to_string();
             let body = text.trim_start_matches('<').trim_end_matches('>');
             assert_eq!(Tag::parse(body), Ok(tag.clone()), "{text}");
+        }
+    }
+
+    /// D29 for the Exif family: the reader keys fields by a closed set of
+    /// names, so a name outside it can never resolve and would render as an
+    /// empty string in every filename of the batch.
+    #[test]
+    fn a_mistyped_exif_name_is_an_error_rather_than_nothing() {
+        assert!(matches!(Tag::parse("Exif-Mkae"), Err(TagError::Unknown(_))));
+        // Maker-note fields are not decoded, and no name has a space in it.
+        assert!(matches!(
+            Tag::parse("Exif-CameraSettings:MacroMode"),
+            Err(TagError::Unknown(_))
+        ));
+        assert!(matches!(
+            Tag::parse("Exif-Capture Mode"),
+            Err(TagError::Unknown(_))
+        ));
+        // Matched without regard to case, like every other tag, and the
+        // spelling the user typed is kept.
+        assert_eq!(
+            Tag::parse("exif-gpslatitude"),
+            Ok(Tag::Exif("gpslatitude".to_owned()))
+        );
+    }
+
+    /// A negative bound is written with its own minus sign, so the separating
+    /// hyphen is the first one after the low bound's first character.
+    #[test]
+    fn a_random_range_may_have_negative_bounds() {
+        assert_eq!(
+            parse("Rnd3--5-5"),
+            Tag::RandomNumber {
+                digits: 3,
+                range: Some((-5, 5)),
+                pad: false
+            }
+        );
+        assert_eq!(
+            parse("RndZ2--9--1"),
+            Tag::RandomNumber {
+                digits: 2,
+                range: Some((-9, -1)),
+                pad: true
+            }
+        );
+        let err = Tag::parse("Rnd3-5--1").unwrap_err();
+        assert!(err.to_string().contains("low end"), "{err}");
+        let err = Tag::parse("Rnd3--5").unwrap_err();
+        assert!(err.to_string().contains("both ends"), "{err}");
+    }
+
+    /// `<NowDate>` takes a format like the other date heads. A time head
+    /// does not, and says so rather than claiming not to exist.
+    #[test]
+    fn nowdate_takes_a_format_and_a_time_head_explains_that_it_does_not() {
+        assert_eq!(
+            Tag::parse("NowDate-yyyymmdd"),
+            Ok(stamp(TimeSource::Now, "yyyymmdd"))
+        );
+        for body in [
+            "Time-Hh",
+            "CTime-Hh",
+            "ATime-Hh",
+            "NowTime-Hh",
+            "ExifTime-Hh",
+        ] {
+            let err = Tag::parse(body).unwrap_err();
+            assert!(
+                matches!(err, TagError::BadArgument { .. }),
+                "<{body}> gave {err:?}"
+            );
+            assert!(err.to_string().contains("<Date-"), "{err}");
+        }
+    }
+
+    /// A folder tag with an argument it does not take is the wrong shape of a
+    /// real tag, not an unknown one.
+    #[test]
+    fn a_folder_tag_with_a_bad_argument_says_what_it_takes() {
+        for body in [
+            "DirSizeB-x",
+            "DirFiles-3",
+            "SDirSize-2",
+            "FirstFileInFolder-Name",
+        ] {
+            let err = Tag::parse(body).unwrap_err();
+            assert!(
+                matches!(err, TagError::BadArgument { .. }),
+                "<{body}> gave {err:?}"
+            );
+        }
+    }
+
+    /// `<Date->` — a format deleted, or not yet typed — would render nothing
+    /// and still count as available, so even "only rename if all tags are
+    /// available" could not catch the date vanishing from every name.
+    #[test]
+    fn a_date_tag_with_an_empty_format_is_an_error() {
+        for body in [
+            "Date-",
+            "CDate-",
+            "ADate-",
+            "NowDate-",
+            "ExifDate-",
+            "Date- ",
+        ] {
+            let err = Tag::parse(body).unwrap_err();
+            assert!(
+                matches!(err, TagError::BadArgument { .. }),
+                "<{body}> gave {err:?}"
+            );
+            assert!(err.to_string().contains("format"), "{err}");
         }
     }
 
@@ -1233,6 +1379,11 @@ mod tests {
                 range: Some((1, 100)),
                 pad: true,
             },
+            Tag::RandomNumber {
+                digits: 2,
+                range: Some((-50, -5)),
+                pad: false,
+            },
             Tag::NumFiles,
             Tag::Ask(0),
             Tag::Ask(5),
@@ -1253,7 +1404,14 @@ mod tests {
 
     #[test]
     fn date_tags_round_trip_including_their_format() {
-        for body in ["Date", "CDate-yyyy", "ADate-Short Date", "NowDate"] {
+        for body in [
+            "Date",
+            "CDate-yyyy",
+            "ADate-Short Date",
+            "NowDate",
+            "NowDate-yyyymmdd",
+            "ExifDate-dddd",
+        ] {
             let tag = parse(body);
             let text = tag.to_string();
             let inner = text.trim_start_matches('<').trim_end_matches('>');

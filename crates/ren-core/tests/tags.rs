@@ -17,7 +17,7 @@ use ren_core::run::{Answers, RunContext, RunSettings};
 use ren_core::{CounterSetup, EvalCx, PartsSpec, Template};
 use tempfile::TempDir;
 
-/// 1977-05-09 10:18:05 UTC — the example timestamp.
+/// 1977-05-09 10:18:05 UTC: every field distinct, and a Monday.
 const STAMP: u64 = 231_934_685;
 
 struct Fixture {
@@ -131,12 +131,12 @@ fn every_tag_renders_what_the_reference_says_it_does() {
         ("<Clipboard>", "pasted".to_owned()),
         ("<DetectedExt>", "png".to_owned()),
         ("<\\>", "/".to_owned()),
-        // Parts, from the worked example.
+        // Parts, split by the pattern the fixture is named for.
         ("<%1>", "01".to_owned()),
         ("<%2>", "Metallica".to_owned()),
         ("<%3>", "S&M".to_owned()),
         ("<%4>", "Nothing Else Matters".to_owned()),
-        // Composition, and the Free Format worked example shape.
+        // Composition: tags and literal text side by side.
         ("<Parent>_<FullName>", format!("rock_{name}.png")),
         (
             "<%2> - <%1> - <%4>",
@@ -240,13 +240,13 @@ fn the_exif_date_tags_render_the_date_the_photograph_was_taken() {
 
     assert_eq!(render("<ExifDate>"), "2008-02-17");
     assert_eq!(render("<ExifTime>"), "11.23.50");
-    // The whole VB6 date mini-language, for free, because it is a `TimeSource`
+    // The whole date format language, for free, because it is a `TimeSource`
     // rather than a tag of its own.
     assert_eq!(render("<ExifDate-yyyy>"), "2008");
     assert_eq!(render("<ExifDate-yyyy-mm>"), "2008-02");
 
     // An image with no Exif date leaves the tag missing rather than empty, so
-    // "only rename if all tags are available" can act on it.
+    // "Only rename if all tags are available" can act on it.
     let plain = dir.path().join("plain.jpg");
     std::fs::write(
         &plain,
@@ -259,6 +259,114 @@ fn the_exif_date_tags_render_the_date_the_photograph_was_taken() {
         .render(&EvalCx::new(&entry, 0, 1, &run));
     assert!(!out.available());
     assert_eq!(out.missing, ["<ExifDate>"]);
+}
+
+/// A photograph taken in the hour a daylight-saving change skips still has a
+/// date.
+///
+/// Exif stores a wall clock with no zone. Turning it into an instant through
+/// the machine's zone and back has no answer for a time that zone skipped, so
+/// `<ExifDate>` went missing for exactly those photos — and a camera clock that
+/// never observes daylight saving produces them every spring. Rendered from the
+/// wall clock itself, the zone never enters into it.
+///
+/// Neither CI zone has daylight saving (UTC, and Asia/Kolkata for P61), so the
+/// test re-runs itself in a child process under `TZ=Europe/Berlin`, where
+/// 2021-03-28 02:30 does not exist.
+#[cfg(unix)]
+#[test]
+fn an_exif_time_in_a_skipped_hour_still_renders() {
+    const CHILD: &str = "RENAMEIT_TEST_DST_CHILD";
+    const NAME: &str = "an_exif_time_in_a_skipped_hour_still_renders";
+    if std::env::var_os(CHILD).is_none() {
+        if !std::path::Path::new("/usr/share/zoneinfo/Europe/Berlin").exists() {
+            eprintln!("{NAME}: no zoneinfo for Europe/Berlin here, so nothing to test");
+            return;
+        }
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", NAME, "--test-threads=1"])
+            .env(CHILD, "1")
+            .env("TZ", "Europe/Berlin")
+            .output()
+            .expect("the test binary runs itself");
+        assert!(
+            child.status.success(),
+            "the run under TZ=Europe/Berlin failed:\n{}{}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
+        return;
+    }
+
+    // In the child. The zone has to really skip the hour, or this proves
+    // nothing.
+    use chrono::TimeZone;
+    let skipped = chrono::NaiveDate::from_ymd_opt(2021, 3, 28)
+        .unwrap()
+        .and_hms_opt(2, 30, 0)
+        .unwrap();
+    assert!(
+        chrono::Local
+            .from_local_datetime(&skipped)
+            .earliest()
+            .is_none(),
+        "TZ=Europe/Berlin was not honoured"
+    );
+
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("spring.jpg");
+    std::fs::write(
+        &path,
+        ren_core::meta::testing::jpeg_with_exif(Some("2021:03:28 02:30:00"), None, None),
+    )
+    .unwrap();
+    let entry = FileEntry::from_path(&path).unwrap();
+    let run = RunContext::default();
+    let out = Template::compile("<ExifDate> <ExifTime> <ExifDate-dddd Hh:Nn>")
+        .unwrap()
+        .render(&EvalCx::new(&entry, 0, 1, &run));
+    assert_eq!(out.missing, Vec::<String>::new());
+    assert_eq!(out.text, "2021-03-28 02.30.00 Sunday 02.30");
+}
+
+/// Every field name the Exif reader hands back is one `<Exif-…>` accepts.
+///
+/// The parser checks names against a table (D29: a typo must not render as
+/// an empty string), and the reader keys fields by whatever the Exif crate
+/// calls them. This pins the two together, so a crate upgrade that renames a
+/// field fails here rather than silently refusing a working tag.
+#[test]
+fn every_exif_field_the_reader_returns_is_a_name_the_parser_accepts() {
+    let dir = TempDir::new().unwrap();
+    let fixtures = [
+        (
+            "dates.jpg",
+            ren_core::meta::testing::jpeg_with_exif(
+                Some("2008:02:17 11:23:50"),
+                Some("2008:02:17 11:23:51"),
+                Some("2008:02:17 11:23:52"),
+            ),
+        ),
+        (
+            "rotated.jpg",
+            ren_core::meta::testing::jpeg_rotated(4, 2, 6),
+        ),
+    ];
+    let mut seen = 0;
+    for (name, bytes) in fixtures {
+        let path = dir.path().join(name);
+        std::fs::write(&path, bytes).unwrap();
+        let fields = ren_core::meta::exif::fields_of(&path).expect("the fixture carries Exif");
+        for field in fields.keys() {
+            seen += 1;
+            let body = format!("Exif-{field}");
+            assert!(
+                ren_core::Tag::parse(&body).is_ok(),
+                "the reader returns {field:?}, which <{body}> refuses"
+            );
+        }
+    }
+    assert!(seen >= 4, "only {seen} fields were read");
 }
 
 /// The music tags, over a real tagged file — the completeness guard extended
@@ -294,7 +402,7 @@ fn every_music_tag_renders_what_the_reference_says_it_does() {
         ("<Year>", "1991"),
         ("<Genre>", "Metal"),
         ("<Comment>", "a comment"),
-        // *"Track Nr., zero-padded"* and *"Track Nr., no zero padding"*.
+        // Zero-padded to two digits, and as written.
         ("<Track>", "08"),
         ("<TrackN>", "8"),
         ("<Bitrate>", "128"),
@@ -304,7 +412,7 @@ fn every_music_tag_renders_what_the_reference_says_it_does() {
         // The `<ID3-*>` family, by the canonical spelling.
         ("<ID3-AlbumArtist>", "Various Artists"),
         ("<ID3-Composer>", "Ennio Morricone"),
-        // And the whole documented style, which is the point of all of it.
+        // And the style a music library is named by, which is the point of it.
         ("<Artist> - <Title>", "Metallica - Nothing Else Matters"),
     ] {
         assert_eq!(render(template), expected, "{template}");
@@ -317,7 +425,7 @@ fn every_music_tag_renders_what_the_reference_says_it_does() {
 }
 
 /// Missing values are reported rather than rendered as nothing, which is what
-/// *"only rename if all tags are available"* reads.
+/// "Only rename if all tags are available" reads.
 #[test]
 fn a_tag_with_no_value_is_reported_as_missing() {
     let entry = FileEntry::synthetic("/nowhere/README");
@@ -334,14 +442,17 @@ fn a_tag_with_no_value_is_reported_as_missing() {
 fn local(format: &str) -> String {
     ren_core::template::dates::DateFormat::parse(format)
         .render(UNIX_EPOCH + Duration::from_secs(STAMP))
+        .expect("1977 is inside the calendar")
 }
 
 /// A sanity check on the fixture itself: if the stamp ever stops resolving,
 /// half the table above would silently compare two empty strings.
 #[test]
-fn the_fixture_timestamp_is_the_documented_example() {
+fn the_fixture_timestamp_resolves() {
     let stamp: SystemTime = UNIX_EPOCH + Duration::from_secs(STAMP);
-    let utc = ren_core::template::dates::DateFormat::parse("yyyy-mm-dd").render(stamp);
+    let utc = ren_core::template::dates::DateFormat::parse("yyyy-mm-dd")
+        .render(stamp)
+        .unwrap();
     assert!(utc.starts_with("1977-05-0"), "{utc}");
     assert!(!local("yyyy-mm-dd").is_empty());
 }
@@ -404,7 +515,7 @@ fn the_image_tags_round_trip_through_their_canonical_spelling() {
 
 /// The Folders tag group, over a tree built for it.
 ///
-/// The `S` prefix is *"in Folder && Subfolders"*, so each pair is the same
+/// The `S` prefix counts through subfolders too, so each pair is the same
 /// question asked twice at different depths.
 #[test]
 fn the_folder_tags_count_what_is_in_the_folder() {

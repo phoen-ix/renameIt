@@ -1,14 +1,15 @@
 //! The Pre-Processor: narrowing a file name before an operation sees it.
 //!
-//! *"The pre-processor filters out a
-//! section of the filename. Only this section is then processed by the actual
-//! rename function."*
+//! It picks out a section of the name, and only that section is handed to the
+//! step's operation; the rest is put back around the result afterwards.
 //!
-//! Two rules from that page shape everything here:
+//! Two rules shape everything here:
 //!
 //! * Stages run top to bottom: if one alters a filename, the next sees that
 //!   processed filename rather than the one it started from.
-//! * Only the filename — not the extension — is processed.
+//! * It narrows whatever slice the step's scope selects (P20), so a
+//!   name-scoped step never sees the extension, and a both-scoped one can
+//!   narrow into it.
 //!
 //! Several stages can decide a file is **not renamed at all** — that is a skip,
 //! not an error, and it is why [`PreProcessor::narrow`] returns an `Option`.
@@ -27,28 +28,25 @@ use crate::regex_flavor::RegexError;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PreProcessor {
-    /// *"Skips the first n number of letters in the filename. If n is larger
-    /// than the total number of letters in the filename, it will not be renamed
-    /// at all."*
+    /// Skip the first n characters. A name shorter than n is not renamed at
+    /// all.
     pub skip_first: Option<usize>,
-    /// *"The program will search for the string you enter. If it is found,
-    /// everything up until this string begins is skipped. If it is not found,
-    /// the whole filename is skipped."*
+    /// Skip everything before the first match. A name without one is not
+    /// renamed at all.
     pub skip_until: Option<MatchSpec>,
-    /// *"Only n number of characters will be renamed. […] If n is larger than
-    /// the remaining number of characters, all are included."*
+    /// Keep at most n characters; a shorter section is kept whole.
     pub limit_to: Option<usize>,
-    /// *"If it is found, the part of the filename after that will be skipped.
-    /// If it is not found, everything is included."*
+    /// Drop everything from the first match on. A name without one is kept
+    /// whole.
     pub cut_at: Option<MatchSpec>,
-    /// *"This allows you to match a specific section of the filename […] Only
-    /// this section is kept."*
+    /// Keep only the matched section. A name without a match is not renamed.
     pub section: Option<MatchSpec>,
     /// Whether the string searches above respect case.
     ///
-    /// There is a case switch — the dialog puts
-    /// one under the advanced filter — but scoped to that filter alone. Ours
-    /// covers all three text searches, and defaults to insensitive.
+    /// One switch for all three text searches, not one per stage: a user who
+    /// wants a case-sensitive match wants it wherever they typed text, and
+    /// three switches would be three places to forget. Defaults to
+    /// insensitive.
     pub case_sensitive: bool,
 
     /// All three matchers, compiled together on first use — this runs once per
@@ -74,26 +72,26 @@ impl PreProcessor {
         Self::default()
     }
 
-    /// *"Skip the first n characters"*.
+    /// Skip the first n characters.
     pub fn skipping_first(mut self, n: usize) -> Self {
         self.skip_first = Some(n);
         self
     }
 
-    /// *"Skip until string is found"*.
+    /// Skip until the string is found.
     pub fn skipping_until(mut self, spec: MatchSpec) -> Self {
         self.skip_until = Some(spec);
         self.compiled = Cached::new();
         self
     }
 
-    /// *"Include up to n characters"*.
+    /// Keep up to n characters.
     pub fn limited_to(mut self, n: usize) -> Self {
         self.limit_to = Some(n);
         self
     }
 
-    /// *"Cut if string is found"*.
+    /// Cut where the string is found.
     pub fn cutting_at(mut self, spec: MatchSpec) -> Self {
         self.cut_at = Some(spec);
         self.compiled = Cached::new();
@@ -175,8 +173,7 @@ impl PreProcessor {
         if let Some(n) = self.skip_first {
             let active = current.active();
             let Some(offset) = char_offset(active, n) else {
-                // "If n is larger than the total number of letters in the
-                // filename, it will not be renamed at all."
+                // A name shorter than n is not renamed at all.
                 return Ok(None);
             };
             current = current.narrow(offset..active.len());
@@ -186,7 +183,7 @@ impl PreProcessor {
         if let Some(matcher) = &compiled.skip_until {
             let active = current.active();
             let Some(hit) = matcher.find(active)? else {
-                // "If it is not found, the whole filename is skipped."
+                // No match: the whole name is skipped.
                 return Ok(None);
             };
             current = current.narrow(hit.start..active.len());
@@ -205,7 +202,7 @@ impl PreProcessor {
             if let Some(hit) = matcher.find(active)? {
                 current = current.narrow(0..hit.start);
             }
-            // "If it is not found, everything is included."
+            // No match: everything is kept.
         }
 
         // 5. Advanced filter — keep only the matched section.
@@ -250,10 +247,10 @@ mod tests {
         assert_eq!(narrow(&pp, "abc"), Some("abc".into()));
     }
 
-    /// "tell the pre-processor to skip the first 14 characters in the filename
-    /// so that only `is fantastic!` is sent to the rename function"
+    /// Skipping the first 14 characters hands only `is fantastic!` to the
+    /// operation.
     #[test]
-    fn skipping_the_first_n_characters_matches_the_worked_example() {
+    fn skipping_the_first_n_characters_leaves_the_rest() {
         let pp = PreProcessor::new().skipping_first(14);
         assert_eq!(
             narrow(&pp, "Batch Renamer is fantastic!"),
@@ -261,8 +258,6 @@ mod tests {
         );
     }
 
-    /// "If n is larger than the total number of letters in the filename, it
-    /// will not be renamed at all."
     #[test]
     fn skipping_past_the_end_means_the_file_is_not_renamed_at_all() {
         let pp = PreProcessor::new().skipping_first(10);
@@ -273,8 +268,6 @@ mod tests {
         assert_eq!(narrow(&pp, "short"), Some(String::new()));
     }
 
-    /// "If it is found, everything up until this string begins is skipped. If
-    /// it is not found, the whole filename is skipped."
     #[test]
     fn skip_until_starts_at_the_match_and_skips_the_file_when_absent() {
         let pp = PreProcessor::new().skipping_until(MatchSpec::Substring("is".into()));
@@ -291,8 +284,6 @@ mod tests {
         assert_eq!(narrow(&pp, "nothing to see"), None);
     }
 
-    /// "Only n number of characters will be renamed. […] If n is larger than
-    /// the remaining number of characters, all are included."
     #[test]
     fn limit_to_truncates_and_tolerates_short_names() {
         let pp = PreProcessor::new().limited_to(5);
@@ -300,8 +291,6 @@ mod tests {
         assert_eq!(narrow(&pp, "abc"), Some("abc".into()));
     }
 
-    /// "If it is found, the part of the filename after that will be skipped. If
-    /// it is not found, everything is included."
     #[test]
     fn cut_at_drops_the_tail_and_is_a_no_op_when_absent() {
         let pp = PreProcessor::new().cutting_at(MatchSpec::Substring(" - ".into()));
@@ -346,8 +335,8 @@ mod tests {
         assert_eq!(narrow(&pp, "a-b"), Some("a-".into()), "the second setting");
     }
 
-    /// "searching for `is*` in `Batch Renamer is fantastic!` will find
-    /// `is fantastic!`"
+    /// A wildcard here is a search (P19): `is*` in `Batch Renamer is
+    /// fantastic!` finds `is fantastic!`.
     #[test]
     fn the_advanced_filter_keeps_only_the_matched_section() {
         let pp = PreProcessor::new().keeping_section(MatchSpec::Wildcard("is*".into()));
@@ -364,7 +353,6 @@ mod tests {
         assert_eq!(narrow(&pp, "no brackets here"), None);
     }
 
-    /// "All options you see below are processed from top to bottom."
     #[test]
     fn stages_run_top_to_bottom_each_seeing_the_previous_output() {
         let pp = PreProcessor::new().skipping_first(6).limited_to(7);
