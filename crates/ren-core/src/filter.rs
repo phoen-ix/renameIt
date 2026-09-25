@@ -9,7 +9,8 @@
 //! adds the bare extension *and the whole name* (`stem.ext`), so a mask across
 //! the dot — `*.bak`, `*.mp3` — means what it says; without it only the stem
 //! is tested (P19 decides how a mask reads; this decides what it reads). The
-//! whole-path option adds the full path.
+//! whole-path option adds the full path. A folder has no extension
+//! (`model::split_name`), so its stem is its whole name.
 //!
 //! The filter is per-step, and it sees the *current* name: a step earlier in
 //! the pipeline can rename a file into or out of a later step's filter.
@@ -18,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::cache::Cached;
 use crate::matcher::{MatchSpec, Matcher};
-use crate::model::split_file_name;
+use crate::model::split_name;
 use crate::regex_flavor::RegexError;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,14 +122,25 @@ impl IncludeFilter {
     /// already differ from the path's last component because an earlier step
     /// changed it.
     pub fn accepts(&self, path: &str, file_name: &str) -> Result<bool, RegexError> {
+        self.accepts_entry(path, file_name, false)
+    }
+
+    /// [`Self::accepts`] for a listed row, which may be a folder. A folder's
+    /// name has no extension ([`split_name`]), so its stem is the whole name.
+    pub fn accepts_entry(
+        &self,
+        path: &str,
+        file_name: &str,
+        is_dir: bool,
+    ) -> Result<bool, RegexError> {
         let compiled = self.compiled()?;
         if let Some(include) = &compiled.include
-            && !self.matches_any(include, path, file_name)?
+            && !self.matches_any(include, path, file_name, is_dir)?
         {
             return Ok(false);
         }
         if let Some(exclude) = &compiled.exclude
-            && self.matches_any(exclude, path, file_name)?
+            && self.matches_any(exclude, path, file_name, is_dir)?
         {
             return Ok(false);
         }
@@ -141,8 +153,9 @@ impl IncludeFilter {
         matcher: &Matcher,
         path: &str,
         file_name: &str,
+        is_dir: bool,
     ) -> Result<bool, RegexError> {
-        let (stem, ext) = split_file_name(file_name);
+        let (stem, ext) = split_name(file_name, is_dir);
 
         // The stem is always tested.
         if matcher.is_match(stem)? {

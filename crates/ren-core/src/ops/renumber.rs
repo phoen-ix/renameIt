@@ -1,9 +1,7 @@
-//! Re-Number — *"Can pinpoint numbers inside your filenames and process
-//! them."*
+//! Re-Number — finding numbers inside a name and doing something to them.
 //!
-//! Re-Number. Three
-//! stages, exactly as the panel reads top to bottom: pick which numbers, limit
-//! them by value, then do one thing to each.
+//! Three stages, exactly as the panel reads top to bottom: pick which numbers,
+//! limit them by value, then do one thing to each.
 //!
 //! Arithmetic runs on `rust_decimal`, not `f64`: a renamer that turns `1.10`
 //! into `1.1000000000000001` has failed at its one job.
@@ -14,11 +12,11 @@ use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
-use super::numbers::{NumberOptions, NumberTarget, scan};
+use super::numbers::{MAX_PAD_WIDTH, NumberOptions, NumberTarget, scan};
 use super::{EvalCx, NameTransform, OpError};
 use crate::template::TextTemplate;
 
-/// *"Select what to do with the number"*.
+/// What to do with each selected number.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NumberAction {
@@ -95,28 +93,26 @@ impl NumberAction {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ReNumber {
-    /// *"With … in the filename"*.
+    /// Which of the numbers in the name.
     pub target: NumberTarget,
-    /// *"only process numbers that are >= to the specified number"*.
+    /// Only numbers at least this large.
     pub at_least: Option<i64>,
-    /// *"only process numbers that are <= to the specified number"*.
+    /// Only numbers at most this large.
     pub at_most: Option<i64>,
     pub action: NumberAction,
-    /// The one operand field, which *"supports `<tags>`"* — so a number can be
-    /// replaced with `<Counter>`, `<Parent>` or anything else.
+    /// The one operand field. It takes tags, so a number can be replaced with
+    /// `<Counter>`, `<Parent>` or anything else.
     pub operand: TextTemplate,
     pub numbers: NumberOptions,
-    /// *"Numbers will be padded with zeros to make sure that their new length
-    /// is the same as the old one."* — *"(Not available when using decimal
-    /// fractions.)"*
+    /// Pad a computed number back out with zeros to the width it had, so
+    /// `001` plus one is `002` rather than `2`. Whole numbers only: a
+    /// fraction's width is not a digit count.
     pub keep_length: bool,
-    /// Advanced setting `ReNumberDecimalRounding`: *"the number of digits after
-    /// the decimal point, or -1 for no rounding (default)"*.
+    /// Digits after the decimal point to round a computed result to; `None`
+    /// keeps what the arithmetic produced.
     ///
-    /// **P31.** The Re-Number checkbox tooltip claims 3 decimals by default and
-    /// the advanced setting claims none; the advanced setting is the one that
-    /// says "(default)" next to the value, so it wins. Rounding silently is the
-    /// more destructive of the two readings, which settles the tie.
+    /// **P31.** `None` by default: rounding silently is the more destructive
+    /// choice, and `rust_decimal` already makes `0.1 + 0.2` exactly `0.3`.
     pub rounding: Option<u32>,
 }
 
@@ -218,12 +214,23 @@ impl NameTransform for ReNumber {
         }
     }
 
+    /// Only while the action reads the operand. The field keeps its text when
+    /// the user switches to *Remove* or *Replace with Counter*, and a leftover
+    /// `<Ask>` there would open the Ask form on every run for nothing.
     fn needs(&self) -> crate::template::TagNeeds {
-        self.operand.needs()
+        if self.action.needs_operand() {
+            self.operand.needs()
+        } else {
+            crate::template::TagNeeds::NONE
+        }
     }
 
     fn asks(&self) -> Vec<crate::run::AskSpec> {
-        self.operand.asks()
+        if self.action.needs_operand() {
+            self.operand.asks()
+        } else {
+            Vec::new()
+        }
     }
 }
 
@@ -239,14 +246,20 @@ impl ReNumber {
 
         Ok(match self.action {
             NumberAction::ReplaceWithCounter => cx.counter_text(),
-            // "To remove a number, simple choose 'replace with' and leave the
-            // input field empty!" — which falls out of this for free.
+            // An empty operand removes the number, which falls out of this for
+            // free.
             NumberAction::ReplaceWith => operand.to_owned(),
             NumberAction::Remove => String::new(),
             NumberAction::InsertBefore => format!("{operand}{original}"),
             NumberAction::InsertAfter => format!("{original}{operand}"),
             NumberAction::ZeroPadTo => {
                 let width = whole(operand, "zero pad to")? as usize;
+                if width > MAX_PAD_WIDTH {
+                    return Err(OpError::new(
+                        "re-number",
+                        format!("zero pad to {width} is longer than any file name can be"),
+                    ));
+                }
                 pad_integer_part(original, span, width)
             }
             NumberAction::RoundTo => {
@@ -265,18 +278,27 @@ impl ReNumber {
                         format!("{operand:?} is not a number to {}", self.action.label()),
                     )
                 })?;
-                let result = match self.action {
-                    NumberAction::Add => value + by,
-                    NumberAction::Subtract => value - by,
-                    NumberAction::Multiply => value * by,
+                // Checked: `Decimal`'s operators panic past about 7.9e28, and a
+                // long ID in a name times a large operand gets there. A result
+                // that does not fit is a row error, like dividing by zero.
+                let (result, verb) = match self.action {
+                    NumberAction::Add => (value.checked_add(by), "plus"),
+                    NumberAction::Subtract => (value.checked_sub(by), "minus"),
+                    NumberAction::Multiply => (value.checked_mul(by), "times"),
                     NumberAction::Divide => {
                         if by.is_zero() {
                             return Err(OpError::new("re-number", "cannot divide by zero"));
                         }
-                        value / by
+                        (value.checked_div(by), "divided by")
                     }
                     _ => unreachable!("only the four arithmetic actions reach here"),
                 };
+                let result = result.ok_or_else(|| {
+                    OpError::new(
+                        "re-number",
+                        format!("{original} {verb} {} is too large a number", operand.trim()),
+                    )
+                })?;
                 self.format(result, span)
             }
         })
@@ -305,13 +327,14 @@ impl ReNumber {
         };
         let mut text = value.to_string();
 
-        // "same as input; if no input is found locale settings are used" — but
-        // fixed rather than locale-dependent, for the reason D30 gives.
+        // The decimal character the number was written with, never the
+        // locale's: a name must not change with the machine it is renamed on
+        // (D30).
         if span.separator == Some(',') {
             text = text.replace('.', ",");
         }
 
-        // "(Not available when using decimal fractions.)"
+        // Whole numbers only: a fraction's width is not a digit count.
         if self.keep_length && span.frac_digits.is_none() && !text.contains(['.', ',']) {
             text = pad_digits(&text, span.int_digits);
         }
@@ -384,7 +407,6 @@ mod tests {
         NumberOptions::default().with_decimal_points(true)
     }
 
-    /// "the first number", "the last number", "all numbers" …
     #[test]
     fn the_target_picks_which_numbers_are_touched() {
         let remove = |target| ReNumber::new(target, NumberAction::Remove);
@@ -402,7 +424,6 @@ mod tests {
         assert_eq!(run(&op, "no numbers"), "no numbers");
     }
 
-    /// "only process numbers that are >= / <= to the specified number"
     #[test]
     fn the_range_filters_narrow_the_selection() {
         let op = ReNumber::new(NumberTarget::All, NumberAction::Remove).between(Some(10), None);
@@ -415,10 +436,9 @@ mod tests {
         assert_eq!(run(&op, "1 5 10 100"), "1   100");
     }
 
-    /// "To remove a number, simple choose 'replace with' and leave the input
-    /// field empty!"
+    /// Replacing with nothing is another way to remove.
     #[test]
-    fn replace_with_nothing_is_the_documented_way_to_remove() {
+    fn replace_with_nothing_removes() {
         let op = ReNumber::new(NumberTarget::All, NumberAction::ReplaceWith);
         assert_eq!(run(&op, "Track 07"), "Track ");
     }
@@ -463,8 +483,7 @@ mod tests {
         assert!(op.apply("File 4", &cx).is_err());
     }
 
-    /// "Numbers will be padded with zeros to make sure that their new length is
-    /// the same as the old one." Without it, "modifying 001 yields 1".
+    /// Without the option, adding one to `001` gives `2`.
     #[test]
     fn keep_previous_length_pads_the_result_back_out() {
         let op = ReNumber::new(NumberTarget::All, NumberAction::Add).with_operand("1");
@@ -476,7 +495,6 @@ mod tests {
         assert_eq!(run(&op, "Track 099"), "Track 100", "never truncates");
     }
 
-    /// "(Not available when using decimal fractions.)"
     #[test]
     fn keep_previous_length_stands_down_for_a_fraction() {
         let op = ReNumber::new(NumberTarget::All, NumberAction::Add)
@@ -486,8 +504,8 @@ mod tests {
         assert_eq!(run(&op, "v01.50"), "v2.5");
     }
 
-    /// "Zero pad to:" as a Re-Number action, which — unlike the standalone Zero
-    /// Padding function — only pads.
+    /// *Zero pad to* as a Re-Number action, which — unlike the standalone Zero
+    /// Padding operation — only pads.
     #[test]
     fn the_zero_pad_action_widens_without_cropping() {
         let op = ReNumber::new(NumberTarget::All, NumberAction::ZeroPadTo).with_operand("3");
@@ -515,7 +533,7 @@ mod tests {
         assert_eq!(run(&op, "price 12,25"), "price 12,75");
     }
 
-    /// "Replace with Counter", and the operand field taking tags.
+    /// *Replace with Counter*.
     #[test]
     fn numbers_can_be_replaced_by_the_counter() {
         let entries: Vec<FileEntry> = ["/a/x 5.txt", "/a/y 6.txt", "/a/z 7.txt"]
@@ -553,8 +571,6 @@ mod tests {
         assert_eq!(op.apply("Track 7", &cx).unwrap(), "Track rock");
     }
 
-    /// "if a minus sign is found immediately in front of a number it is treated
-    /// as part of the number."
     #[test]
     fn identified_minus_signs_take_part_in_the_arithmetic() {
         let op = ReNumber::new(NumberTarget::All, NumberAction::Add)
@@ -563,8 +579,54 @@ mod tests {
         assert_eq!(run(&op, "temp -5 C"), "temp 5 C");
     }
 
+    /// A result too large for a decimal is a row error, like dividing by
+    /// zero — never a panic on the preview's threads (P7's principle).
     #[test]
-    fn every_action_has_its_documented_label() {
+    fn arithmetic_that_overflows_is_an_error_rather_than_a_crash() {
+        let entry = FileEntry::synthetic("/tmp/id");
+        let cx = EvalCx::simple(&entry, 0, 1);
+        let huge = "id 79228162514264337593543950335";
+        for (action, by) in [
+            (NumberAction::Multiply, "10"),
+            (NumberAction::Add, "1"),
+            (NumberAction::Divide, "0.1"),
+        ] {
+            let op = ReNumber::new(NumberTarget::All, action).with_operand(by);
+            let err = op.apply(huge, &cx).expect_err("the result does not fit");
+            assert!(err.to_string().contains("too large"), "{err}");
+        }
+    }
+
+    /// No file name is longer than 255 characters, so a wider padding can only
+    /// produce a name the plan rejects — after allocating the width once per
+    /// number per file per keystroke.
+    #[test]
+    fn a_zero_pad_wider_than_any_name_is_an_error() {
+        let entry = FileEntry::synthetic("/tmp/Track 7");
+        let cx = EvalCx::simple(&entry, 0, 1);
+        let op =
+            ReNumber::new(NumberTarget::All, NumberAction::ZeroPadTo).with_operand("3000000000");
+        let err = op.apply("Track 7", &cx).unwrap_err();
+        assert!(err.to_string().contains("longer than"), "{err}");
+        let op = op.with_operand("255");
+        assert!(op.apply("Track 7", &cx).is_ok());
+    }
+
+    /// A field the chosen action does not use cannot ask a question: the text
+    /// the user left in it would otherwise open the Ask form on every run for
+    /// an answer nothing reads.
+    #[test]
+    fn an_unused_operand_asks_nothing() {
+        let op = ReNumber::new(NumberTarget::All, NumberAction::Remove)
+            .with_operand("<Ask> <Clipboard>");
+        assert!(op.asks().is_empty());
+        assert_eq!(op.needs(), crate::template::TagNeeds::NONE);
+        let op = ReNumber::new(NumberTarget::All, NumberAction::ReplaceWith).with_operand("<Ask>");
+        assert_eq!(op.asks().len(), 1);
+    }
+
+    #[test]
+    fn every_action_has_its_label() {
         for (action, label) in NumberAction::all().iter().zip(NumberAction::LABELS) {
             assert_eq!(action.label(), label);
         }

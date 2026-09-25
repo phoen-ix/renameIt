@@ -1,8 +1,7 @@
 //! Set Date & Time — changing the three timestamps a file carries.
 //!
-//! Set Date & Time. The dialog has nine Source
-//! entries and the six interval units are transcribed from the live app rather
-//! than from the prose headings, which differ.
+//! Nine sources for the date, in the order the Source dropdown lists them, and
+//! six interval units for the two that shift a date.
 //!
 //! The largest operation in the app. Almost all of the actual arithmetic lives
 //! in [`crate::datetime`], which is pure and generic over the time zone; what
@@ -17,7 +16,7 @@ use crate::effect::{Effect, TimeSet, TimeStamp, Undoability};
 use crate::meta::exif;
 use crate::template::TagNeeds;
 
-/// The `Source:` dropdown, verbatim and in the order the dialog lists it.
+/// The `Source:` dropdown, in the order the card lists it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DateSource {
@@ -46,7 +45,8 @@ impl DateSource {
         Self::FromFilename,
     ];
 
-    /// Word for word, including the abbreviation in the eighth.
+    /// The dropdown's text. The eighth is abbreviated to fit beside its
+    /// neighbours in the combo.
     pub fn label(self) -> &'static str {
         match self {
             Self::EnterNewDate => "Enter new date (set below)",
@@ -57,7 +57,9 @@ impl DateSource {
             Self::NowAtStartOfRun => "Now (time at start of rename)",
             Self::AddInterval => "Add interval to files' current date",
             Self::SubtractInterval => "Subtract interval from files' curr. date",
-            Self::FromFilename => "Get from filename (see manual)",
+            // Names the slots, because nothing else in the app does: without
+            // `<%4>` set up as the year every row is silently left alone.
+            Self::FromFilename => "Get from filename (Parts <%4>–<%9>)",
         }
     }
 
@@ -72,14 +74,11 @@ impl DateSource {
     }
 }
 
-/// Which of the three stamps to write.
+/// Which of the three stamps a file and a folder carry to write.
 ///
-/// > *"Each file and folder keeps track of three different dates."*
-///
-/// Created and Accessed start unticked, Modified ticked — the starting point
-/// the worked example assumes
-/// (*"Uncheck 'created' and 'accessed' so that only the 'modified' date is
-/// changed"* describes where you already are).
+/// Created and Accessed start unticked, Modified ticked: the modified date is
+/// the one file managers show and sort by, and so the one a user means by
+/// "the file's date".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DateTargets {
@@ -109,9 +108,9 @@ impl DateTargets {
 /// The date and time boxes, as a wall-clock reading with no zone.
 ///
 /// Six numbers rather than a formatted string: the preset reads like the
-/// dialog, and there is no format to get wrong. *"The date format displayed
-/// depends on your system settings"* is about rendering only — what is *stored*
-/// has to mean the same thing on every machine (D30).
+/// card, and there is no format to get wrong. The card may *display* the date
+/// in the system's format; what is *stored* has to mean the same thing on
+/// every machine (D30).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct WallClock {
@@ -123,7 +122,8 @@ pub struct WallClock {
     pub second: u32,
 }
 
-/// The bottom of the documented range, so `Default` is a constant.
+/// The bottom of the supported range (1980–2099), so `Default` is a
+/// constant.
 ///
 /// A constant rather than "today" because presets have to be deterministic and
 /// the preset writer's `default_of` compares against this. The *GUI* seeds a
@@ -308,18 +308,18 @@ impl SetDate {
         })
     }
 
-    /// > *"`<%4>` - Year, `<%5>` - Month, `<%6>` - Day, `<%7>` - Hour,
-    /// > `<%8>` - Minute, `<%9>` - Second"*
+    /// The date in the name, read through Setup Parts: `<%4>` is the year,
+    /// `<%5>` the month, `<%6>` the day, `<%7>`–`<%9>` hour, minute and
+    /// second. The same mapping is in `docs/tags.md` and in the source's label.
     ///
-    /// Splits the **stem** of the current name, which is what makes the
-    /// worked example work: `My File 2000-12-31.txt` with
+    /// Splits the **stem** of the current name: `My File 2000-12-31.txt` with
     /// `<%1> <%2> <%4>-<%5>-<%6>` gives `<%6> = "31"`. Splitting the whole name
-    /// would give `"31.txt"` and the example would fail.
+    /// would give `"31.txt"`, which is not a day.
     ///
     /// It also means an earlier Replace card can tidy a name before the date is
     /// read out of it — which is the pipeline paying for itself.
     fn date_in_filename(&self, cx: &EvalCx<'_>) -> Option<NaiveDateTime> {
-        let (stem, _) = crate::model::split_file_name(cx.current);
+        let (stem, _) = crate::model::split_name(cx.current, cx.entry.is_dir);
         let parts = cx.run.parts.split(stem);
         // Year is required; everything else has a sensible floor, so a
         // year-only filename means the first instant of that year.
@@ -441,13 +441,17 @@ impl SideEffectAction for SetDate {
             (DateTargets::LABELS[1], times.accessed),
             (DateTargets::LABELS[2], times.modified),
         ];
+        // At least one stamp is set: `Pipeline::evaluate` drops an empty
+        // effect — a file with no date to give — before asking for a
+        // description, so that row is left alone rather than described.
         let set: Vec<&str> = named
             .iter()
             .filter_map(|(label, stamp)| stamp.map(|_| *label))
             .collect();
-        if set.is_empty() {
-            return "no date available for this file".to_owned();
-        }
+        debug_assert!(
+            !set.is_empty(),
+            "describe is only asked about a non-empty effect"
+        );
         // Every selected target gets the same value unless the source shifts
         // each from its own, in which case the first is representative enough
         // for a one-line badge and the rest follow the same rule.
@@ -496,7 +500,7 @@ mod tests {
     }
 
     /// A `SystemTime` whose *local* reading is the wall clock given, so the
-    /// tests read like the documented examples regardless of the runner's zone.
+    /// tests read as wall-clock dates regardless of the runner's zone.
     fn system_at(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> SystemTime {
         let stamp = datetime::localise(&Local, naive(y, mo, d, h, mi, s)).unwrap();
         UNIX_EPOCH + Duration::new(stamp.secs as u64, stamp.nanos)
@@ -525,8 +529,8 @@ mod tests {
         datetime::to_local(&Local, stamp?)
     }
 
-    /// The single most important test in M5: the dropdown, verbatim and in
-    /// order.
+    /// The dropdown, in order — a preset stores the variant, and the card
+    /// shows the label.
     #[test]
     fn the_source_dropdown_lists_the_nine_sources_in_order() {
         assert_eq!(
@@ -540,7 +544,7 @@ mod tests {
                 "Now (time at start of rename)",
                 "Add interval to files' current date",
                 "Subtract interval from files' curr. date",
-                "Get from filename (see manual)",
+                "Get from filename (Parts <%4>–<%9>)",
             ]
         );
     }
@@ -580,7 +584,7 @@ mod tests {
         assert_eq!(times.accessed, None, "not selected");
     }
 
-    /// The documented second worked example, end to end through the operation.
+    /// A year-only mask, end to end through the operation.
     #[test]
     fn the_component_mask_changes_only_the_year() {
         let op = SetDate {
@@ -691,9 +695,8 @@ mod tests {
         assert_eq!(stamps[0], stamps[1], "one timestamp for the whole run");
     }
 
-    /// The worked example for `Get from filename`.
     #[test]
-    fn get_from_filename_reads_the_worked_example() {
+    fn get_from_filename_reads_the_date_from_the_parts() {
         let op = SetDate {
             source: DateSource::FromFilename,
             ..Default::default()

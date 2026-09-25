@@ -95,12 +95,12 @@ pub enum Produces {
 
 /// An operation, classified.
 ///
-/// This replaced an infallible `as_transform() -> &dyn NameTransform`, and the
-/// shape matters. Making that method return `Option` would have compiled
-/// everywhere and been *wrong* in one place that mattered: the GUI's card
-/// writes `if let Some(t) = op.as_transform()`, so a broken action card would
-/// have reported no problem at all — silently, forever. A two-variant enum
-/// forces every consumer to say what it does with an action.
+/// An enum rather than an `Option<&dyn NameTransform>`, and the shape matters
+/// (D43). An `Option` compiles everywhere and is *wrong* wherever a caller
+/// writes `if let Some(t) = …` and forgets the other case: a card checking
+/// itself that way would report no problem for any action at all — silently,
+/// forever. A two-variant enum forces every consumer to say what it does with
+/// an action.
 pub enum StepRef<'a> {
     Name(&'a dyn NameTransform),
     Action(&'a dyn SideEffectAction),
@@ -186,7 +186,7 @@ impl OpKind {
     /// What a fresh card of this operation is scoped to, and what a job file
     /// that omits `scope` means.
     ///
-    /// The name everywhere except Free Format, whose documented example
+    /// The name everywhere except Free Format, whose typical pattern
     /// (`<Parent>_<FullName>` → `May09_0001.jpg`) rebuilds the whole filename:
     /// scoped to the name, the engine would put the extension back on the end
     /// of a pattern that already carries it.
@@ -224,7 +224,7 @@ impl OpKind {
             Self::MusicTagger(_) | Self::RemoveTags(_) => Scope::Name,
             // `Scope::Name`, and it is worth saying why it is *not* Free
             // Format's `Both`. D36 gave Free Format `Both` because its
-            // worked example is `<Parent>_<FullName>` — the pattern
+            // typical pattern is `<Parent>_<FullName>` — the pattern
             // already carries the extension, so scoping to the name would
             // append it twice. A music style is `<Artist> - <Title>`, which
             // carries no extension at all, so `Both` would *destroy* it:
@@ -271,28 +271,62 @@ impl OpKind {
     /// The one-line reason this operation cannot run, if it has one.
     ///
     /// **Configuration only.** The GUI draws this every frame for every card,
-    /// so it must not touch the disk, and it must not depend on the listing —
-    /// a card cannot know how many files are showing, and pretending it can is
-    /// how the Filename Editor ends up permanently accusing the user of a
-    /// mismatch that does not exist. Anything listing-dependent surfaces
-    /// through the plan instead, as a row error (P4).
+    /// so anything it reads must come out of a cache rather than a fresh read
+    /// per frame (P44), and it must not depend on the listing — a card cannot
+    /// know how many files are showing or what dates they carry. Anything
+    /// listing-dependent surfaces through the plan instead, as a row error
+    /// (P4).
+    ///
+    /// Most operations are answered by running them once against a made-up
+    /// file, and the made-up file is built so that only the configuration can
+    /// fail: it carries all three timestamps, because every real file has a
+    /// modified date and an operation that shifts or partly rewrites one
+    /// (Set Date's interval sources, a year-only mask) would otherwise be
+    /// accused of needing a date that is always there. Two operations answer
+    /// for themselves, because running them says the wrong thing: the Filename
+    /// Editor pairs lines with the listing, and a one-file listing would
+    /// report a line-count mismatch for every editor with more than one line;
+    /// a script is too expensive to run per card per frame.
     pub fn problem(&self) -> Option<String> {
-        // Scripting answers for itself. The generic probe below *runs* the
-        // operation against a synthetic file, and running a script once per
-        // card per frame is not something a preview can afford — so the card
-        // checks that its script compiles and stops there.
-        if let Self::Script(op) = self {
-            return op.problem();
+        match self {
+            Self::Script(op) => return op.problem(),
+            Self::FilenameEditor(op) => return op.problem(),
+            _ => {}
         }
         // A broken `<tag>` is the common case, and every tag-bearing operation
-        // reports it the same way: by refusing to compile its template. One
-        // synthetic file, no IO.
-        let entry = crate::model::FileEntry::synthetic("/example/name.txt");
-        let cx = crate::ops::EvalCx::simple(&entry, 0, 1);
+        // reports it the same way: by refusing to compile its template.
+        let run = super::default_run();
+        let mut entry = crate::model::FileEntry::synthetic("/example/name.txt");
+        entry.modified = Some(run.now);
+        entry.created = Some(run.now);
+        entry.accessed = Some(run.now);
+        let cx = crate::ops::EvalCx::new(&entry, 0, 1, run);
         match self.as_step() {
             StepRef::Name(transform) => transform.apply("name", &cx).err().map(|e| e.to_string()),
             StepRef::Action(action) => action.effect(&cx).err().map(|e| e.to_string()),
         }
+    }
+
+    /// Throws away everything this operation has derived from its
+    /// configuration, so the next question is answered from the configuration
+    /// as it is now.
+    ///
+    /// **D21.** Every [`Cached`](crate::cache::Cached) in an operation resets on
+    /// `Clone` and on nothing else. That is right for the pipeline — `to_step`
+    /// clones — and wrong for a caller that edits a live operation in place,
+    /// which is what the GUI's card editors do: they write straight into
+    /// `FilenameEditor::text`, `CsvList::file`, `Replace::find` and a Batch
+    /// Replace's rule list, and ask the same value for its summary and its
+    /// [`Self::problem`] on the next frame. Without this the card keeps
+    /// whatever it derived first: a line count of 0, the compile error of a
+    /// pattern typed half-way, a Batch Replace prefilter for a rule list that
+    /// no longer exists. Call it after every in-place edit.
+    ///
+    /// A clone rather than a reset per type, because a clone is already what
+    /// D21 defines as "the configuration without the work", and it cannot miss
+    /// a cache added to an operation later.
+    pub fn refresh(&mut self) {
+        *self = self.clone();
     }
 
     /// One line describing what this operation is currently configured to do.
@@ -325,15 +359,6 @@ impl OpKind {
             Self::RemoveTags(op) => StepRef::Action(op),
             Self::MusicRename(op) => StepRef::Name(op),
             Self::Script(op) => StepRef::Name(op),
-        }
-    }
-
-    /// The transform half, for a caller that genuinely cannot use an action —
-    /// the GUI's single-card dry run, and nothing else.
-    pub fn as_transform(&self) -> Option<&dyn NameTransform> {
-        match self.as_step() {
-            StepRef::Name(t) => Some(t),
-            StepRef::Action(_) => None,
         }
     }
 
@@ -416,7 +441,8 @@ pub enum UnknownOp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ops::CaseMode;
+    use crate::datetime::DateComponents;
+    use crate::ops::{CaseMode, DateSource, WallClock};
 
     #[test]
     fn every_operation_has_a_distinct_name_and_label() {
@@ -475,22 +501,13 @@ mod tests {
     #[test]
     fn every_operation_is_either_a_name_transform_or_an_action() {
         for op in OpKind::all() {
-            match (op.as_step(), op.produces()) {
-                (StepRef::Name(_), Produces::Name) => {
-                    assert!(op.as_transform().is_some(), "{}", op.name());
-                }
-                (StepRef::Action(_), Produces::Action) => {
-                    assert!(
-                        op.as_transform().is_none(),
-                        "{} is an action and must not answer as a transform",
-                        op.name()
-                    );
-                }
+            match (op.as_step(), op.produces(), op.to_step()) {
+                (StepRef::Name(_), Produces::Name, Step::Name(_))
+                | (StepRef::Action(_), Produces::Action, Step::Action(_)) => {}
                 _ => panic!("{} classifies itself two different ways", op.name()),
             }
-            // Whatever it is, it can describe itself and be put in a pipeline.
+            // Whatever it is, it can describe itself.
             assert!(!op.summary().is_empty(), "{}", op.name());
-            let _ = op.to_step();
         }
     }
 
@@ -501,6 +518,85 @@ mod tests {
         for op in OpKind::all() {
             assert_eq!(op.problem(), None, "{} complains when brand new", op.name());
         }
+    }
+
+    /// D21: a `Cached` resets only on clone, and the GUI edits a card's op in
+    /// place — so whatever the card derived before the edit (a line count, a
+    /// compiled pattern) outlives it until `refresh`.
+    #[test]
+    fn refresh_makes_an_in_place_edit_take_effect() {
+        let mut op = OpKind::FilenameEditor(FilenameEditor::default());
+        assert_eq!(op.summary(), "Filename Editor (empty)");
+        let OpKind::FilenameEditor(editor) = &mut op else {
+            unreachable!()
+        };
+        editor.text = "one\ntwo\nthree".to_owned();
+        assert_eq!(
+            op.summary(),
+            "Filename Editor (empty)",
+            "the line count the card derived first survives the edit"
+        );
+        op.refresh();
+        assert_eq!(op.summary(), "Names from 3 typed lines");
+
+        // Typing a pattern one key at a time: `(` alone does not compile.
+        let mut op = OpKind::Replace(Replace::new("(", "").regex(true));
+        assert!(op.problem().is_some());
+        let OpKind::Replace(replace) = &mut op else {
+            unreachable!()
+        };
+        replace.find = r"(\d+)".to_owned();
+        op.refresh();
+        assert_eq!(op.problem(), None);
+    }
+
+    /// `problem` is about the configuration. A card that is fine for any real
+    /// listing must not be judged against the one-file, no-timestamp listing
+    /// the probe makes up.
+    #[test]
+    fn a_configured_card_is_judged_on_its_configuration_not_on_a_made_up_listing() {
+        let three_lines = OpKind::FilenameEditor(FilenameEditor::new("one\ntwo\nthree"));
+        assert_eq!(three_lines.problem(), None);
+        let typo = OpKind::FilenameEditor(FilenameEditor::new("one\n<Nmae>"));
+        let message = typo
+            .problem()
+            .expect("a bad tag is a configuration problem");
+        assert!(message.contains("<Nmae>"), "{message}");
+
+        // The camera-clock case: every real file has a modified date to shift.
+        let shift = OpKind::SetDate(SetDate {
+            source: DateSource::AddInterval,
+            ..Default::default()
+        });
+        assert_eq!(shift.problem(), None);
+
+        // A year-only mask merges into the date the file already has.
+        let year_only = OpKind::SetDate(SetDate {
+            date: WallClock {
+                year: 2008,
+                ..WallClock::default()
+            },
+            change: DateComponents {
+                year: true,
+                month: false,
+                day: false,
+                hour: false,
+                minute: false,
+                second: false,
+            },
+            ..Default::default()
+        });
+        assert_eq!(year_only.problem(), None);
+
+        // And a date that could never be written still says so.
+        let out_of_range = OpKind::SetDate(SetDate {
+            date: WallClock {
+                year: 1970,
+                ..WallClock::default()
+            },
+            ..Default::default()
+        });
+        assert!(out_of_range.problem().is_some());
     }
 
     #[test]

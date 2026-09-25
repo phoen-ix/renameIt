@@ -205,6 +205,14 @@ separators. Given files called `Metallica - Nothing Else Matters.mp3`, a parts
 pattern of `<%1> - <%2>` loads `<%1>` with the artist and `<%2>` with the
 title.
 
+Set Date & Time's *Get from filename* source reads a date out of the same
+parts: `<%4>` is the year, `<%5>` the month, `<%6>` the day and `<%7>`–`<%9>`
+the hour, minute and second. Only the year is required — a missing month or
+day is 1, a missing time is midnight — and a two-digit year reads 80–99 as
+19xx and 00–79 as 20xx. A file whose name gives no year is left alone. For
+`My File 2000-12-31.txt`, the parts pattern `<%1> <%2> <%4>-<%5>-<%6>` sets the
+date to 31 December 2000.
+
 ### `<\>` moves a file into a subfolder
 
 `<Date-yyyy><\><Name>` sorts photos into one folder per year, creating the

@@ -715,7 +715,7 @@ mod tests {
         let compiled = compile("rename = || 'x'").unwrap();
         let mut session =
             Session::start(&compiled, "", &entries, &run_cx, Duration::from_secs(5)).unwrap();
-        assert!(session.finish().is_empty());
+        assert_eq!(session.finish(), RunOutcome::default());
 
         let compiled = compile("rename = || 'x'\ndone = || 'all finished'").unwrap();
         let mut session =

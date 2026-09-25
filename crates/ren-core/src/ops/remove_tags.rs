@@ -1,19 +1,15 @@
 //! Remove Tags — stripping tag blocks out of music files.
 //!
-//! Remove Tags, whose group box reads **Remove Mp3
-//! Tags** and whose one instruction is *"Remove these tags, if present:"*
-//! over three independent checkboxes.
-//!
-//! > *"You may want to remove it if it for example contains garbage data that
-//! > messes up your mp3-player display. And if you are about to write new tags,
-//! > it may be a good idea to remove the old ones first."*
+//! Three independent checkboxes — ID3v1, ID3v2, Lyrics3 — each removing that
+//! block if the file has one. The uses are a block full of garbage that a
+//! player displays, and clearing old tags before Music Tagger writes new ones.
 //!
 //! **This function has no undo** (P2). Unlike Music Tagger it does not even
 //! keep the values it destroys, so there is nothing a future version could
 //! restore from — which is why the engine refuses it outright unless the caller
 //! has said it may run (D52).
 //!
-//! *"if present"* is the whole error model: a file without the block, and a
+//! "If present" is the whole error model: a file without the block, and a
 //! file whose format cannot carry it, are both rows left alone.
 
 use serde::{Deserialize, Serialize};
@@ -32,12 +28,13 @@ use crate::run::AskSpec;
 pub struct RemoveTags {
     pub id3v1: bool,
     pub id3v2: bool,
-    /// *"Lyrics v1 & v2"* — one box for both, as the dialog has it.
+    /// Lyrics3 v1 and v2 — one box for both, because a file carries one or
+    /// the other and nobody wants to remove only one.
     pub lyrics: bool,
 }
 
 impl RemoveTags {
-    /// Every box paired with its kind, in the dialog's own order.
+    /// Every box paired with its kind, in the card's order.
     pub fn boxes(&mut self) -> [(TagKind, &mut bool); 3] {
         [
             (TagKind::Id3v1, &mut self.id3v1),
@@ -140,7 +137,7 @@ mod tests {
     }
 
     #[test]
-    fn each_box_reaches_the_effect_in_the_dialogs_order() {
+    fn each_box_reaches_the_effect_in_the_cards_order() {
         let op = RemoveTags {
             id3v1: true,
             id3v2: true,

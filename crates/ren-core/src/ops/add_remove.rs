@@ -1,14 +1,15 @@
 //! Add & Remove.
 //!
-//! The panel is a radio pair — Add or
-//! Remove — plus a checkbox nothing documents but the UI spells out:
-//! *"Both at the same time (Remove first, then add)"*.
+//! The panel is a radio pair — Add or Remove — plus a third mode that does
+//! both, removing first and then adding.
 
 use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
 
-use super::{EvalCx, NameTransform, OpError, byte_of_position, byte_range, char_len};
+use super::{
+    EvalCx, NameTransform, OpError, byte_of_position, byte_range, char_len, position_label,
+};
 use crate::template::TextTemplate;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -17,9 +18,8 @@ pub enum AddRemoveMode {
     #[default]
     Add,
     Remove,
-    /// *"Both at the same time (Remove first, then add)"* — and the order in
-    /// that label is load-bearing: the add position is resolved against the
-    /// **already shortened** name.
+    /// Remove first, then add — and the order is load-bearing: the add
+    /// position is resolved against the **already shortened** name.
     Both,
 }
 
@@ -28,24 +28,21 @@ pub enum AddRemoveMode {
 pub struct AddRemove {
     pub mode: AddRemoveMode,
 
-    /// *"Enter the string you wish to add to the filenames."*
+    /// The text to add.
     ///
     /// Tags work here, which is not decoration: the shipped "Add suffix to end
-    /// of filename" preset is literally `Add '<Ask>' at pos 0 from ending`.
+    /// of filename" preset adds `<Ask>` at position 0, counting backwards.
     pub insert: TextTemplate,
-    /// *"If you insert xxx into the filename abcdef at position 2 you end up
-    /// with abxxxcdef but if you instead enable overwriting you end up with
-    /// abxxxf."*
+    /// Replace as many characters as are added, instead of pushing them
+    /// along: `xxx` at position 2 of `abcdef` gives `abxxxf` rather than
+    /// `abxxxcdef`.
     pub overwrite: bool,
-    /// *"The position is zero based, meaning that position 0 points to before
-    /// the first character."*
+    /// Zero-based: position 0 is before the first character (P15).
     pub add_pos: usize,
-    /// *"position" starts at the end of the filename and "moves" towards the
-    /// beginning*
+    /// Count the position from the end of the name towards the beginning.
     pub add_backwards: bool,
 
-    /// *"How many characters (letters) do you want to remove from the
-    /// filename?"*
+    /// How many characters to remove.
     pub delete: usize,
     pub remove_pos: usize,
     pub remove_backwards: bool,
@@ -81,9 +78,9 @@ impl AddRemove {
         self
     }
 
-    /// *"Set "delete" to 999 to remove all characters after the starting
-    /// position!"* — which works because an over-long count truncates instead
-    /// of erroring.
+    /// A count longer than what is left removes everything after the position
+    /// — `999` is the easy way to say "the rest" — because an over-long count
+    /// truncates instead of erroring.
     fn apply_remove(&self, subject: &str) -> String {
         if self.delete == 0 {
             return subject.to_owned();
@@ -101,8 +98,8 @@ impl AddRemove {
     ///
     /// The same string in `Add` mode; in `Both` mode the subject already
     /// shortened by the Remove half, because `apply` resolves `add_pos` against
-    /// `apply_remove`'s output — *"Removes first, then adds"*, and the order in
-    /// that label is load-bearing.
+    /// `apply_remove`'s output — remove first, then add, and the order is
+    /// load-bearing.
     ///
     /// Exposed for Visual Assist, which must show the Add strip the string the
     /// caret will actually be measured on. Computing it in the GUI instead
@@ -144,17 +141,18 @@ impl NameTransform for AddRemove {
     }
 
     fn summary(&self) -> String {
+        let add_at = position_label(self.add_pos, self.add_backwards);
+        let remove_at = position_label(self.remove_pos, self.remove_backwards);
+        let overwriting = if self.overwrite { ", overwriting" } else { "" };
         match self.mode {
-            AddRemoveMode::Add => format!("Add {:?} at {}", self.insert.as_str(), self.add_pos),
-            AddRemoveMode::Remove => {
-                format!("Remove {} chars at {}", self.delete, self.remove_pos)
+            AddRemoveMode::Add => {
+                format!("Add {:?} at {add_at}{overwriting}", self.insert.as_str())
             }
+            AddRemoveMode::Remove => format!("Remove {} chars at {remove_at}", self.delete),
             AddRemoveMode::Both => format!(
-                "Remove {} at {} then add {:?} at {}",
+                "Remove {} at {remove_at} then add {:?} at {add_at}{overwriting}",
                 self.delete,
-                self.remove_pos,
                 self.insert.as_str(),
-                self.add_pos
             ),
         }
     }
@@ -164,7 +162,8 @@ impl NameTransform for AddRemove {
             AddRemoveMode::Remove => Cow::Borrowed(""),
             _ => match cx.render(&self.insert)? {
                 Some(text) => text,
-                // "Only rename if all tags are available".
+                // Only rename if all tags are available, or an unanswered
+                // `<Ask>`.
                 None => return Ok(Cow::Borrowed(subject)),
             },
         };
@@ -194,14 +193,11 @@ mod tests {
     use super::super::testing::run;
     use super::*;
 
-    /// "If you insert xxx into the filename abcdef at position 2 you end up
-    /// with abxxxcdef"
     #[test]
     fn inserting_at_a_position_pushes_the_rest_along() {
         assert_eq!(run(&AddRemove::add("xxx", 2), "abcdef"), "abxxxcdef");
     }
 
-    /// "but if you instead enable overwriting you end up with abxxxf"
     #[test]
     fn overwriting_consumes_as_many_characters_as_it_writes() {
         assert_eq!(
@@ -210,14 +206,13 @@ mod tests {
         );
     }
 
-    /// "position 0 points to before the first character"
     #[test]
     fn position_zero_is_before_the_first_character() {
         assert_eq!(run(&AddRemove::add("pre-", 0), "name"), "pre-name");
     }
 
-    /// The shipped "Add suffix to end of filename" preset is
-    /// `Add '<Ask>' at pos 0 from ending`.
+    /// The shipped "Add suffix to end of filename" preset adds at position 0,
+    /// counting backwards.
     #[test]
     fn backwards_position_zero_appends_to_the_end() {
         assert_eq!(
@@ -235,15 +230,11 @@ mod tests {
         assert_eq!(run(&AddRemove::add("!", 99), "abc"), "abc!");
     }
 
-    /// "The Remove function allows you to delete a certain number of characters
-    /// from the filenames."
     #[test]
     fn removing_deletes_the_requested_run() {
         assert_eq!(run(&AddRemove::remove(3, 2), "abcdefgh"), "abfgh");
     }
 
-    /// "Set "delete" to 999 to remove all characters after the starting
-    /// position!"
     #[test]
     fn a_delete_count_of_999_removes_everything_after_the_position() {
         assert_eq!(run(&AddRemove::remove(999, 3), "abcdefgh"), "abc");
@@ -263,7 +254,6 @@ mod tests {
         assert_eq!(run(&AddRemove::remove(0, 2), "abcdef"), "abcdef");
     }
 
-    /// "Both at the same time (Remove first, then add)"
     #[test]
     fn both_removes_first_then_adds() {
         let op = AddRemove {
@@ -292,6 +282,45 @@ mod tests {
         assert_eq!(run(&op, "abcdefgh"), "cde-fgh");
     }
 
+    /// The summary is the only text on a collapsed card, so it has to say
+    /// where a position counts from — the shipped prefix and suffix presets
+    /// both add at position 0, and read the same without it.
+    #[test]
+    fn the_summary_says_when_a_position_counts_from_the_end() {
+        let preset: toml::Table = toml::from_str(include_str!(
+            "../../data/presets/Add suffix to end of filename.toml"
+        ))
+        .unwrap();
+        let mut step = preset["step"].as_array().unwrap()[0]
+            .as_table()
+            .unwrap()
+            .clone();
+        step.remove("op");
+        let suffix: AddRemove = step.try_into().unwrap();
+        assert_eq!(suffix.summary(), r#"Add "<Ask>" at 0 from end"#);
+        assert_eq!(AddRemove::add("<Ask>", 0).summary(), r#"Add "<Ask>" at 0"#);
+
+        assert_eq!(
+            AddRemove::add("xxx", 2).overwrite(true).summary(),
+            r#"Add "xxx" at 2, overwriting"#
+        );
+        assert_eq!(
+            AddRemove::remove(2, 0).backwards(true).summary(),
+            "Remove 2 chars at 0 from end"
+        );
+        let both = AddRemove {
+            mode: AddRemoveMode::Both,
+            insert: "-".into(),
+            delete: 2,
+            remove_backwards: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            both.summary(),
+            r#"Remove 2 at 0 from end then add "-" at 0"#
+        );
+    }
+
     #[test]
     fn positions_count_characters_not_bytes() {
         // Four characters, eight bytes.
@@ -299,7 +328,7 @@ mod tests {
         assert_eq!(run(&AddRemove::remove(2, 1), "ÜÖÄÑ"), "ÜÑ");
     }
 
-    /// *"Removes first, then adds"*, so in `Both` mode `add_pos` is measured on
+    /// Remove first, then add — so in `Both` mode `add_pos` is measured on
     /// a name that is already shorter than the one on screen.
     ///
     /// Visual Assist has to show the Add half **that** string, or a caret placed

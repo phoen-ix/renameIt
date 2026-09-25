@@ -1,26 +1,21 @@
-//! Zero Padding — *"Zero Pad Numbers"*.
+//! Zero Padding — every number in the name brought to one width.
 //!
-//! Zero Padding, plus the tooltip from the
-//! binary, which documents the half the help page leaves out:
-//!
-//! > *"Numbers in filenames will be padded with zeros to attain the length
-//! > specified here. If a number is longer than this length, it will be cropped
-//! > instead."*
-//!
-//! The point is lexicographic sorting: `1, 10, 2` becomes `01, 02, 10`.
+//! Shorter numbers are padded with zeros; numbers longer than the width are
+//! cropped (P30). The point is lexicographic sorting: `1, 10, 2` becomes
+//! `01, 02, 10`.
 
 use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
 
-use super::numbers::{NumberOptions, scan};
+use super::numbers::{MAX_PAD_WIDTH, NumberOptions, scan};
 use super::{EvalCx, NameTransform, OpError};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ZeroPadding {
-    /// *"The number you enter here is the number of digits all number found
-    /// will have after the rename operation."*
+    /// The number of digits every number in the name has afterwards. 0 leaves
+    /// numbers as they are.
     pub digits: usize,
 }
 
@@ -52,6 +47,13 @@ impl NameTransform for ZeroPadding {
         if spans.is_empty() {
             return Ok(Cow::Borrowed(subject));
         }
+        // A job file does not clamp the width; see `MAX_PAD_WIDTH`.
+        if self.digits > MAX_PAD_WIDTH {
+            return Err(OpError::new(
+                "zero padding",
+                format!("{} digits is longer than any file name can be", self.digits),
+            ));
+        }
 
         let mut out = String::with_capacity(subject.len() + spans.len() * self.digits);
         let mut at = 0;
@@ -70,13 +72,12 @@ impl NameTransform for ZeroPadding {
     }
 }
 
-/// Pads with zeros, or — *"if a number is longer than this length"* — crops.
+/// Pads with zeros, or crops a number longer than the width.
 ///
-/// **P30:** cropping keeps the *last* `digits` characters. The tooltip does not
-/// say which end, but this is the only reading that serves the feature's stated
-/// purpose: `007` padded to 2 is `07`, not `00`. It also matches what the
-/// padding does in reverse, so padding to 4 and back to 3 is idempotent for any
-/// number that fits.
+/// **P30:** cropping keeps the *last* `digits` characters. It is the only
+/// choice that serves the operation's purpose: `007` brought to 2 is `07`, not
+/// `00`. It also matches what the padding does in reverse, so padding to 4 and
+/// back to 3 is idempotent for any number that fits.
 fn resize(digits_text: &str, width: usize) -> String {
     if width == 0 {
         return digits_text.to_owned();
@@ -101,8 +102,7 @@ mod tests {
     use super::super::testing::run;
     use super::*;
 
-    /// "Zeros will be used to fill the missing digits." The purpose, from the
-    /// help page: 1, 10, 2 sorts as 01, 02, 10.
+    /// The purpose: 1, 10, 2 sorts as 01, 02, 10.
     #[test]
     fn numbers_are_padded_to_the_requested_width() {
         let op = ZeroPadding::new(2);
@@ -116,7 +116,6 @@ mod tests {
         assert_eq!(run(&ZeroPadding::new(3), "1 of 2"), "001 of 002");
     }
 
-    /// "If a number is longer than this length, it will be cropped instead."
     #[test]
     fn a_longer_number_is_cropped_rather_than_left_alone() {
         assert_eq!(run(&ZeroPadding::new(2), "Track 007"), "Track 07");
@@ -128,9 +127,9 @@ mod tests {
         assert_eq!(run(&ZeroPadding::new(3), "no digits"), "no digits");
     }
 
-    /// The commented-out help line suggested 0 once meant "remove all numbers".
-    /// It does not here: 0 leaves numbers exactly as they are, so a stray 0 in
-    /// the field cannot silently strip every number in a batch.
+    /// 0 leaves numbers exactly as they are, rather than meaning "remove every
+    /// number": a stray 0 in the field must not silently strip every number
+    /// in a batch.
     #[test]
     fn a_width_of_zero_changes_nothing() {
         assert_eq!(run(&ZeroPadding::new(0), "Track 7"), "Track 7");
@@ -150,6 +149,25 @@ mod tests {
         let entry = crate::model::FileEntry::synthetic("/tmp/x");
         let cx = EvalCx::simple(&entry, 0, 1);
         assert_eq!(op.apply(&widened, &cx).unwrap(), "Track 07 of 12");
+    }
+
+    /// A job file does not clamp the width, and a width no name can hold only
+    /// costs memory: it is a row error instead.
+    #[test]
+    fn a_width_longer_than_any_name_is_an_error() {
+        let entry = crate::model::FileEntry::synthetic("/tmp/x");
+        let cx = EvalCx::simple(&entry, 0, 1);
+        let err = ZeroPadding::new(50_000_000)
+            .apply("Track 7", &cx)
+            .unwrap_err();
+        assert!(err.to_string().contains("longer than"), "{err}");
+        assert_eq!(
+            ZeroPadding::new(50_000_000)
+                .apply("no digits", &cx)
+                .unwrap(),
+            "no digits",
+            "a name with no number is not touched, so it is not an error"
+        );
     }
 
     #[test]

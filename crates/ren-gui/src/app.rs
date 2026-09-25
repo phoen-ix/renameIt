@@ -3598,11 +3598,10 @@ mod tests {
                 clear_pattern: false,
                 clear_pipeline: true,
             },
-            casing: ren_core::ops::CasingRules {
-                exceptions: ren_core::ops::ExceptionRules {
-                    words: vec!["CD".to_owned()],
-                },
-                ..Default::default()
+            casing: {
+                let mut casing = ren_core::ops::CasingRules::default();
+                casing.exceptions.words = vec!["CD".to_owned()];
+                casing
             },
             table_style: crate::viewmodel::TableStyle {
                 stripes: true,

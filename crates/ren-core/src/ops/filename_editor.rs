@@ -1,9 +1,7 @@
 //! Filename Editor — typing the new names directly, one per line.
 //!
-//! > *"The filename editor contains a simple text editor that allows you to
-//! > manually type in your new filenames. The first line in the text editor
-//! > corresponds to the first file in your list, and so on. Besides text you
-//! > can also enter `<tags>` here."*
+//! The first line names the first listed file, the second the second, and so
+//! on. A line is a template, so it can hold `<tags>` as well as text.
 //!
 //! The only operation whose validity depends on the *listing* rather than on
 //! its own configuration, which is why the line-count check lives in `apply`
@@ -59,6 +57,20 @@ impl FilenameEditor {
         self.text.is_empty()
     }
 
+    /// What is wrong with the typed text itself: the first line whose tags do
+    /// not compile.
+    ///
+    /// The line count is deliberately not checked here. It depends on the
+    /// listing, which a card cannot see, so `apply` reports it on every row
+    /// instead and the plan blocks the run (P4).
+    pub fn problem(&self) -> Option<String> {
+        self.lines().iter().enumerate().find_map(|(index, line)| {
+            line.compiled()
+                .err()
+                .map(|e| format!("Filename Editor: line {}: {e}", index + 1))
+        })
+    }
+
     /// What `(copy current filename list into editor)` writes.
     ///
     /// Deliberately the *scoped* slice at the *card's* scope: those are the
@@ -80,7 +92,7 @@ impl FilenameEditor {
             .into_iter()
             .map(|e| {
                 scope
-                    .slice(&e.file_name)
+                    .slice(&e.file_name, e.is_dir)
                     .map_or(String::new(), |s| one_line(s.active()))
             })
             .collect::<Vec<_>>()
@@ -102,7 +114,7 @@ impl FilenameEditor {
             .into_iter()
             .filter(|e| {
                 scope
-                    .slice(&e.file_name)
+                    .slice(&e.file_name, e.is_dir)
                     .is_some_and(|s| has_line_break(s.active()))
             })
             .map(|e| e.file_name.clone())
@@ -226,10 +238,8 @@ mod tests {
             .collect()
     }
 
-    /// *"The first line in the text editor corresponds to the first file in
-    /// your list, and so on."*
     #[test]
-    fn the_first_line_corresponds_to_the_first_file_in_your_list() {
+    fn each_line_names_the_file_in_the_same_position() {
         assert_eq!(
             names(
                 "First\nSecond\nThird",
@@ -311,9 +321,8 @@ mod tests {
         );
     }
 
-    /// *"Besides text you can also enter `<tags>` here."*
     #[test]
-    fn besides_text_you_can_also_enter_tags_here() {
+    fn a_line_can_hold_tags() {
         assert_eq!(
             names(
                 "<Counter> First\n<Counter> Second",

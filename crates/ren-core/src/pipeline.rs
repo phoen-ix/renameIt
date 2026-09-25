@@ -37,8 +37,8 @@ pub struct StepConfig {
     pub scope: Scope,
     pub enabled: bool,
     /// Tested against the **current** name, so an earlier step can change
-    /// whether a later one runs — the documented behaviour for
-    /// preset items.
+    /// whether a later one runs: a step can rename a file into or out of a
+    /// later step's filter.
     pub filter: Option<IncludeFilter>,
     /// Narrows the scope's slice further before the operation sees it.
     pub preproc: Option<PreProcessor>,
@@ -231,7 +231,7 @@ impl Pipeline {
         let mut actions: Vec<PlannedAction> = Vec::new();
 
         for (index, (step, config)) in self.steps.iter().enumerate() {
-            if let Some(_no) = gate(config, &path, &name)? {
+            if let Some(_no) = gate(config, &path, &name, cx.entry.is_dir)? {
                 continue;
             }
 
@@ -257,7 +257,7 @@ impl Pipeline {
                 Step::Name(transform) => transform,
             };
 
-            let Ok(subject) = narrowed(config, &name)? else {
+            let Ok(subject) = narrowed(config, &name, cx.entry.is_dir)? else {
                 continue; // Scope does not apply, or the pre-processor said no.
             };
 
@@ -302,13 +302,13 @@ impl Pipeline {
 
         // Everything above `index`, exactly as `evaluate` would run it.
         for (earlier, earlier_config) in self.steps.iter().take(index) {
-            if gate(earlier_config, &path, &name)?.is_some() {
+            if gate(earlier_config, &path, &name, cx.entry.is_dir)?.is_some() {
                 continue;
             }
             let Step::Name(transform) = earlier else {
                 continue; // An action leaves the name alone.
             };
-            let Ok(subject) = narrowed(earlier_config, &name)? else {
+            let Ok(subject) = narrowed(earlier_config, &name, cx.entry.is_dir)? else {
                 continue;
             };
             let step_cx = cx.with_current(&name);
@@ -319,13 +319,13 @@ impl Pipeline {
             name = subject.reassemble(&transformed);
         }
 
-        if let Some(no) = gate(config, &path, &name)? {
+        if let Some(no) = gate(config, &path, &name, cx.entry.is_dir)? {
             return Ok(Err(no));
         }
         if matches!(step, Step::Action(_)) {
             return Ok(Err(NoSubject::NotANameTransform));
         }
-        let range = match narrowed(config, &name)? {
+        let range = match narrowed(config, &name, cx.entry.is_dir)? {
             Ok(subject) => subject.range(),
             Err(no) => return Ok(Err(no)),
         };
@@ -373,7 +373,7 @@ pub enum NoSubject {
     NotANameTransform,
     /// `Scope::Extension` on a file that has none.
     ScopeDoesNotApply,
-    /// *"it will not be renamed at all"* — the pre-processor matched nothing.
+    /// The pre-processor matched nothing, so this step leaves the file alone.
     PreProcessorRejected,
 }
 
@@ -420,13 +420,18 @@ impl StepSubject {
 /// twice, because a change to what stops a step running that reached only one
 /// of them would be invisible until someone noticed the strip disagreeing with
 /// the preview.
-fn gate(config: &StepConfig, path: &str, name: &str) -> Result<Option<NoSubject>, OpError> {
+fn gate(
+    config: &StepConfig,
+    path: &str,
+    name: &str,
+    is_dir: bool,
+) -> Result<Option<NoSubject>, OpError> {
     if !config.enabled {
         return Ok(Some(NoSubject::Disabled));
     }
     if let Some(filter) = &config.filter
         && !filter
-            .accepts(path, name)
+            .accepts_entry(path, name, is_dir)
             .map_err(|e| OpError::new("include filter", e))?
     {
         return Ok(Some(NoSubject::FilteredOut));
@@ -436,12 +441,14 @@ fn gate(config: &StepConfig, path: &str, name: &str) -> Result<Option<NoSubject>
 
 /// Scope, then pre-processor. Name steps only.
 ///
-/// The other half of the shared gate — see [`gate`].
+/// The other half of the shared gate — see [`gate`]. `is_dir` because a
+/// folder's name has no extension to scope away ([`crate::model::split_name`]).
 fn narrowed<'n>(
     config: &StepConfig,
     name: &'n str,
+    is_dir: bool,
 ) -> Result<Result<Subject<'n>, NoSubject>, OpError> {
-    let Some(subject) = config.scope.slice(name) else {
+    let Some(subject) = config.scope.slice(name, is_dir) else {
         return Ok(Err(NoSubject::ScopeDoesNotApply));
     };
     let Some(preproc) = &config.preproc else {
@@ -452,7 +459,7 @@ fn narrowed<'n>(
         .map_err(|e| OpError::new("pre-processor", e))?
     {
         Some(narrowed) => Ok(Ok(narrowed)),
-        // "it will not be renamed at all"
+        // Nothing to narrow to: this step leaves the file alone.
         None => Ok(Err(NoSubject::PreProcessorRejected)),
     }
 }
@@ -500,7 +507,7 @@ pub fn evaluate_all_with(
 mod tests {
     use super::*;
     use crate::matcher::MatchSpec;
-    use crate::ops::{AddRemove, AppendSuffix, CaseMode, Casing, Replace};
+    use crate::ops::{AddRemove, AppendSuffix, CaseMode, Casing, Replace, Script};
     use std::path::PathBuf;
 
     fn entry(name: &str) -> FileEntry {
@@ -578,8 +585,7 @@ mod tests {
         assert_eq!(eval(&p, "studio.mp3"), "studio_done.mp3");
     }
 
-    /// "Preset items running before can thus modify the filename in a way the
-    /// the include filter in the next preset item reacts upon."
+    /// An earlier step can rename a file into a later step's filter.
     #[test]
     fn a_filter_sees_the_name_as_earlier_steps_left_it() {
         let p = Pipeline::new().then(Replace::new("demo", "final")).with(
@@ -592,7 +598,7 @@ mod tests {
         assert_eq!(eval(&p, "track demo.mp3"), "track final!.mp3");
     }
 
-    /// the pre-processor's worked example, as a pipeline.
+    /// The pre-processor narrowing what a step can reach, as a pipeline.
     #[test]
     fn a_pre_processor_narrows_what_the_operation_can_reach() {
         let p = Pipeline::new().with(
@@ -608,10 +614,9 @@ mod tests {
         );
     }
 
-    /// "So if you for example skip a bit of the beginning of the filename using
-    /// the pre-processor, and then use the add function to add something to the
-    /// beginning of the filename, this will be added at the beginning of the
-    /// processed section, which is actually located in the middle."
+    /// Positions are measured on the narrowed slice: skip the start of the
+    /// name with the pre-processor and "position 0" is the start of what is
+    /// left, which sits in the middle of the name.
     #[test]
     fn adding_at_position_zero_lands_inside_the_pre_processed_section() {
         let p = Pipeline::new().with(
@@ -850,5 +855,78 @@ mod tests {
             .then(Replace::new("a", "b"))
             .then(AppendSuffix::new("x"));
         assert!(!plain.unreplayed_script_before(1));
+
+        // A script with something chosen is order-sensitive; above the card it
+        // is reported, below it is not.
+        let scripted = Pipeline::new()
+            .then(Script::new("x"))
+            .then(AppendSuffix::new("y"));
+        assert!(scripted.unreplayed_script_before(1));
+        assert!(!scripted.unreplayed_script_before(0));
+
+        // A disabled script is not going to run, so it hides nothing.
+        let disabled = Pipeline::new()
+            .with(
+                Step::Name(Box::new(Script::new("x"))),
+                StepConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+            )
+            .then(AppendSuffix::new("y"));
+        assert!(!disabled.unreplayed_script_before(1));
+    }
+
+    fn folder(name: &str) -> FileEntry {
+        let mut e = entry(name);
+        e.is_dir = true;
+        e
+    }
+
+    fn eval_entry(pipeline: &Pipeline, e: &FileEntry) -> String {
+        pipeline.evaluate(&EvalCx::simple(e, 0, 1)).unwrap().name
+    }
+
+    /// A folder has no extension: `Vol. 2` is one name, not the stem `Vol`
+    /// and the extension ` 2`. Sliced like a file, every name-scoped card
+    /// reached only the text before the last period.
+    #[test]
+    fn a_folder_name_is_all_name_and_no_extension() {
+        let title = Pipeline::new().then(Casing::new(CaseMode::Title));
+        assert_eq!(
+            eval_entry(&title, &folder("dr. who season 1")),
+            "Dr. Who Season 1"
+        );
+        assert_eq!(
+            eval_entry(&title, &entry("dr. who season 1")),
+            "Dr. who season 1",
+            "a file's text after the last period is its extension"
+        );
+
+        let dots = Pipeline::new().then(Replace::new(".", "_"));
+        assert_eq!(eval_entry(&dots, &folder("regex-1.13.1")), "regex-1_13_1");
+
+        let extension = Pipeline::new().then_scoped(AppendSuffix::new("x"), Scope::Extension);
+        assert_eq!(
+            eval_entry(&extension, &folder("Vol. 2")),
+            "Vol. 2",
+            "Scope::Extension leaves a folder alone, as it does an extensionless file"
+        );
+
+        // The templates agree with the slicing.
+        let tags =
+            Pipeline::new().then_scoped(crate::ops::FreeFormat::new("<Name>|<Ext>"), Scope::Both);
+        assert_eq!(eval_entry(&tags, &folder("Vol. 2")), "Vol. 2|");
+        assert_eq!(eval_entry(&tags, &entry("Vol. 2")), "Vol| 2");
+
+        // And so does the include filter's stem.
+        let filtered = Pipeline::new().with(
+            Step::Name(Box::new(AppendSuffix::new("!"))),
+            StepConfig {
+                filter: Some(IncludeFilter::new().including(MatchSpec::Wildcard("*2".into()))),
+                ..Default::default()
+            },
+        );
+        assert_eq!(eval_entry(&filtered, &folder("Vol. 2")), "Vol. 2!");
     }
 }

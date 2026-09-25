@@ -1,18 +1,13 @@
-//! CSV List Rename — new names from a two-column list.
-//!
-//! > *"This function allows you to rename files by using a list of filenames.
-//! > […] The list must be in a CSV file (comma separated values), where one
-//! > column contains the current filenames and another contains the new
-//! > filenames."*
+//! CSV List Rename — new names from a list: one column holds current names,
+//! another the new ones.
 //!
 //! The operation is thin on purpose: [`crate::csv_table`] does the reading, and
-//! the *matching* is done by the engine rather than here. Under the default
+//! the *scoping* is done by the engine rather than here. Under the default
 //! [`Scope::Name`](crate::Scope) the subject handed to `apply` is already the
-//! stem, so the worked example — `Lorem` in the list, `lorem.txt` on disk,
-//! `Some.txt` afterwards — works without this file mentioning extensions once.
-//! Turning Process Extension on makes the subject the whole name, which is
-//! exactly the documented *"remember to enable Process Extension"* warning,
-//! reproduced by writing no code at all.
+//! stem, so `Lorem` in the list renames `lorem.txt` on disk to `Some.txt`
+//! without this file mentioning extensions once. A list whose names carry
+//! their extensions needs the card scoped to the whole name (Process
+//! Extension on), and that too falls out of the scoping with no code here.
 
 use std::borrow::Cow;
 use std::path::PathBuf;
@@ -76,19 +71,19 @@ impl CsvSeparator {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CsvList {
-    /// *"CSV File:"*. Stored in presets exactly as written (D39) — the card
-    /// says plainly that an absolute path will not resolve elsewhere.
+    /// The list. Stored in presets exactly as written (D39) — the card says
+    /// plainly that an absolute path will not resolve elsewhere.
     pub file: PathBuf,
     pub separator: CsvSeparator,
     /// The box beside the combo, live only when `separator` is `Other`.
     /// Accepts the `{TAB}` and `{ENTER}` tokens.
     pub separator_char: String,
-    /// *"Column with current filename:"* — 1-based, as the dialog numbers them.
+    /// The column holding current names — 1-based, as the card numbers them.
     pub old_column: usize,
-    /// *"Column with new filename:"*
+    /// The column holding new names, 1-based.
     pub new_column: usize,
-    /// *"Case Sensitive"*, off by default. The worked example depends on
-    /// it: `Lorem` in the list has to match `lorem.txt` on disk.
+    /// Off by default, so `Lorem` in a list matches `lorem.txt` on disk: a
+    /// list typed by hand rarely matches the case of every file.
     pub case_sensitive: bool,
     /// D21: a clone starts empty, which is what makes editing the path re-read.
     /// The *parse* is shared process-wide, so the clone costs a `stat` rather
@@ -201,8 +196,9 @@ impl NameTransform for CsvList {
             Err(e) => return Err(OpError::new("CSV List Rename", e.to_string())),
         };
         // A file the list does not name is left alone — as is a row that names
-        // no file. Both silent, which is what the worked example requires:
-        // `not in list.txt` survives untouched and the `amet` row does nothing.
+        // no file. Both silent: a list is usually a superset or a subset of the
+        // folder, so `not in list.txt` survives untouched and a row naming no
+        // listed file does nothing.
         let Some(value) = table.get(subject) else {
             return Ok(Cow::Borrowed(subject));
         };
@@ -236,7 +232,8 @@ mod tests {
     use crate::{OpKind, evaluate_all};
     use tempfile::TempDir;
 
-    /// The documented list.
+    /// A list with a header row, one row for a file that is not listed
+    /// (`amet`), and names that match only case-insensitively (`Lorem`).
     const EXAMPLE: &str =
         "Old,New\nLorem,Some\nipsum,example\ndolor,text\nsit,I just made\namet,up\n";
 
@@ -260,12 +257,11 @@ mod tests {
             .collect()
     }
 
-    /// The documented worked example. It pins three things
-    /// the prose never states: matching is case-insensitive by default, the
+    /// Three things at once: matching is case-insensitive by default, the
     /// match is against the stem so the extension survives, and an unmatched
     /// row and an unmatched file are both silent.
     #[test]
-    fn the_worked_example_renames_exactly_as_documented() {
+    fn the_example_list_renames_by_stem_and_leaves_the_rest_alone() {
         let dir = TempDir::new().unwrap();
         let op = CsvList::new(write(&dir, EXAMPLE));
         assert_eq!(
@@ -290,9 +286,8 @@ mod tests {
         );
     }
 
-    /// *"The filenames can contain extensions, but remember to enable 'Process
-    /// Extension' in the Global Options or else the filenames will not be
-    /// found."*
+    /// A list whose names carry extensions matches only when the extension is
+    /// in scope.
     #[test]
     fn a_list_whose_names_carry_extensions_needs_the_extension_in_scope() {
         let dir = TempDir::new().unwrap();
@@ -309,7 +304,7 @@ mod tests {
         );
     }
 
-    /// The default has to be the one the worked example needs.
+    /// The default is the one a hand-typed list of stems needs.
     #[test]
     fn a_fresh_card_is_scoped_to_the_name_with_two_columns_and_no_case() {
         let op = CsvList::default();
@@ -380,7 +375,7 @@ mod tests {
             .separator_byte()
         };
         assert_eq!(custom("|"), Ok(b'|'));
-        assert_eq!(custom("{TAB}"), Ok(b'\t'), "the documented token");
+        assert_eq!(custom("{TAB}"), Ok(b'\t'), "the token for a tab");
         assert_eq!(custom(""), Err(CsvError::BadSeparator));
         assert_eq!(custom("ab"), Err(CsvError::BadSeparator));
     }

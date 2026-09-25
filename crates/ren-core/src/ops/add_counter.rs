@@ -1,12 +1,9 @@
-//! Add Counter — *"Add Counter to Filename"*.
+//! Add Counter — the counter at the start or the end of the name.
 //!
-//! Add Counter. The counter
-//! itself is a global object ([`crate::counter::CounterSetup`]) resolved before
-//! the parallel pass (D28); this operation only decides where its value goes.
-//!
-//! The form's own note explains why it is this thin: *"For more precise
-//! placements and other options you can use the `<counter>` tag in other
-//! functions."*
+//! The counter itself is run-wide ([`crate::counter::CounterSetup`]) and
+//! resolved before the parallel pass (D28); this operation only decides where
+//! its value goes. It is thin on purpose: anything more precise is the
+//! `<Counter>` tag in another operation's field.
 
 use std::borrow::Cow;
 
@@ -15,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use super::{EvalCx, NameTransform, OpError};
 use crate::template::TextTemplate;
 
-/// *"Select where to place the counter, relative to the filename."*
+/// Where the counter goes, relative to the name.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CounterPlacement {
@@ -37,11 +34,10 @@ impl CounterPlacement {
 #[serde(default, deny_unknown_fields)]
 pub struct AddCounter {
     pub placement: CounterPlacement,
-    /// *"that will separate filename and the added number"* — `-` by
-    /// default.
+    /// Between the name and the number — `-` by default.
     pub separator: String,
-    /// The radio pair: *"Keep current filename."* versus *"Replace current
-    /// filename with:"*, whose field takes tags.
+    /// The radio pair: keep the current name, or replace it with
+    /// [`Self::replacement`], whose field takes tags.
     pub replace_name: bool,
     pub replacement: TextTemplate,
 }
@@ -66,7 +62,7 @@ impl AddCounter {
         }
     }
 
-    /// *"Replace current filename with:"*
+    /// Replace the name with `template` instead of keeping it.
     pub fn replacing(mut self, template: impl Into<TextTemplate>) -> Self {
         self.replace_name = true;
         self.replacement = template.into();
@@ -110,12 +106,23 @@ impl NameTransform for AddCounter {
         Ok(Cow::Owned(out))
     }
 
+    /// Only while the replacement is in use. Switching back to keeping the
+    /// name leaves the text in its box, and a leftover `<Ask>` there would
+    /// open the Ask form on every run for an answer nothing reads.
     fn needs(&self) -> crate::template::TagNeeds {
-        self.replacement.needs()
+        if self.replace_name {
+            self.replacement.needs()
+        } else {
+            crate::template::TagNeeds::NONE
+        }
     }
 
     fn asks(&self) -> Vec<crate::run::AskSpec> {
-        self.replacement.asks()
+        if self.replace_name {
+            self.replacement.asks()
+        } else {
+            Vec::new()
+        }
     }
 }
 
@@ -153,8 +160,7 @@ mod tests {
             .collect()
     }
 
-    /// The worked example, with separator `--`:
-    /// "001--firstfile.ext, 002--secondfile.ext, 003--thirdfile.ext".
+    /// Three files, separator `--`, padded to three digits.
     #[test]
     fn the_worked_example_numbers_three_files() {
         let op = AddCounter::new(CounterPlacement::First, "--");
@@ -183,7 +189,7 @@ mod tests {
         assert_eq!(run_over(&last, &["song.mp3"], setup), ["song-1"]);
     }
 
-    /// "Replace current filename with:" — and the field takes tags.
+    /// Replacing the name, with a field that takes tags.
     #[test]
     fn replacing_the_name_uses_the_template_instead_of_the_current_name() {
         let op = AddCounter::new(CounterPlacement::Last, " ").replacing("<Parent>");
@@ -210,6 +216,17 @@ mod tests {
         let run = RunContext::default();
         let cx = EvalCx::new(&entries[0], 0, 1, &run);
         assert!(op.apply("file0", &cx).is_err());
+    }
+
+    /// Switching back to *Keep current filename* leaves the replacement text in
+    /// its box; it must not keep asking for an answer nothing uses.
+    #[test]
+    fn a_replacement_that_is_switched_off_asks_nothing() {
+        let mut op = AddCounter::default().replacing("<Ask> <Clipboard>");
+        assert_eq!(op.asks().len(), 1);
+        op.replace_name = false;
+        assert!(op.asks().is_empty());
+        assert_eq!(op.needs(), crate::template::TagNeeds::NONE);
     }
 
     #[test]

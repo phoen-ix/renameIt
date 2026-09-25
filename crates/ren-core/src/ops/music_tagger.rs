@@ -1,7 +1,7 @@
 //! Music Tagger — writing tags *from* the filename, the inverse of Music
 //! Rename.
 //!
-//! The worked case: your mp3s are named `artist - album - title`. Setup Parts
+//! The typical case: your mp3s are named `artist - album - title`. Setup Parts
 //! takes `<%1> - <%2> - <%3>`, which loads each `<%n>` tag with one part of the
 //! filename, and those tags are then the input to each field here.
 //!
@@ -83,8 +83,8 @@ impl MusicTagger {
         Some((parts, tagger))
     }
 
-    /// Every box paired with its field, in the dialog's own top-to-bottom
-    /// order, so the UI and the engine cannot disagree about it.
+    /// Every box paired with its field, in the card's top-to-bottom order, so
+    /// the UI and the engine cannot disagree about it.
     pub fn boxes(&mut self) -> [(MusicField, &mut Option<TextTemplate>); 7] {
         [
             (MusicField::Track, &mut self.track),
@@ -159,9 +159,9 @@ impl SideEffectAction for MusicTagger {
         let mut fields = Vec::new();
         let mut skipped = Vec::new();
         for (field, template) in on {
-            // `None` is P33's unanswered `<Ask>` or the run-wide *"only …if all
-            // tags are available"*. Either way this file is left alone entirely
-            // rather than written with a gap in it.
+            // `None` is P33's unanswered `<Ask>` or the run-wide *Only rename
+            // if all tags are available* switch. Either way this file is left
+            // alone entirely rather than written with a gap in it.
             let Some(value) = cx.render(template)? else {
                 return Ok(None);
             };
@@ -258,7 +258,7 @@ mod tests {
         op.effect(&cx).unwrap()
     }
 
-    /// The worked example, as a preview.
+    /// Setup Parts mapping a name onto fields, as a preview.
     #[test]
     fn the_parts_example_maps_a_filename_onto_fields() {
         let effect = effect_for(&tagger(), "Metallica - One.mp3", "<%1> - <%2>")
@@ -266,7 +266,7 @@ mod tests {
         let Effect::WriteTags { fields, .. } = &effect else {
             panic!("wrong effect: {effect:?}");
         };
-        // In the dialog's own order, which puts Title above Artist.
+        // In the card's order, which puts Title above Artist.
         assert_eq!(
             fields,
             &[

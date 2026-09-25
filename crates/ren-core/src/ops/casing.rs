@@ -1,14 +1,12 @@
-//! Set Casing.
-//!
-//! Set Casing, plus three word-splitting rules that live as data (D20) — see
+//! Set Casing, plus the word-splitting rules that live as data (D20) — see
 //! `crates/ren-core/data/casing_default.toml`.
 //!
 //! **D19:** scope is engine-owned and uniform, so this operation carries a
 //! *single* mode rather than one selector for the name and another for the
-//! extension. Two selectors would be two
-//! pipeline steps (`scope = "name"` and `scope = "extension"`). The extension
-//! panel's `Capitalize` is the same transform as the name panel's `Sentence
-//! case`, and is accepted as an alias.
+//! extension. Casing both is two pipeline steps (`scope = "name"` and
+//! `scope = "extension"`). `capitalize` is accepted as another spelling of
+//! `sentence`: first letter up, the rest down is the same transform whichever
+//! part of the name it is applied to.
 
 use std::borrow::Cow;
 
@@ -16,15 +14,15 @@ use serde::{Deserialize, Serialize};
 
 use super::{EvalCx, NameTransform, OpError};
 
-/// *"UPPER CASE, lower case, Sentance case & Title Case, plus the less used
-/// iNVERT and rANdOm"* — plus `No change`, which both panels also offer.
+/// UPPER CASE, lower case, Sentence case, Title Case, iNVERT and rANdOm — plus
+/// `No change`, so a card can be left in place and switched off by mode.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CaseMode {
     Upper,
     Lower,
-    /// First letter up, the rest down. The extension panel calls this
-    /// `Capitalize`.
+    /// First letter up, the rest down. Also read as `capitalize`, the word
+    /// for the same transform on an extension.
     #[serde(alias = "capitalize")]
     Sentence,
     #[default]
@@ -37,18 +35,32 @@ pub enum CaseMode {
     Random,
 }
 
-/// Kept for callers that want to name the two panels explicitly.
-pub type NameCase = CaseMode;
-/// Kept for callers that want to name the two panels explicitly.
-pub type ExtensionCase = CaseMode;
-
 /// The data-driven half of casing: word lists and character sets.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CasingRules {
     pub title_case: TitleCaseRules,
     pub exceptions: ExceptionRules,
-    pub space: SpaceRules,
+    /// Space Trimming's defaults used to ride along here, copied into every
+    /// Casing step, every preset and the saved settings — and nothing read
+    /// them: Space Trimming takes its defaults from [`shipped_space`].
+    ///
+    /// Still *accepted*, because `deny_unknown_fields` would otherwise refuse
+    /// every preset and job file with a Casing step written before, and the
+    /// GUI's saved state would fail to load and silently reset. Never written.
+    #[serde(default, rename = "space", skip_serializing)]
+    retired_space: Retired,
+}
+
+/// A value that is read and thrown away — what a retired field deserialises
+/// into.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Retired;
+
+impl<'de> Deserialize<'de> for Retired {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        serde::de::IgnoredAny::deserialize(deserializer).map(|_| Self)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,7 +77,8 @@ pub struct ExceptionRules {
     pub words: Vec<String>,
 }
 
-/// Space Trimming's defaults live in the same file; see [`super::space_trim`].
+/// Space Trimming's defaults, which live in the same data file; see
+/// [`super::space_trim`] and [`shipped_space`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpaceRules {
@@ -82,19 +95,30 @@ struct ShippedFile {
     space: SpaceRules,
 }
 
-/// The defaults we ship, parsed once.
-pub fn shipped_rules() -> &'static CasingRules {
-    static RULES: std::sync::OnceLock<CasingRules> = std::sync::OnceLock::new();
-    RULES.get_or_init(|| {
+/// The data file, parsed once.
+fn shipped() -> &'static (CasingRules, SpaceRules) {
+    static SHIPPED: std::sync::OnceLock<(CasingRules, SpaceRules)> = std::sync::OnceLock::new();
+    SHIPPED.get_or_init(|| {
         let text = include_str!("../../data/casing_default.toml");
         let parsed: ShippedFile =
             toml::from_str(text).expect("the shipped casing defaults must parse");
-        CasingRules {
+        let rules = CasingRules {
             title_case: parsed.title_case,
             exceptions: parsed.exceptions,
-            space: parsed.space,
-        }
+            retired_space: Retired,
+        };
+        (rules, parsed.space)
     })
+}
+
+/// The casing defaults we ship.
+pub fn shipped_rules() -> &'static CasingRules {
+    &shipped().0
+}
+
+/// Space Trimming's defaults, from the same file.
+pub fn shipped_space() -> &'static SpaceRules {
+    &shipped().1
 }
 
 impl Default for CasingRules {
@@ -103,24 +127,23 @@ impl Default for CasingRules {
     }
 }
 
-/// *"This function allows you to change casing (upper or lower) of the letters
-/// within filenames."*
+/// Changes the case of the letters in a name, word by word.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Casing {
     pub mode: CaseMode,
-    /// *"In accorance with common English spelling rules, some words will
-    /// always be set to lower case, in order to improve readability."*
-    /// Title Case only, and never the first word.
+    /// Keep the short words English titles leave in lower case — "of",
+    /// "the", "and" — in lower case. Title Case only, and never the first
+    /// word.
     pub lowercase_exceptions: bool,
-    /// *"If it is spelled in all upper case, then it will retain this no matter
-    /// what."*
+    /// A word already in all capitals keeps them — an abbreviation such as
+    /// `BBC` survives Title Case.
     pub preserve_all_upper: bool,
-    /// *"all words with one or more capitalized letter will retain its current
-    /// state"*
+    /// A word with any capital letter in it keeps its casing exactly —
+    /// `iPhone`, `macBook`.
     pub preserve_mixed: bool,
-    /// *"Exceptions are words that should always be spelled with a certain
-    /// case."*
+    /// Words that always take a fixed spelling, whatever the mode:
+    /// abbreviations (`DJ`, `CD`), Roman numerals (`III`).
     pub use_exceptions: bool,
     pub rules: CasingRules,
     /// Only consulted by [`CaseMode::Random`].
@@ -150,9 +173,9 @@ impl Casing {
         }
     }
 
-    /// A character that ends a word. Space plus the recovered
-    /// `capitalize_after` set — which is precisely why a letter after `(` or
-    /// `-` gets capitalised in Title Case: it starts a new word.
+    /// A character that ends a word. Space plus the `capitalize_after` set
+    /// (D20) — which is precisely why a letter after `(` or `-` gets
+    /// capitalised in Title Case: it starts a new word.
     fn is_separator(&self, c: char) -> bool {
         c.is_whitespace() || self.rules.title_case.capitalize_after.contains(c)
     }
@@ -161,24 +184,27 @@ impl Casing {
         if !self.use_exceptions {
             return None;
         }
+        let ascii = word.is_ascii();
         self.rules
             .exceptions
             .words
             .iter()
-            .find(|w| w.eq_ignore_ascii_case(word))
+            .find(|entry| same_word(entry, word, ascii))
             .map(String::as_str)
     }
 
     fn is_lowercase_exception(&self, word: &str) -> bool {
+        let ascii = word.is_ascii();
         self.rules
             .title_case
             .lowercase_exceptions
             .iter()
-            .any(|w| w.eq_ignore_ascii_case(word))
+            .any(|entry| same_word(entry, word, ascii))
     }
 
-    /// *"the program will first inspect what casing each word is currently
-    /// using"* — so both preserve rules look at the **original** word.
+    /// Both preserve rules look at the word as it **was**, before this
+    /// operation changed anything — preserving is about the casing a word
+    /// arrived with.
     fn preserved(&self, word: &str) -> bool {
         let has_letter = word.chars().any(char::is_alphabetic);
         if !has_letter {
@@ -249,9 +275,9 @@ impl Casing {
     ///
     /// The leading letter is the first character when that is a letter. When it
     /// is not, we look past it only if everything before the first letter is a
-    /// quote-like character — the recovered `CapitalizeAfterWhenPrevIsSpace`
-    /// rule. That is what turns `'best'` into `'Best'` while leaving `1st`
-    /// alone instead of producing `1St`.
+    /// quote-like character — the `capitalize_after_quote` list (D20). That is
+    /// what turns `'best'` into `'Best'` while leaving `1st` alone instead of
+    /// producing `1St`.
     fn capitalize(&self, word: &str) -> String {
         let quotes = &self.rules.title_case.capitalize_after_quote;
         let mut out = String::with_capacity(word.len());
@@ -273,6 +299,25 @@ impl Casing {
         }
         out
     }
+}
+
+/// Whether a list entry and a word are the same word in any case.
+///
+/// Unicode-aware, because both lists are editable in Settings and hold words
+/// in whatever language the user renames in: an ASCII-only comparison left
+/// `À` unmatched by an `à` entry and `été` by an `ÉTÉ` one. Compared character
+/// by character without allocating, since this runs for every word of every
+/// name against every entry — and plain ASCII, the common case by far, takes
+/// the cheap path, with the word's own check (`word_is_ascii`) made once per
+/// word rather than once per entry.
+fn same_word(entry: &str, word: &str, word_is_ascii: bool) -> bool {
+    if word_is_ascii && entry.is_ascii() {
+        return entry.eq_ignore_ascii_case(word);
+    }
+    entry
+        .chars()
+        .flat_map(char::to_lowercase)
+        .eq(word.chars().flat_map(char::to_lowercase))
 }
 
 /// `flat_map` needs one iterator type; `to_uppercase` and `to_lowercase` are
@@ -353,7 +398,7 @@ mod tests {
     }
 
     #[test]
-    fn the_shipped_rules_parse_and_carry_the_recovered_values() {
+    fn the_shipped_rules_parse_and_carry_the_shipped_values() {
         let rules = shipped_rules();
         assert!(
             rules
@@ -365,18 +410,40 @@ mod tests {
         assert!(rules.title_case.capitalize_after.contains('-'));
         assert!(rules.title_case.capitalize_after_quote.contains('\''));
         assert!(rules.exceptions.words.contains(&"DJ".into()));
-        assert_eq!(rules.space.maintain_before, "([{");
-        assert_eq!(rules.space.maintain_after, ")]};,");
+        assert_eq!(shipped_space().maintain_before, "([{");
+        assert_eq!(shipped_space().maintain_after, ")]};,");
     }
 
-    /// "UPPER CASE, lower case"
+    /// A Casing step written while the space defaults still rode along in its
+    /// rules parses, and is written back without them.
+    #[test]
+    fn a_step_written_with_the_retired_space_table_still_parses() {
+        let mut table = toml::Table::try_from(Casing::default()).unwrap();
+        let rules = table["rules"].as_table_mut().unwrap();
+        assert!(!rules.contains_key("space"), "never written");
+        rules.insert(
+            "space".into(),
+            toml::toml! { maintain_before = "([{"
+            maintain_after = ")]};," }
+            .into(),
+        );
+        let back: Casing = table.try_into().unwrap();
+        assert_eq!(back, Casing::default());
+
+        // A self-describing format, like the one the GUI saves its state in.
+        let mut json = serde_json::to_value(Casing::default()).unwrap();
+        json["rules"]["space"] =
+            serde_json::json!({ "maintain_before": "(", "maintain_after": ")" });
+        let back: Casing = serde_json::from_value(json).unwrap();
+        assert_eq!(back, Casing::default());
+    }
+
     #[test]
     fn upper_and_lower_case_convert_the_whole_slice() {
         assert_eq!(cased(CaseMode::Upper, "hello world"), "HELLO WORLD");
         assert_eq!(cased(CaseMode::Lower, "HELLO World"), "hello world");
     }
 
-    /// "Sentance case"
     #[test]
     fn sentence_case_capitalises_only_the_first_word() {
         assert_eq!(
@@ -385,13 +452,13 @@ mod tests {
         );
     }
 
-    /// "Title Case"
     #[test]
     fn title_case_capitalises_every_word() {
         assert_eq!(cased(CaseMode::Title, "hello big world"), "Hello Big World");
     }
 
-    /// The recovered `CapitalizeAfter` list, which nothing documents.
+    /// The `capitalize_after` list (D20): a letter after one of these starts a
+    /// word.
     #[test]
     fn title_case_capitalises_after_brackets_and_punctuation() {
         assert_eq!(cased(CaseMode::Title, "rock (live)"), "Rock (Live)");
@@ -400,7 +467,7 @@ mod tests {
         assert_eq!(cased(CaseMode::Title, "[demo] track"), "[Demo] Track");
     }
 
-    /// The recovered `CapitalizeAfterWhenPrevIsSpace` list — the reason
+    /// The `capitalize_after_quote` list (D20) — the reason
     /// apostrophes are handled separately from the punctuation above.
     #[test]
     fn title_case_does_not_capitalise_after_an_apostrophe_inside_a_word() {
@@ -413,7 +480,6 @@ mod tests {
         assert_eq!(cased(CaseMode::Title, "1st place"), "1st Place");
     }
 
-    /// "the less used iNVERT and rANdOm"
     #[test]
     fn invert_swaps_the_case_of_every_letter() {
         assert_eq!(cased(CaseMode::Invert, "Hello World"), "hELLO wORLD");
@@ -440,8 +506,7 @@ mod tests {
         assert_ne!(run(&other, "abcdefghij"), once, "a new seed must reshuffle");
     }
 
-    /// "If it is spelled in all upper case, then it will retain this no matter
-    /// what. This is typically useful when dealing with abbreviations."
+    /// Abbreviations are the reason this option exists.
     #[test]
     fn preserve_all_upper_case_words_keeps_abbreviations() {
         let op = Casing {
@@ -458,8 +523,6 @@ mod tests {
         assert_eq!(run(&op, "the BBC news"), "The Bbc News");
     }
 
-    /// "all words with one or more capitalized letter will retain its current
-    /// state"
     #[test]
     fn preserve_mixed_case_words_keeps_them_verbatim() {
         let op = Casing {
@@ -471,9 +534,7 @@ mod tests {
         assert_eq!(run(&op, "plain words"), "plain words");
     }
 
-    /// "Exceptions are words that should always be spelled with a certain case.
-    /// This is typically used for abbreviations, such a DJ and CD. Also Roman
-    /// numbers, eg III"
+    /// Abbreviations and Roman numerals, spelled one way whatever the mode.
     #[test]
     fn the_exceptions_list_forces_a_fixed_spelling() {
         let op = Casing::new(CaseMode::Title);
@@ -488,8 +549,6 @@ mod tests {
         assert_eq!(run(&op, "best of dj mix"), "Best Of Dj Mix");
     }
 
-    /// "some words will always be set to lower case, in order to improve
-    /// readability"
     #[test]
     fn lowercase_exceptions_apply_to_title_case_but_never_the_first_word() {
         let op = Casing {
@@ -514,6 +573,19 @@ mod tests {
     fn separators_and_spacing_survive_untouched() {
         assert_eq!(cased(CaseMode::Title, "  a  b  "), "  A  B  ");
         assert_eq!(cased(CaseMode::Upper, "a---b"), "A---B");
+    }
+
+    /// Both lists are editable in Settings, so they hold whatever language the
+    /// user writes in, and a word matches its entry in any case.
+    #[test]
+    fn exception_lists_match_non_ascii_words_in_any_case() {
+        let mut op = Casing {
+            lowercase_exceptions: true,
+            ..Casing::new(CaseMode::Title)
+        };
+        op.rules.title_case.lowercase_exceptions = vec!["à".into()];
+        op.rules.exceptions.words = vec!["ÉTÉ".into()];
+        assert_eq!(run(&op, "voyage À paris été"), "Voyage à Paris ÉTÉ");
     }
 
     #[test]

@@ -23,7 +23,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::cache::Cached;
-use crate::model::split_file_name;
+use crate::model::split_name;
 use crate::ops::EvalCx;
 use crate::run::AskSpec;
 
@@ -373,14 +373,17 @@ impl<'a> Resolver<'a> {
         self.cx.current
     }
 
+    /// A folder's name is all stem ([`split_name`]).
     fn stem(&self) -> &str {
-        split_file_name(self.current()).0
+        split_name(self.current(), self.cx.entry.is_dir).0
     }
 
     fn resolve(&mut self, tag: &Tag, position: usize) -> Option<String> {
         match tag {
             Tag::Name => Some(self.stem().to_owned()),
-            Tag::Ext => split_file_name(self.current()).1.map(str::to_owned),
+            Tag::Ext => split_name(self.current(), self.cx.entry.is_dir)
+                .1
+                .map(str::to_owned),
             Tag::FullName => Some(self.current().to_owned()),
 
             Tag::Left(n) => Some(self.stem().chars().take(*n).collect()),

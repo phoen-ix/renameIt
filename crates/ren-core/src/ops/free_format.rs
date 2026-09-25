@@ -1,9 +1,7 @@
 //! Free Format — building a name from nothing but tags and literal text.
 //!
-//! > *"Free Format is a function that allows you to create your filenames from
-//! > scratch by using `<tags>`. A tag is a special command that is replaced by
-//! > unique information for each file when renaming. […] In addition to tags
-//! > you can also type any string you like in between the tags."*
+//! The name is written from scratch: each `<tag>` is replaced by that file's
+//! own value, and any text between the tags is kept as typed.
 //!
 //! The thinnest operation in the tree — M3's template engine does all the work
 //! — and the one with the sharpest edges, because it replaces the *whole* slice
@@ -20,8 +18,8 @@ use crate::template::{TagNeeds, TextTemplate};
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct FreeFormat {
-    /// The whole name, as a template. `<Parent>_<FullName>` is the documented
-    /// worked example.
+    /// The whole name, as a template — `<Parent>_<FullName>` prefixes every
+    /// file with its folder's name.
     pub pattern: TextTemplate,
 }
 
@@ -98,11 +96,9 @@ mod tests {
             .name
     }
 
-    /// The worked example, whole: a webcam writes one folder per day
-    /// and starts numbering again inside each, so the folder name has to come
-    /// into the filename before they can share a directory.
-    ///
-    /// > *"The format string could be `<PARENT>_<FULLNAME>`."*
+    /// A webcam writes one folder per day and starts numbering again inside
+    /// each, so the folder name has to come into the filename before the files
+    /// can share a directory: `<PARENT>_<FULLNAME>`.
     #[test]
     fn the_webcam_example_prefixes_each_file_with_its_folder() {
         assert_eq!(
@@ -141,7 +137,6 @@ mod tests {
         );
     }
 
-    /// *"Using the Free Format function, simply type in `Playlist` and rename!"*
     /// A pattern with no tags at all is a perfectly good pattern.
     #[test]
     fn a_pattern_with_no_tags_is_a_constant_name() {

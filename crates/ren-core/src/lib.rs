@@ -48,7 +48,7 @@ pub use filter::IncludeFilter;
 pub use job::{Document, Job, JobError, PresetMeta, Source};
 pub use listing::{ListOptions, list};
 pub use matcher::{MatchSpec, Matcher};
-pub use model::{FileEntry, Scope, Subject, split_file_name};
+pub use model::{FileEntry, Scope, Subject, split_file_name, split_name};
 pub use ops::{
     AddCounter, AddRemove, AddRemoveMode, AppendSuffix, BatchReplace, CaseMode, Casing,
     CounterPlacement, EvalCx, FreeFormat, MoveSection, NameTransform, NumberAction, NumberOptions,

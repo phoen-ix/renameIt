@@ -1,29 +1,34 @@
 //! Finding the numbers inside a filename.
 //!
-//! Re-Number and Zero
-//! Padding both need to agree on what a number *is*, so the scan lives here
-//! rather than in either of them:
-//!
-//! > Numbers are maximal digit runs inside the filename; ordinal targeting
-//! > (first/second/…/last) counts these runs left-to-right. A leading hyphen is
-//! > part of the number only when "Identify minus signs" is on; a period/comma
-//! > between two digit runs joins them into a decimal fraction only when
-//! > "Identify decimal points" is on.
+//! Re-Number and Zero Padding both need to agree on what a number *is*, so the
+//! scan lives here rather than in either of them. A number is a maximal run of
+//! digits; the targets (first, second, …, last) count these runs left to
+//! right. A hyphen directly in front is part of the number only when
+//! *Identify minus signs* is on, and a period or comma between two runs joins
+//! them into one decimal only when *Identify decimal points* is on.
 
 use std::ops::Range;
 
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
+/// The widest a number may be padded to: the longest file name any supported
+/// filesystem accepts (255 UTF-16 units on NTFS, 255 bytes on ext4 and APFS).
+///
+/// A wider width can only produce a name the plan rejects, and building it
+/// first costs the width in memory per number per file per keystroke — a
+/// width typed as `3000000000` asked for gigabytes. Re-Number's *Zero pad to*
+/// and Zero Padding both refuse a wider one as a row error; the GUI's number
+/// boxes can use the same bound.
+pub const MAX_PAD_WIDTH: usize = 255;
+
 /// What counts as part of a number, as the two Re-Number checkboxes put it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct NumberOptions {
-    /// *"if a minus sign is found immediately in front of a number it is
-    /// treated as part of the number."*
+    /// A minus sign directly in front of a number belongs to it.
     pub minus_signs: bool,
-    /// *"If a period or comma is found between two numbers it is interpreted as
-    /// a decimal point."*
+    /// A period or comma between two digit runs is a decimal point.
     pub decimal_points: bool,
 }
 
@@ -44,8 +49,8 @@ impl NumberOptions {
 pub struct NumberSpan {
     /// Byte range of the whole number, sign and decimal point included.
     pub range: Range<usize>,
-    /// Digits before the decimal point — what *"zero pad to keep previous
-    /// length"* preserves.
+    /// Digits before the decimal point — what Re-Number's *keep length*
+    /// option preserves.
     pub int_digits: usize,
     /// Digits after it, if this number has a fraction.
     pub frac_digits: Option<usize>,
@@ -95,9 +100,9 @@ pub fn scan(subject: &str, options: NumberOptions) -> Vec<NumberSpan> {
             value: None,
         };
 
-        // "If a period or comma is found between two numbers" — exactly one
-        // separator character, and only one fraction per number, so `1.2.3`
-        // stays a version string rather than becoming nonsense.
+        // A period or comma between two runs — exactly one separator
+        // character, and only one fraction per number, so `1.2.3` stays a
+        // version string rather than becoming nonsense.
         if options.decimal_points
             && span.range.end < bytes.len()
             && let Some(next) = runs.get(index + 1)
@@ -112,7 +117,7 @@ pub fn scan(subject: &str, options: NumberOptions) -> Vec<NumberSpan> {
             }
         }
 
-        // "if a minus sign is found immediately in front of a number"
+        // A minus sign directly in front.
         if options.minus_signs && span.range.start > 0 && bytes[span.range.start - 1] == b'-' {
             span.negative = true;
             span.range.start -= 1;
@@ -134,7 +139,7 @@ fn parse_value(text: &str, separator: Option<char>) -> Option<Decimal> {
     normalised.parse::<Decimal>().ok()
 }
 
-/// *"With … in the filename"* — which of the numbers to process.
+/// Which of the numbers in a name to process.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NumberTarget {
@@ -147,7 +152,7 @@ pub enum NumberTarget {
 }
 
 impl NumberTarget {
-    /// The dropdown, verbatim and in order.
+    /// The dropdown's labels, in order.
     pub const LABELS: [&'static str; 12] = [
         "all numbers",
         "the first number",
@@ -220,8 +225,8 @@ mod tests {
         assert_eq!(texts("007", NumberOptions::default()), ["007"]);
     }
 
-    /// "if a minus sign is found immediately in front of a number it is treated
-    /// as part of the number" — and otherwise "this hyphen is simply ignored".
+    /// A minus sign directly in front belongs to the number when the option is
+    /// on, and is ordinary text when it is off.
     #[test]
     fn a_minus_sign_joins_the_number_only_when_asked() {
         let plain = NumberOptions::default();
@@ -233,8 +238,6 @@ mod tests {
         assert!(scan("temp -5 C", signed)[0].negative);
     }
 
-    /// "If a period or comma is found between two numbers it is interpreted as
-    /// a decimal point."
     #[test]
     fn a_decimal_point_joins_two_runs_only_when_asked() {
         let plain = NumberOptions::default();
@@ -277,9 +280,9 @@ mod tests {
         assert_eq!(spans[0].value, None, "too big to do arithmetic on");
     }
 
-    /// The dropdown, verbatim.
+    /// The dropdown, in order.
     #[test]
-    fn every_target_has_its_documented_label() {
+    fn every_target_has_its_label() {
         let all = NumberTarget::all();
         assert_eq!(all.len(), NumberTarget::LABELS.len());
         for (target, label) in all.iter().zip(NumberTarget::LABELS) {

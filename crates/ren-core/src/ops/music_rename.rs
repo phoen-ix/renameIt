@@ -1,7 +1,5 @@
-//! Music Rename — a filename built from what the file says about itself.
-//!
-//! > *"The music renaming function allows you to extract information from music
-//! > files and rename the file according to a user defined pattern."*
+//! Music Rename — a filename built from what the file says about itself: its
+//! music tags, through a pattern the user picks or writes.
 //!
 //! The UI offers three predefined styles and a Custom box, but the operation
 //! stores only the **pattern**. That is deliberate: a preset that said "style 2"
@@ -15,9 +13,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{EvalCx, NameTransform, OpError};
 use crate::run::AskSpec;
-use crate::template::{TagNeeds, TextTemplate};
+use crate::template::{Tag, TagNeeds, TextTemplate};
 
-/// The three styles the dialog offers, shipped as our own data (D6).
+/// The three styles the card offers, shipped as our own data (D6).
 pub const SHIPPED_STYLES: [&str; 3] = [
     "<Artist> - <Title>",
     "<Track>. <Title>",
@@ -44,6 +42,39 @@ impl MusicRename {
         Self {
             style: style.into(),
         }
+    }
+}
+
+impl MusicRename {
+    /// Whether every tag in the style that reads the file came back empty.
+    ///
+    /// Only the tags that read the file count (`TagNeeds::FILE_CONTENT`: the
+    /// audio tags, Exif, the checksum). Comparing the missing tags with *all*
+    /// of the style's tags let `<\>`, `<Counter>` or `<Name>` — which always
+    /// have a value and say nothing about the file — make an untagged file
+    /// look tagged, so `<Artist><\><Album><\><Title>` renamed a `cover.jpg`
+    /// to `//.jpg` and the plan blocked the run over it. A style that reads
+    /// nothing from the file keeps the plain reading: every tag missing.
+    ///
+    /// `missing` holds each empty tag as it was written, so it is parsed
+    /// again to learn what it reads — only on a file with a gap, and only
+    /// its few tags.
+    fn file_said_nothing(&self, missing: &[String]) -> bool {
+        let Ok(template) = self.style.compiled() else {
+            return false;
+        };
+        let reads_the_file = |tag: &Tag| tag.needs().contains(TagNeeds::FILE_CONTENT);
+        let from_the_file = template.tags().filter(|tag| reads_the_file(tag)).count();
+        if from_the_file == 0 {
+            return missing.len() == template.tag_count();
+        }
+        let missing_from_the_file = missing
+            .iter()
+            .filter_map(|text| text.strip_prefix('<')?.strip_suffix('>'))
+            .filter_map(|body| Tag::parse(body).ok())
+            .filter(reads_the_file)
+            .count();
+        missing_from_the_file == from_the_file
     }
 }
 
@@ -74,7 +105,7 @@ impl NameTransform for MusicRename {
         if rendered.awaiting_input {
             return Ok(Cow::Borrowed(subject));
         }
-        // The run-wide *"only rename if all tags are available"* switch.
+        // The run-wide *Only rename if all tags are available* switch.
         if cx.run.require_all_tags && !rendered.available() {
             return Ok(Cow::Borrowed(subject));
         }
@@ -91,7 +122,7 @@ impl NameTransform for MusicRename {
         // rename from. A file with *some* tags still renames, because that is
         // what the user asked for and `require_all_tags` is how they say
         // otherwise.
-        if !rendered.missing.is_empty() && rendered.missing.len() == self.style.tag_count() {
+        if !rendered.missing.is_empty() && self.file_said_nothing(&rendered.missing) {
             return Ok(Cow::Borrowed(subject));
         }
 
@@ -178,7 +209,7 @@ mod tests {
     /// The extension is **not** in scope, and that is the opposite of Free
     /// Format's default for a reason worth pinning.
     ///
-    /// D36 gave Free Format `Scope::Both` because its documented example is
+    /// D36 gave Free Format `Scope::Both` because its typical pattern is
     /// `<Parent>_<FullName>`, which already carries the extension — scoping to
     /// the name would append it twice. A music style carries no extension at
     /// all, so `Both` would destroy it: Process Name ticked, Process
@@ -195,11 +226,8 @@ mod tests {
         );
     }
 
-    /// The worked example for organising a collection:
-    ///
-    /// > *"By using the SubFolder `<\>` tag you can move your files into
-    /// > subfolders named after different properties of the file. […] enter
-    /// > this format string: `<ARTIST><\><ALBUM><\><TITLE>`"*
+    /// Organising a collection: `<\>` moves each file into subfolders named
+    /// after its own tags.
     #[test]
     fn the_subfolder_example_sorts_a_collection() {
         let mp3 = Mp3::tagged("Metallica", "One").frame("TALB", "And Justice For All");
@@ -226,6 +254,37 @@ mod tests {
             ),
             ["a.mp3", "b.mp3"],
             "two untagged files must not both become ' - .mp3'"
+        );
+    }
+
+    /// The same with a tag that never goes missing in the style — the
+    /// subfolder separator, the counter. They say nothing about the file, so
+    /// they cannot make an untagged one look tagged: a `cover.jpg` in an album
+    /// folder must not become `//.jpg` and block the whole reorganisation.
+    #[test]
+    fn a_file_with_no_tags_is_left_alone_whatever_else_the_style_holds() {
+        let untagged = || Mp3 {
+            audio: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            rename("<ARTIST><\\><ALBUM><\\><TITLE>", &[("a.mp3", untagged())]),
+            ["a.mp3"]
+        );
+        assert_eq!(
+            rename(
+                "<Counter>. <Artist> - <Title>",
+                &[("a.mp3", untagged()), ("b.mp3", untagged())]
+            ),
+            ["a.mp3", "b.mp3"]
+        );
+        // A tagged file under the same style still renames.
+        assert_eq!(
+            rename(
+                "<Counter>. <Artist> - <Title>",
+                &[("a.mp3", Mp3::tagged("A", "B"))]
+            ),
+            ["1. A - B.mp3"]
         );
     }
 

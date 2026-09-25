@@ -242,7 +242,7 @@ impl NameTransform for Script {
             State::Failed(error) => Err(OpError::new("script", error)),
             State::Live(session) => match session.rename(cx.index, subject) {
                 Err(error) => Err(OpError::new("script", error)),
-                // *"Return an empty string to skip renaming the file."*
+                // An empty string from the script leaves this file alone.
                 Ok(None) => Ok(Cow::Borrowed(subject)),
                 Ok(Some(name)) => Ok(Cow::Owned(name)),
             },

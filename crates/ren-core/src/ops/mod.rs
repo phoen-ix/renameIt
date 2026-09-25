@@ -1,9 +1,12 @@
-//! Operations — the "General" function group.
+//! Operations — every function group: the name transforms, and the actions
+//! that change a file without renaming it.
 //!
-//! Every operation is a pure string transform over the slice the engine hands
-//! it. Scope, the pre-processor and the include filter are all resolved before
-//! an operation runs (`docs/DESIGN.md` Part 1 §2), which is why each one here is
-//! small enough to test exhaustively.
+//! A name transform works on the slice of the name the engine hands it. Scope,
+//! the pre-processor and the include filter are all resolved before it runs
+//! (`docs/DESIGN.md` Part 1 §2), which is why each one here is small enough to
+//! test exhaustively. What either kind may do beyond its own string — read a
+//! file, depend on row order — is stated on [`NameTransform`] and
+//! [`SideEffectAction`].
 
 use std::borrow::Cow;
 
@@ -33,9 +36,7 @@ pub mod zero_pad;
 
 pub use add_counter::{AddCounter, CounterPlacement};
 pub use add_remove::{AddRemove, AddRemoveMode};
-pub use casing::{
-    CaseMode, Casing, CasingRules, ExceptionRules, ExtensionCase, NameCase, TitleCaseRules,
-};
+pub use casing::{CaseMode, Casing, CasingRules, ExceptionRules, TitleCaseRules};
 pub use csv_list::{CsvList, CsvSeparator};
 pub use filename_editor::FilenameEditor;
 pub use free_format::FreeFormat;
@@ -43,7 +44,7 @@ pub use kind::{OpGroup, OpKind, Produces, StepRef, UnknownOp};
 pub use move_section::MoveSection;
 pub use music_rename::MusicRename;
 pub use music_tagger::MusicTagger;
-pub use numbers::{NumberOptions, NumberSpan, NumberTarget};
+pub use numbers::{MAX_PAD_WIDTH, NumberOptions, NumberSpan, NumberTarget};
 pub use remove_tags::RemoveTags;
 pub use renumber::{NumberAction, ReNumber};
 pub use replace::{BatchReplace, Replace, regex_escape};
@@ -57,9 +58,9 @@ pub use zero_pad::ZeroPadding;
 #[derive(Debug, Clone, Copy)]
 pub struct EvalCx<'a> {
     pub entry: &'a FileEntry,
-    /// The whole file name as the pipeline has it *so far* — the tag reference
-    /// calls `<Name>` the "Current Filename", and it means current: a template
-    /// in step three sees what steps one and two produced.
+    /// The whole file name as the pipeline has it *so far*. `<Name>` means the
+    /// current name: a template in step three sees what steps one and two
+    /// produced.
     pub current: &'a str,
     /// Position in the visible list — this is what drives the counter.
     pub index: usize,
@@ -110,8 +111,9 @@ impl<'a> EvalCx<'a> {
 
     /// Renders one of an operation's tag fields.
     ///
-    /// `None` means *"Only rename if all tags are available"* is on and this
-    /// file could not fill one in, so the caller must leave the name alone.
+    /// `None` means the run's *Only rename if all tags are available* switch is
+    /// on and this file could not fill one in, or an `<Ask>` has not been
+    /// answered yet — either way the caller must leave the name alone.
     /// A field with no tags in it is borrowed rather than rendered — that is
     /// most fields, and this runs once per file per keystroke.
     pub fn render<'f>(
@@ -176,8 +178,19 @@ impl OpError {
     }
 }
 
-/// A pure string transform. No IO — that is what makes the parallel preview
-/// pass safe (`docs/DESIGN.md` Part 1 §4).
+/// A step that produces a new name.
+///
+/// **Never writes.** `apply` runs once per file per keystroke, inside the
+/// parallel preview pass (`docs/DESIGN.md` Part 1 §4), so a write here would
+/// happen on every keystroke and before anyone confirmed anything. It *may*
+/// read — CSV List Rename reads its list, and a template's `<Artist>` or
+/// `<Crc32>` opens the file — but only behind a process-wide cache keyed on the
+/// file's stamp (P44), declared through [`Self::needs`], so a warm keystroke
+/// costs no IO.
+///
+/// **Order-independent**, unless [`Self::is_order_sensitive`] says otherwise:
+/// the default is what lets the pass use rayon, and Scripting is the one
+/// operation that opts out.
 pub trait NameTransform: Send + Sync + std::fmt::Debug {
     /// Stable identifier, used in presets and journals.
     fn id(&self) -> &'static str;
@@ -264,19 +277,13 @@ pub struct RunOutcome {
     pub notes: Vec<String>,
 }
 
-impl RunOutcome {
-    pub fn is_empty(&self) -> bool {
-        self.writes.is_empty() && self.notes.is_empty()
-    }
-}
-
 /// A step that changes a file without renaming it.
 ///
 /// Pure in the sense that matters, exactly like [`NameTransform`]: `effect`
 /// runs inside the parallel evaluation pass, so it must be order-independent
 /// and must never *write*. Reading is allowed and sometimes necessary —
 /// `<Crc32>` already opens files from the same pass — but anything expensive
-/// belongs behind a process-wide, mtime-keyed cache (P40), because this runs
+/// belongs behind a process-wide, mtime-keyed cache (P44), because this runs
 /// once per file per keystroke.
 ///
 /// Reading the before-image and making the syscall stay the executor's job; see
@@ -321,10 +328,9 @@ pub trait SideEffectAction: Send + Sync + std::fmt::Debug {
 
 // --- Position arithmetic -----------------------------------------------------
 //
-// P15: positions are *"zero based, meaning that position 0 points to before the
-// first character"* and count Unicode scalar values, not bytes. Out-of-range
-// values saturate; the documented `999` idiom for "everything after here"
-// depends on it.
+// P15: positions are zero-based — position 0 is before the first character —
+// and count Unicode scalar values, not bytes. Out-of-range values saturate, so
+// a large count such as `999` means "everything after here".
 
 /// Number of characters in `s`.
 pub(crate) fn char_len(s: &str) -> usize {
@@ -338,10 +344,10 @@ pub(crate) fn byte_of_char(s: &str, pos: usize) -> usize {
 
 /// Byte offset for a position that may be counted from the end.
 ///
-/// *"Counting backwards — This means that "position" starts at the end of the
-/// filename and "moves" towards the beginning."* So backwards position 0 is the
-/// very end, which is exactly what the shipped "Add suffix to end of filename"
-/// preset relies on (`Add '<Ask>' at pos 0 from ending`).
+/// Counting backwards, the position starts at the end of the name and moves
+/// towards the beginning. So backwards position 0 is the very end, which is
+/// exactly what the shipped "Add suffix to end of filename" preset relies on
+/// (add `<Ask>` at position 0, counting backwards).
 pub(crate) fn byte_of_position(s: &str, pos: usize, backwards: bool) -> usize {
     let len = char_len(s);
     let forward = if backwards {
@@ -350,6 +356,17 @@ pub(crate) fn byte_of_position(s: &str, pos: usize, backwards: bool) -> usize {
         pos.min(len)
     };
     byte_of_char(s, forward)
+}
+
+/// A position as a card's summary writes it: `3`, or `3 from end` when it
+/// counts backwards. The summary is the only text on a collapsed card, and
+/// without this the shipped prefix and suffix presets read the same.
+pub(crate) fn position_label(pos: usize, backwards: bool) -> String {
+    if backwards {
+        format!("{pos} from end")
+    } else {
+        pos.to_string()
+    }
 }
 
 /// Byte range covering `count` characters starting at character `start`,

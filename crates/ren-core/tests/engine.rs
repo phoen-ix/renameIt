@@ -1545,13 +1545,13 @@ fn changing_only_the_year_leaves_the_rest_of_the_date_alone() {
 
 // --- Budget ------------------------------------------------------------------
 //
-// The CI perf gate cannot see any of M5's work: `spike_preview_headless` drives
-// `ren_gui::spike`, which builds its own hand-rolled step and never touches
-// `OpKind` or `plan()`, and the criterion bench is `harness = false` so
-// `cargo test` never runs it. These are plain timing tests in the same spirit
-// as the GUI's — generous, because a debug build on a shared runner is slow,
-// but they would catch a per-file file read or a per-file reparse, which is
-// what they exist for.
+// The budget of record is `examples/plan_budget.rs` (D165): the real `plan()`
+// over a preset-shaped pipeline of name transforms and synthetic entries. It
+// has no action, no CSV list and no file on disk in it, and the criterion bench
+// is `harness = false`, so `cargo test` never runs that either. These are plain
+// timing tests for the paths it cannot see — generous, because a debug build on
+// a shared runner is slow, but they would catch a per-file file read or a
+// per-file reparse, which is what they exist for.
 
 fn many(dir: &Path, count: usize) -> Vec<ren_core::FileEntry> {
     for i in 0..count {
@@ -1806,27 +1806,43 @@ fn a_runs_undoability_is_its_worst_action() {
 /// Every operation the engine knows must agree with its own effect about
 /// whether it can be taken back — the carried value and the derived one are two
 /// readings of one fact, and they must not drift.
+///
+/// **Every** action, each configured to do something: over a path the music
+/// actions accept, and with a field or a box set, because a default tagger or
+/// tag remover has no effect at all and used to be skipped — leaving the check
+/// to the two actions that happen to act by default.
 #[test]
 fn every_action_agrees_with_its_effect_about_undoability() {
-    let entry = ren_core::FileEntry::synthetic("/files/a.txt");
+    use ren_core::OpKind;
+    let entry = ren_core::FileEntry::synthetic("/files/a.mp3");
     let cx = EvalCx::simple(&entry, 0, 1);
     let mut checked = 0;
+    let mut actions = 0;
 
-    for op in ren_core::OpKind::all() {
+    for op in OpKind::all() {
+        let op = match op {
+            OpKind::MusicTagger(mut tagger) => {
+                tagger.artist = Some("x".into());
+                OpKind::MusicTagger(tagger)
+            }
+            OpKind::RemoveTags(_) => OpKind::RemoveTags(ren_core::ops::RemoveTags {
+                id3v2: true,
+                ..Default::default()
+            }),
+            other => other,
+        };
         let ren_core::ops::StepRef::Action(action) = op.as_step() else {
             continue;
         };
-        // Configured to actually do something, or `effect` returns None.
+        actions += 1;
         let effect = match op {
-            ren_core::OpKind::SetAttributes(_) => {
-                Effect::Attributes(ren_platform::AttributeChange {
-                    read_only: Some(false),
-                    ..Default::default()
-                })
-            }
+            OpKind::SetAttributes(_) => Effect::Attributes(ren_platform::AttributeChange {
+                read_only: Some(false),
+                ..Default::default()
+            }),
             _ => match action.effect(&cx) {
                 Ok(Some(effect)) => effect,
-                _ => continue,
+                other => panic!("{} is configured to act but gave {other:?}", op.name()),
             },
         };
         assert_eq!(
@@ -1837,7 +1853,11 @@ fn every_action_agrees_with_its_effect_about_undoability() {
         );
         checked += 1;
     }
-    assert!(checked > 0, "no action was actually checked");
+    assert_eq!(checked, actions, "every action is checked");
+    assert_eq!(
+        actions, 4,
+        "Set Attributes, Set Date, Music Tagger, Remove Tags"
+    );
 }
 
 /// The one that would catch a music tag being read per keystroke instead of

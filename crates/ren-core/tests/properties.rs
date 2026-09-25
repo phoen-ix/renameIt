@@ -953,6 +953,73 @@ proptest! {
     }
 }
 
+/// One rule of the kind a user types into the rule table: a literal, a
+/// wildcard mask or a pattern, in either case sensitivity, a literal one
+/// sometimes swapped — over a small alphabet, so rules find what other rules
+/// wrote, and patterns with and without the fancy features the set cannot
+/// take.
+fn user_rule() -> impl Strategy<Value = Replace> {
+    let literal = (
+        "[abAB_ .é1]{1,3}",
+        "[abAB_ .é1$]{0,3}",
+        any::<bool>(),
+        any::<bool>(),
+    )
+        .prop_map(|(find, replace, case, swap)| {
+            Replace::new(find, replace).case_sensitive(case).swap(swap)
+        });
+    let wildcard = (
+        prop_oneof![Just("a*"), Just("*b"), Just("?a"), Just("a?b"), Just("*")],
+        "[abAB_]{0,2}",
+        any::<bool>(),
+    )
+        .prop_map(|(find, replace, case)| Replace::new(find, replace).case_sensitive(case));
+    let pattern = (
+        prop_oneof![
+            Just(r"a+"),
+            Just(r"(a)(b)"),
+            Just(r"\d"),
+            Just(r"[ab]"),
+            Just(r"^a"),
+            Just(r"b$"),
+            Just(r"\bb"),
+            Just(r"é|A"),
+            Just(r"a(?=b)"),
+            Just(r"(a)\1"),
+        ],
+        prop_oneof![Just("x"), Just("$1"), Just("$2$1"), Just("")],
+        any::<bool>(),
+    )
+        .prop_map(|(find, replace, case)| {
+            Replace::new(find, replace).regex(true).case_sensitive(case)
+        });
+    prop_oneof![literal, wildcard, pattern]
+}
+
+proptest! {
+    /// **The prefilter agrees with running every rule for rules nobody
+    /// shipped**, too.
+    ///
+    /// The set and the rules are two parses of the same pattern text — one by
+    /// the `regex` crate, one by `fancy-regex`'s own parser, which then hands
+    /// the tree it built to the same crate — so their agreement is a claim
+    /// about two parsers, and the shipped list alone exercises a narrow slice
+    /// of the syntax.
+    #[test]
+    fn the_batch_replace_prefilter_agrees_for_rules_a_user_types(
+        rules in proptest::collection::vec(user_rule(), 1..6),
+        name in "[abAB_ .é1x]{0,10}",
+    ) {
+        use ren_core::ops::NameTransform;
+        let batch = BatchReplace::new(rules);
+        let entry = ren_core::model::FileEntry::synthetic("/x/a.txt");
+        let cx = ren_core::ops::EvalCx::simple(&entry, 0, 1);
+        let filtered = batch.apply(&name, &cx).unwrap().into_owned();
+        let naive = batch_naively(&batch.rules, &name);
+        prop_assert_eq!(filtered, naive, "over {:?} with {:?}", name, batch.rules);
+    }
+}
+
 /// A platform that performs `survives` changes faithfully and then dies —
 /// either instead of the next one (the crash came before the syscall) or
 /// right after it (the syscall landed, its `Completed` line never did). The

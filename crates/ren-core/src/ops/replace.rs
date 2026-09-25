@@ -13,8 +13,7 @@ use crate::regex_flavor::{Pattern, PatternOptions, RegexError};
 use crate::template::{Template, TextTemplate};
 use crate::wildcard;
 
-/// *"The Replace function allows you to look for a certain string within
-/// filenames and replace it with another string."*
+/// Find & Replace: every occurrence of one string in the name becomes another.
 ///
 /// Case Sensitive, Swap Mode and Regular Expression all start unchecked, and
 /// Skip and Max both start at 0.
@@ -25,28 +24,28 @@ pub struct Replace {
     /// per keystroke, which alone blew the M1 planning budget three times over.
     #[serde(skip)]
     compiled: Cached<Result<Pattern, RegexError>>,
-    /// *"Enter the string you wish to search for."* Wildcards allowed.
+    /// What to look for. Plain text or a wildcard mask; a regular expression
+    /// when [`Self::regex`] is on.
     pub find: String,
-    /// *"If the search string is found, it will be replaced with this string."*
-    /// *"Leave this box empty to delete the search string."*
+    /// What each occurrence becomes. Empty deletes it.
     ///
-    /// A template: *"You can use tags in
-    /// the replace box"*. Serialises transparently, so every preset and job
-    /// file written before it became one still parses.
+    /// A template, so it takes tags. `$1`–`$9` are capture references in
+    /// regex mode and plain text otherwise, because only a pattern has
+    /// captures to refer to. Serialises transparently, so every preset and job
+    /// file written before it became a template still parses.
     pub replace: TextTemplate,
-    /// *"If you want an exact match, check this one."*
+    /// Match case exactly.
     pub case_sensitive: bool,
-    /// *"in addition to "Look" being replaced by "Replace", "Replace" is also
-    /// replaced by "Look""*.
+    /// Exchange the two strings in one pass: `find` becomes the replacement and
+    /// the replacement becomes `find`. See [`Self::swap_applies`] for when it
+    /// is ignored.
     pub swap: bool,
-    /// *"Enable this to turn on regular expressions in the find box (instead of
-    /// just simple wildcards)."*
+    /// Read `find` as a regular expression rather than text or a wildcard mask.
     pub regex: bool,
-    /// *"You can skip replacing the first # occurances the program finds."*
+    /// Leave the first this-many occurrences alone.
     pub skip: usize,
-    /// The UI calls this **Max**, the documented name is Count:
-    /// *"limit the number of replaces to perform within each filename […] Enter
-    /// 0 for unlimited."*
+    /// Replace at most this many occurrences per name; 0 is unlimited. The
+    /// card labels it **Max**.
     pub max: usize,
 }
 
@@ -95,26 +94,33 @@ impl Replace {
             .and_then(Template::literal_text)
     }
 
-    /// *"Swap mode will be ignored if wildcards are used in the find box, since
-    /// it is not logically possible to conbine the both."*
+    /// Whether Swap Mode takes effect for this configuration.
     ///
-    /// We extend the same reasoning to regex mode: a pattern cannot be turned
-    /// back into the literal text it matched, so there is nothing to swap with.
+    /// Not with a wildcard in the find box, nor in regex mode (P17): a mask or
+    /// a pattern cannot be turned back into the literal text it matched, so
+    /// there is nothing to swap with.
     /// And to a replacement holding tags, for a mechanical reason rather than a
     /// logical one: swap compiles an alternation of *both* literals into one
     /// pattern cached for the whole operation, and a value that differs per
     /// file cannot live in that cache — while a per-file pattern would thrash
-    /// the process-wide regex cache P40 exists to protect. The editor already
-    /// draws "swap ignored here" whenever this returns false.
-    /// Recorded as a deviation in `docs/DECISIONS.md`.
+    /// the process-wide regex cache P40 exists to protect (D116). Nor with an
+    /// empty replacement, which has nothing to swap with. The editor draws
+    /// "swap ignored here" whenever this returns false.
     pub fn swap_applies(&self) -> bool {
         self.swap_applies_with(self.literal_replacement())
     }
 
     /// The same, given an answer already in hand — `apply` has one and asking
     /// again per file is work with a known result.
+    ///
+    /// An empty replacement has nothing to swap with, so it does not count:
+    /// the card then deletes, which is what its summary says, rather than
+    /// silently doing nothing.
     fn swap_applies_with(&self, literal: Option<&str>) -> bool {
-        self.swap && !self.regex && !wildcard::has_wildcards(&self.find) && literal.is_some()
+        self.swap
+            && !self.regex
+            && !wildcard::has_wildcards(&self.find)
+            && literal.is_some_and(|text| !text.is_empty())
     }
 
     fn spec(&self) -> MatchSpec {
@@ -136,13 +142,22 @@ impl Replace {
     ///
     /// Swap Mode needs a different pattern (an alternation of both strings), so
     /// it is folded in here rather than compiled separately.
+    ///
+    /// The longer string goes first. The engines take the leftmost alternative
+    /// that matches, so with `Art|Artist` the `Art` inside `Artist` won and
+    /// `Artist - Art` became `Artistist - Artist`. Which string matched is
+    /// decided afterwards by comparing it with `find`, so the order of the
+    /// alternatives changes nothing else.
     fn pattern_source(&self) -> String {
         if self.swap_applies() {
-            format!(
-                "{}|{}",
-                regex_escape(&self.find),
-                regex_escape(self.literal_replacement().unwrap_or_default())
-            )
+            let find = self.find.as_str();
+            let replacement = self.literal_replacement().unwrap_or_default();
+            let (first, second) = if replacement.len() > find.len() {
+                (replacement, find)
+            } else {
+                (find, replacement)
+            };
+            format!("{}|{}", regex_escape(first), regex_escape(second))
         } else {
             match self.spec() {
                 MatchSpec::Substring(s) => regex_escape(&s),
@@ -164,9 +179,6 @@ impl Replace {
     /// never re-read by the other. A sequential two-pass replace would turn
     /// every `find` into `replace` and then straight back again.
     fn swap_both_ways(&self, subject: &str, replacement: &str) -> Result<String, OpError> {
-        if self.find.is_empty() || replacement.is_empty() {
-            return Ok(subject.to_owned());
-        }
         let pattern = self.pattern().map_err(|e| OpError::new("replace", e))?;
 
         let mut out = String::with_capacity(subject.len());
@@ -272,24 +284,39 @@ impl NameTransform for Replace {
         }
 
         // The common case by far: a replacement with no tags in it is the text
-        // the user typed, and there is nothing to render or to escape.
-        let replacement = match literal {
-            Some(text) => Cow::Borrowed(text),
-            // `$1`–`$9` in the replacement are capture references, so a `$`
-            // that arrived *in a tag value* is escaped and a `$` the user typed
-            // is not (D48, D61). `$$` is the regex crate's literal dollar.
-            None => match cx.render_with(&self.replace, |value, out| {
-                for c in value.chars() {
-                    if c == '$' {
-                        out.push('$');
-                    }
-                    out.push(c);
-                }
-            })? {
-                Some(text) => text,
-                // "Only rename if all tags are available".
-                None => return Ok(Cow::Borrowed(subject)),
-            },
+        // the user typed, and there is nothing to render.
+        let replacement = if self.regex {
+            match literal {
+                Some(text) => Cow::Borrowed(text),
+                // `$1`–`$9` in the replacement are capture references, so a
+                // `$` that arrived *in a tag value* is escaped and a `$` the
+                // user typed is not (D115).
+                None => match cx.render_with(&self.replace, escape_dollars_into)? {
+                    Some(text) => text,
+                    // Only rename if all tags are available.
+                    None => return Ok(Cow::Borrowed(subject)),
+                },
+            }
+        } else {
+            // Without the regex box there are no capture groups to refer to —
+            // the find is escaped, or a wildcard mask translated without any —
+            // so every `$` is a dollar sign, typed or not. Left to the regex
+            // engine, `$10` expanded to an empty group and vanished, and the
+            // same card with Swap ticked (which writes the text as-is) kept it.
+            let text = match literal {
+                Some(text) => Cow::Borrowed(text),
+                None => match cx.render(&self.replace)? {
+                    Some(text) => text,
+                    None => return Ok(Cow::Borrowed(subject)),
+                },
+            };
+            if text.contains('$') {
+                let mut escaped = String::with_capacity(text.len() + 4);
+                escape_dollars_into(&text, &mut escaped);
+                Cow::Owned(escaped)
+            } else {
+                text
+            }
         };
 
         let pattern = self.pattern().map_err(|e| OpError::new("replace", e))?;
@@ -313,6 +340,17 @@ impl NameTransform for Replace {
     }
 }
 
+/// Appends `text` with every `$` doubled — `$$` is the regex crate's literal
+/// dollar in a replacement.
+fn escape_dollars_into(text: &str, out: &mut String) {
+    for c in text.chars() {
+        if c == '$' {
+            out.push('$');
+        }
+        out.push(c);
+    }
+}
+
 fn borrow_if_unchanged(subject: &str, produced: String) -> Cow<'_, str> {
     if produced == subject {
         Cow::Borrowed(subject)
@@ -321,7 +359,7 @@ fn borrow_if_unchanged(subject: &str, produced: String) -> Cow<'_, str> {
     }
 }
 
-/// *"With Batch Replace you can run several Replace commands in one go!"*
+/// Batch Replace: a list of Replace rules run top to bottom in one card.
 ///
 /// Ships pre-loaded with 51 rules. An empty Batch Replace would be an
 /// operation the user can select and that then does nothing.
@@ -337,28 +375,38 @@ pub struct BatchReplace {
     /// patterns and the clone happens on every keystroke.
     #[serde(skip)]
     prefilter: Cached<Arc<RuleSet>>,
+    /// The first rule whose replacement does not compile, as the error every
+    /// row reports. Checked once per operation rather than left to the rules
+    /// that happen to run: see [`Self::template_error`].
+    #[serde(skip)]
+    broken: Cached<Option<OpError>>,
 }
 
 impl Default for BatchReplace {
     fn default() -> Self {
-        Self {
-            rules: shipped_rules().clone(),
-            prefilter: Cached::new(),
-        }
+        Self::new(shipped_rules().clone())
     }
 }
 
 /// Every rule's pattern in one `RegexSet`, so "which of these fifty-one could
 /// possibly match this name" is one scan rather than fifty-one.
 ///
-/// **Why it is exact.** `fancy-regex` hands every pattern without a fancy
-/// feature — lookaround, a backreference — to the `regex` crate verbatim, so
-/// for those patterns the set and the rule are the same matcher. A pattern
-/// the `regex` crate refuses is one with a fancy feature; it is left out of
-/// the set and treated as *always* possibly matching, which costs its full
-/// run per file and never a missed match. The set is asked again after every
-/// rule that changed the name, because the rules are sequential and a later
-/// rule sees the earlier one's output.
+/// **Why it is exact.** A pattern without a fancy feature — lookaround, a
+/// backreference — is one the `regex` crate accepts, and `fancy-regex` runs
+/// such a pattern on the `regex` crate too, after parsing it with its own
+/// parser and handing over the tree it built. So the set and the rule are
+/// two parses of the same text by parsers that are expected to agree on
+/// every non-fancy construct; `the_batch_replace_prefilter_agrees_with_running_every_rule`
+/// and its generated-rules sibling in `tests/properties.rs` hold them to it.
+/// A pattern the `regex` crate refuses is left out of the set and treated as
+/// *always* possibly matching, which costs its full run per file and never a
+/// missed match. The set is asked again after every rule that changed the
+/// name, because the rules are sequential and a later rule sees the earlier
+/// one's output.
+///
+/// **What it does not decide.** Whether a rule's replacement compiles: a set
+/// that skips a rule would also skip that rule's template error, which D29
+/// makes an error on every row. `BatchReplace` checks the templates itself.
 ///
 /// **Why it exists.** A Batch Replace card runs its rules over every file on
 /// every keystroke, and the shipped fifty-one are English contractions that
@@ -370,6 +418,11 @@ struct RuleSet {
     members: Vec<usize>,
     /// Rules the set cannot speak for: always run.
     unfiltered: Vec<usize>,
+    /// How many rules the set was built for. An operation edited in place
+    /// keeps its cached set (D21), and a set for a longer list hands back
+    /// indices the list no longer has — so a length that disagrees means the
+    /// set is rebuilt rather than trusted. See `BatchReplace::apply`.
+    len: usize,
 }
 
 impl RuleSet {
@@ -449,6 +502,7 @@ impl RuleSet {
             set,
             members,
             unfiltered,
+            len: rules.len(),
         }
     }
 
@@ -473,14 +527,37 @@ impl BatchReplace {
         Self {
             rules,
             prefilter: Cached::new(),
+            broken: Cached::new(),
         }
     }
 
     pub fn empty() -> Self {
-        Self {
-            rules: Vec::new(),
-            prefilter: Cached::new(),
-        }
+        Self::new(Vec::new())
+    }
+
+    /// The error every row reports when a rule's replacement does not compile.
+    ///
+    /// Running every rule used to find it on every row, because
+    /// `Replace::apply` renders its replacement before it looks for a match.
+    /// The prefilter runs only the rules whose find can match, so a mistyped
+    /// tag in any other rule went unreported until a file matching its find
+    /// was listed — D29's hard error quietly became a rule that did nothing.
+    /// A rule with an empty find is skipped, as `Replace::apply` skips it
+    /// before rendering anything.
+    fn template_error(&self) -> Option<&OpError> {
+        self.broken
+            .get_or_init(|| {
+                self.rules
+                    .iter()
+                    .filter(|rule| !rule.find.is_empty())
+                    .find_map(|rule| {
+                        rule.replace
+                            .compiled()
+                            .err()
+                            .map(|e| OpError::new("tags", e.to_string()))
+                    })
+            })
+            .as_ref()
     }
 }
 
@@ -553,8 +630,45 @@ impl NameTransform for BatchReplace {
         format!("Batch replace ({} rules)", self.rules.len())
     }
 
+    fn needs(&self) -> crate::template::TagNeeds {
+        self.rules
+            .iter()
+            .fold(crate::template::TagNeeds::NONE, |needs, rule| {
+                needs.union(rule.needs())
+            })
+    }
+
+    /// Every rule's `<Ask>` slots, once each. Without this a rule holding
+    /// `<Ask>` was never asked about: the run collects answers only for the
+    /// slots the pipeline declares, and renders an unanswered one as "leave
+    /// this name alone" (P33) — so the rule silently did nothing.
+    fn asks(&self) -> Vec<crate::run::AskSpec> {
+        let mut asks: Vec<crate::run::AskSpec> =
+            self.rules.iter().flat_map(NameTransform::asks).collect();
+        asks.sort_by_key(|a| a.slot);
+        asks.dedup_by_key(|a| a.slot);
+        asks
+    }
+
     fn apply<'a>(&self, subject: &'a str, cx: &EvalCx<'_>) -> Result<Cow<'a, str>, OpError> {
-        let prefilter = self.prefilter.get_or_init(|| RuleSet::shared(&self.rules));
+        if let Some(error) = self.template_error() {
+            return Err(error.clone());
+        }
+        let cached = self.prefilter.get_or_init(|| RuleSet::shared(&self.rules));
+        // A set built for a different number of rules is one the list was
+        // edited out from under (D21 — see `OpKind::refresh`, which is the
+        // real fix). Its indices cannot be trusted, and one past the end used
+        // to panic on the UI thread, so it is fetched afresh for this call.
+        // The shared cache keeps that cheap. A same-length edit is not caught
+        // here; it can only run the wrong rules in a card's probe, never
+        // index out of bounds.
+        let rebuilt;
+        let prefilter = if cached.len == self.rules.len() {
+            cached
+        } else {
+            rebuilt = RuleSet::shared(&self.rules);
+            &rebuilt
+        };
         let mut current = Cow::Borrowed(subject);
         let mut candidates = Vec::new();
         let mut from = 0;
@@ -565,7 +679,11 @@ impl NameTransform for BatchReplace {
         'rescan: loop {
             prefilter.candidates(&current, from, &mut candidates);
             for &index in &candidates {
-                if let Cow::Owned(next) = self.rules[index].apply(&current, cx)? {
+                debug_assert!(index < self.rules.len(), "a prefilter index past the rules");
+                let Some(rule) = self.rules.get(index) else {
+                    continue;
+                };
+                if let Cow::Owned(next) = rule.apply(&current, cx)? {
                     current = Cow::Owned(next);
                     from = index + 1;
                     continue 'rescan;
@@ -582,8 +700,6 @@ mod tests {
     use super::super::testing::run;
     use super::*;
 
-    /// "Use the Replace function and enter "_" in the search box and " " (space)
-    /// in the replace box to tidy up your filenames!"
     #[test]
     fn replacing_underscores_with_spaces_tidies_up_a_filename() {
         assert_eq!(
@@ -594,11 +710,9 @@ mod tests {
 
     // --- tags in the replace box (M8) --------------------------------------
 
-    /// > *"You can use tags in the replace box"*.
-    ///
-    /// It could not: `replace` was a plain `String` and `apply` took an
-    /// `EvalCx` it ignored, so `<Parent>` was written into the filename
-    /// verbatim, angle brackets and all.
+    /// It once could not: `replace` was a plain `String` and `apply` took an
+    /// `EvalCx` it ignored, so `<Parent>` was written into the filename as
+    /// typed, angle brackets and all.
     #[test]
     fn the_replace_box_takes_tags() {
         // `run` builds the entry under /tmp, so `<Parent>` is "tmp".
@@ -654,7 +768,6 @@ mod tests {
         assert_eq!(run(&op, "a_b"), "a b");
     }
 
-    /// "Leave this box empty to delete the search string!"
     #[test]
     fn an_empty_replacement_deletes_the_search_string() {
         assert_eq!(run(&Replace::new("XXX", ""), "aXXXbXXXc"), "abc");
@@ -686,7 +799,7 @@ mod tests {
 
     #[test]
     fn regex_mode_supports_capture_groups_in_the_replacement() {
-        // The worked example.
+        // One of the shipped contraction rules.
         let op = Replace::new(r"( don)[ `´]?(t)", "$1'$2").regex(true);
         assert_eq!(run(&op, "I dont care"), "I don't care");
         assert_eq!(run(&op, "I don`t care"), "I don't care");
@@ -699,25 +812,18 @@ mod tests {
         assert_eq!(run(&Replace::new("a+b", "x"), "a+b ab"), "x ab");
     }
 
-    /// "You can skip replacing the first # occurances the program finds. Enter 0
-    /// to incklude all occurances from the beginning."
     #[test]
     fn skip_passes_over_the_first_occurrences() {
         assert_eq!(run(&Replace::new("a", "X").skip(0), "aaaa"), "XXXX");
         assert_eq!(run(&Replace::new("a", "X").skip(2), "aaaa"), "aaXX");
     }
 
-    /// "You can limit the number of replaces to perform within each filename by
-    /// entering a value here. Enter 0 for unlimited."
     #[test]
     fn max_limits_the_replacements_and_zero_means_unlimited() {
         assert_eq!(run(&Replace::new("a", "X").max(1), "aaaa"), "Xaaa");
         assert_eq!(run(&Replace::new("a", "X").max(0), "aaaa"), "XXXX");
     }
 
-    /// "in addition to "Look" being replaced by "Replace", "Replace" is also
-    /// replaced by "Look". In other words, the two search strings will be
-    /// swapped."
     #[test]
     fn swap_mode_exchanges_the_two_strings_in_one_pass() {
         let op = Replace::new("Artist", "Title").swap(true);
@@ -726,7 +832,52 @@ mod tests {
         assert_eq!(run(&op, "Artist Artist Title"), "Title Title Artist");
     }
 
-    /// "Swap mode will be ignored if wildcards are used in the find box"
+    /// Without the regex box ticked, a `$` in the replacement is a dollar sign.
+    /// `$1`–`$9` are capture references only where there are captures to
+    /// refer to, and a plain-text find has none — so `$10` used to vanish.
+    #[test]
+    fn a_dollar_in_a_plain_text_replacement_is_text() {
+        assert_eq!(run(&Replace::new("a", "$1"), "a"), "$1");
+        assert_eq!(run(&Replace::new("USD", "$10"), "5 USD"), "5 $10");
+        assert_eq!(run(&Replace::new("x", "$$"), "x"), "$$");
+        assert_eq!(
+            run(&Replace::new("a*c", "$1"), "abc"),
+            "$1",
+            "wildcards too"
+        );
+        // Beside a tag, with swap on and off: the same card, the same answer.
+        assert_eq!(run(&Replace::new("Q", "$1<Parent>"), "Q"), "$1tmp");
+        assert_eq!(run(&Replace::new("a", "$5").swap(true), "a"), "$5");
+    }
+
+    /// Swap compiles `find|replace` into one alternation, and the engines take
+    /// the leftmost alternative that matches — so when one string begins the
+    /// other, the shorter one used to win inside the longer.
+    #[test]
+    fn swap_mode_works_when_one_string_begins_the_other() {
+        assert_eq!(
+            run(&Replace::new("Art", "Artist").swap(true), "Artist - Art"),
+            "Art - Artist"
+        );
+        assert_eq!(
+            run(&Replace::new("Artist", "Art").swap(true), "Artist - Art"),
+            "Art - Artist"
+        );
+        assert_eq!(
+            run(&Replace::new("cas", "casing").swap(true), "casing_default"),
+            "cas_default"
+        );
+    }
+
+    /// There is nothing to swap with an empty replacement, so the card does
+    /// what its summary says — deletes — and the editor says swap is ignored.
+    #[test]
+    fn swap_mode_with_an_empty_replacement_deletes() {
+        let op = Replace::new("a", "").swap(true);
+        assert!(!op.swap_applies());
+        assert_eq!(run(&op, "ab"), "b");
+    }
+
     #[test]
     fn swap_mode_is_ignored_when_the_find_box_holds_wildcards() {
         let op = Replace::new("a*b", "Z").swap(true);
@@ -734,7 +885,7 @@ mod tests {
         assert_eq!(run(&op, "axxb Z"), "Z Z");
     }
 
-    /// Our extension of the same rule — recorded as a deviation.
+    /// P17: the same reasoning, for a pattern.
     #[test]
     fn swap_mode_is_ignored_in_regex_mode_too() {
         let op = Replace::new("a.b", "Z").regex(true).swap(true);
@@ -785,9 +936,58 @@ mod tests {
         assert_eq!(run(&batch, "i_don_t_care"), "i don't care");
     }
 
-    /// The panel reads "51 items in batch replace list".
+    /// The rule table edits `rules` in place, and the prefilter was built for
+    /// the list as it was. An index the old set hands back that the new list
+    /// no longer has must not take the app down — the set is rebuilt instead.
     #[test]
-    fn the_shipped_list_has_the_documented_number_of_rules() {
+    fn deleting_a_rule_after_the_prefilter_was_built_does_not_panic() {
+        let mut batch = BatchReplace::new(vec![
+            Replace::new("x", "y"),
+            Replace::new("q", "z"),
+            Replace::new("e", "E"),
+        ]);
+        assert_eq!(run(&batch, "name"), "namE");
+        batch.rules.remove(0);
+        assert_eq!(run(&batch, "name"), "namE");
+        batch.rules.clear();
+        assert_eq!(run(&batch, "name"), "name");
+    }
+
+    /// A rule's replacement is a template, and D29 makes a bad tag an error on
+    /// every row. The prefilter decides which rules *run*, so without an
+    /// up-front check a typo only surfaced once a file matching its find was
+    /// listed.
+    #[test]
+    fn a_mistyped_tag_in_any_rule_is_an_error_whether_or_not_its_find_matches() {
+        let batch = BatchReplace::new(vec![Replace::new("_", " "), Replace::new("zzz", "<Nmae>")]);
+        let e = super::super::testing::entry("a_b");
+        let cx = EvalCx::simple(&e, 0, 1);
+        let err = batch.apply("a_b", &cx).unwrap_err();
+        assert!(err.to_string().contains("<Nmae>"), "{err}");
+    }
+
+    /// Every rule's `<Ask>` and `<Clipboard>` has to reach the pipeline, or
+    /// the run never collects them and the rule silently does nothing.
+    #[test]
+    fn a_batch_declares_what_its_rules_need_and_ask() {
+        use crate::template::TagNeeds;
+        let batch = BatchReplace::new(vec![
+            Replace::new("a", "<Ask-2>"),
+            Replace::new("b", "<Clipboard>"),
+            Replace::new("c", "<Ask-2>"),
+        ]);
+        assert!(batch.needs().contains(TagNeeds::ASK));
+        assert!(batch.needs().contains(TagNeeds::CLIPBOARD));
+        let slots: Vec<u8> = batch.asks().iter().map(|a| a.slot).collect();
+        assert_eq!(slots, [2], "one question for the slot two rules share");
+        assert_eq!(BatchReplace::default().needs(), TagNeeds::NONE);
+    }
+
+    /// Fifty-one: the shipped data file's literal rules plus the contractions
+    /// generated from it. A different count means the file or the generator
+    /// changed.
+    #[test]
+    fn the_shipped_list_has_fifty_one_rules() {
         assert_eq!(shipped_rules().len(), 51);
         assert_eq!(BatchReplace::default().rules.len(), 51);
     }

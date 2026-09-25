@@ -1,8 +1,5 @@
 //! Set Attributes — changing a file's DOS attribute bits.
 //!
-//! > *"To keep the current attributes, set the checkboxes to gray (shows in XP
-//! > as a 'full' box) for the attribute you don't want to change."*
-//!
 //! Check the box to set the attribute, uncheck it to clear it, and leave it in
 //! the greyed middle state to leave the attribute alone.
 //!
@@ -22,9 +19,9 @@ use crate::effect::{Effect, Undoability};
 /// action card that does nothing at all until the user says otherwise (P34).
 ///
 /// The wire keys are `read_only`/`hidden`/`system`/`archive`, mapping one to one
-/// onto [`AttributeChange`] and [`ren_platform::Capability`]. The *label* is the
-/// dialog's `Write Protect`; a preset key that disagreed with the enum it feeds
-/// would be a bug waiting to be written.
+/// onto [`AttributeChange`] and [`ren_platform::Capability`]. The *label* is
+/// `Write Protect`, the word a user knows it by; a preset key that disagreed
+/// with the enum it feeds would be a bug waiting to be written.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SetAttributes {
@@ -35,8 +32,8 @@ pub struct SetAttributes {
 }
 
 impl SetAttributes {
-    /// The dialog's captions, in its own order: Write Protect and System on the
-    /// first row, Hidden and Archive on the second.
+    /// The card's captions, in its order: Write Protect and System on the first
+    /// row, Hidden and Archive on the second.
     pub const LABELS: [&'static str; 4] = ["Write Protect", "Hidden", "System", "Archive"];
 
     pub fn to_change(self) -> AttributeChange {
@@ -85,7 +82,7 @@ impl SideEffectAction for SetAttributes {
 
     fn summary(&self) -> String {
         if self.is_empty() {
-            // The documented wording for the grey state.
+            // Every box grey: a card that does nothing, and says so.
             return "Set Attributes (all left unchanged)".to_owned();
         }
         describe_change(self.to_change())
@@ -134,11 +131,8 @@ mod tests {
         assert!(effect_of(&op).required_capabilities().is_empty());
     }
 
-    /// The worked example, whole:
-    ///
-    /// > *"You just copied files from a CD […] all files have the write
-    /// > protected attribute set […] simply uncheck the write protected
-    /// > checkbox. Leave all other checkboxes gray so you don't change them."*
+    /// Files copied from a CD arrive write-protected: untick Write Protect and
+    /// leave every other box grey.
     #[test]
     fn the_cd_example_clears_write_protect_and_touches_nothing_else() {
         let op = SetAttributes {
@@ -161,7 +155,7 @@ mod tests {
     }
 
     #[test]
-    fn the_labels_are_the_ones_on_the_dialog() {
+    fn the_labels_are_the_ones_on_the_card() {
         assert_eq!(
             SetAttributes::LABELS,
             ["Write Protect", "Hidden", "System", "Archive"]
@@ -173,7 +167,7 @@ mod tests {
     }
 
     #[test]
-    fn several_bits_are_listed_in_dialog_order() {
+    fn several_bits_are_listed_in_card_order() {
         let op = SetAttributes {
             hidden: Some(true),
             archive: Some(false),
@@ -202,7 +196,6 @@ mod tests {
     fn it_is_an_action_not_a_name_transform() {
         let op = OpKind::SetAttributes(SetAttributes::default());
         assert_eq!(op.produces(), crate::ops::Produces::Action);
-        assert!(op.as_transform().is_none());
         assert!(matches!(op.to_step(), crate::pipeline::Step::Action(_)));
     }
 }

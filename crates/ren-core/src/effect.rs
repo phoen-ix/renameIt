@@ -304,10 +304,10 @@ impl Before {
 
 /// How much of an action a run can take back.
 ///
-/// **P2**: *"Tag writes / tag removal (Music Tagger, Untagger): no undo in 1.0
-/// (same as original), but always confirmation-gated with an explicit 'cannot be
-/// undone' warning."* Up to M5 that was a promise about a milestone; from M6 it
-/// is something the engine carries, because the engine is what has to refuse.
+/// **P2**: tag writes and tag removal (Music Tagger, Remove Tags) have no undo,
+/// and always go through a confirmation that says they cannot be undone. Up to
+/// M5 that was a promise about a milestone; from M6 it is something the engine
+/// carries, because the engine is what has to refuse.
 ///
 /// Ordered worst-last on purpose, so `max()` over a run gives what the run as a
 /// whole costs — which is the number the confirmation dialog has to quote. The

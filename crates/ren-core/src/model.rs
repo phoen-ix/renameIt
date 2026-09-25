@@ -125,16 +125,39 @@ impl FileEntry {
         self.path.parent().unwrap_or(Path::new(""))
     }
 
-    /// Stem and extension, split at the **last** period.
+    /// Stem and extension: a file's split at the **last** period, a folder's
+    /// not at all. See [`split_name`].
     pub fn split(&self) -> (&str, Option<&str>) {
-        split_file_name(&self.file_name)
+        split_name(&self.file_name, self.is_dir)
+    }
+}
+
+/// Splits a listed name into stem and extension — a file's at its last period
+/// ([`split_file_name`]), a folder's not at all.
+///
+/// **A folder has no extension.** `Vol. 2`, `Mr. Robot Season 1`,
+/// `2024.01.15 Trip` and `regex-1.13.1` are names, and a file manager renames
+/// them as one: sliced like a file, every card scoped to the name reached only
+/// the text before the last period, so Replace `.` → `_` turned
+/// `regex-1.13.1` into `regex-1_13.1`. The name is the whole name, the
+/// extension is absent — so [`Scope::Extension`] leaves a folder alone the
+/// way it leaves `README` alone (P12), and `<Name>` / `<Ext>` and the include
+/// filter's stem agree. A macOS bundle (`Photos.app`) is a folder too, so its
+/// `.app` is part of the name — one rule for every folder is worth that.
+pub fn split_name(name: &str, is_dir: bool) -> (&str, Option<&str>) {
+    if is_dir {
+        (name, None)
+    } else {
+        split_file_name(name)
     }
 }
 
 /// Splits a file name into stem and extension at the last period.
 ///
-/// The rule is literal — the extension is everything after the last period.
-/// Two cases a Windows-only implementation would never have had to consider:
+/// For a listed row use [`split_name`], which knows that a folder has none.
+///
+/// The rule is literal — the extension is everything after the last period —
+/// with two exceptions that Unix names make common:
 ///
 /// * A leading period (`.gitignore`) is treated as part of the *name*, not as
 ///   an empty stem with a `gitignore` extension. This is the sane reading (P1).
@@ -174,10 +197,6 @@ impl<'a> Subject<'a> {
     pub fn new(name: &'a str, range: Range<usize>) -> Self {
         debug_assert!(name.is_char_boundary(range.start) && name.is_char_boundary(range.end));
         Self { whole: name, range }
-    }
-
-    pub fn full_name(&self) -> &'a str {
-        self.whole
     }
 
     pub fn prefix(&self) -> &'a str {
@@ -243,27 +262,20 @@ pub enum Scope {
 }
 
 impl Scope {
-    /// Carves out the part of `file_name` this scope covers.
+    /// Carves out the part of `name` this scope covers.
     ///
-    /// `None` means this scope does not apply to this file at all — asking for
+    /// `None` means this scope does not apply to this row at all — asking for
     /// the extension of `README` must leave `README` alone, not append to it.
-    pub fn slice(self, file_name: &str) -> Option<Subject<'_>> {
-        let (stem, ext) = split_file_name(file_name);
+    /// `is_dir` because a folder has no extension ([`split_name`]); the flag
+    /// is a parameter rather than a default so every caller has to say which
+    /// kind of row it is slicing.
+    pub fn slice(self, name: &str, is_dir: bool) -> Option<Subject<'_>> {
+        let (stem, ext) = split_name(name, is_dir);
         match self {
-            Scope::Both => Some(Subject::whole(file_name)),
-            Scope::Name => Some(Subject::new(file_name, 0..stem.len())),
+            Scope::Both => Some(Subject::whole(name)),
+            Scope::Name => Some(Subject::new(name, 0..stem.len())),
             // The prefix keeps the separating period.
-            Scope::Extension => {
-                ext.map(|e| Subject::new(file_name, file_name.len() - e.len()..file_name.len()))
-            }
-        }
-    }
-
-    /// Puts a transformed slice back into the file name.
-    pub fn reassemble(self, file_name: &str, transformed: &str) -> String {
-        match self.slice(file_name) {
-            Some(subject) => subject.reassemble(transformed),
-            None => file_name.to_owned(),
+            Scope::Extension => ext.map(|e| Subject::new(name, name.len() - e.len()..name.len())),
         }
     }
 }
@@ -300,48 +312,70 @@ mod tests {
         (subject.prefix(), subject.active(), subject.suffix())
     }
 
+    /// A file, as opposed to a folder — the second argument of `slice`.
+    const FILE: bool = false;
+    const FOLDER: bool = true;
+
     #[test]
     fn scope_name_hides_the_extension_from_the_operation() {
-        let s = Scope::Name.slice("song.mp3").unwrap();
+        let s = Scope::Name.slice("song.mp3", FILE).unwrap();
         assert_eq!(parts(&s), ("", "song", ".mp3"));
-        assert_eq!(Scope::Name.reassemble("song.mp3", "SONG"), "SONG.mp3");
+        assert_eq!(s.reassemble("SONG"), "SONG.mp3");
     }
 
     #[test]
     fn scope_name_covers_the_whole_name_when_there_is_no_extension() {
-        let s = Scope::Name.slice("README").unwrap();
+        let s = Scope::Name.slice("README", FILE).unwrap();
         assert_eq!(parts(&s), ("", "README", ""));
     }
 
     #[test]
     fn scope_extension_hides_the_stem_from_the_operation() {
-        let s = Scope::Extension.slice("song.mp3").unwrap();
+        let s = Scope::Extension.slice("song.mp3", FILE).unwrap();
         assert_eq!(parts(&s), ("song.", "mp3", ""));
-        assert_eq!(Scope::Extension.reassemble("song.mp3", "MP3"), "song.MP3");
+        assert_eq!(s.reassemble("MP3"), "song.MP3");
     }
 
     #[test]
     fn scope_extension_does_not_apply_when_there_is_no_extension() {
-        assert!(Scope::Extension.slice("README").is_none());
-        assert_eq!(Scope::Extension.reassemble("README", "x"), "README");
+        assert!(Scope::Extension.slice("README", FILE).is_none());
     }
 
     #[test]
     fn scope_both_shows_the_whole_name() {
-        let s = Scope::Both.slice("song.mp3").unwrap();
+        let s = Scope::Both.slice("song.mp3", FILE).unwrap();
         assert_eq!(parts(&s), ("", "song.mp3", ""));
-        assert_eq!(Scope::Both.reassemble("song.mp3", "a.b"), "a.b");
+        assert_eq!(s.reassemble("a.b"), "a.b");
+    }
+
+    /// A folder's name is all name: the period in `Vol. 2` is not an
+    /// extension separator.
+    #[test]
+    fn a_folder_has_no_extension() {
+        assert_eq!(split_name("Vol. 2", FOLDER), ("Vol. 2", None));
+        assert_eq!(split_name("Vol. 2", FILE), ("Vol", Some(" 2")));
+        let s = Scope::Name.slice("regex-1.13.1", FOLDER).unwrap();
+        assert_eq!(parts(&s), ("", "regex-1.13.1", ""));
+        assert!(Scope::Extension.slice("Vol. 2", FOLDER).is_none());
+        assert_eq!(
+            parts(&Scope::Both.slice("Vol. 2", FOLDER).unwrap()),
+            ("", "Vol. 2", "")
+        );
+
+        let mut entry = FileEntry::synthetic("/music/Vol. 2");
+        assert_eq!(entry.split(), ("Vol", Some(" 2")));
+        entry.is_dir = true;
+        assert_eq!(entry.split(), ("Vol. 2", None));
     }
 
     #[test]
     fn narrowing_moves_the_trimmed_text_into_prefix_and_suffix() {
-        let s = Scope::Name.slice("abcdef.txt").unwrap();
+        let s = Scope::Name.slice("abcdef.txt", FILE).unwrap();
         assert_eq!(parts(&s), ("", "abcdef", ".txt"));
 
         let inner = s.narrow(2..4);
         assert_eq!(parts(&inner), ("ab", "cd", "ef.txt"));
         assert_eq!(inner.reassemble("XY"), "abXYef.txt");
-        assert_eq!(inner.full_name(), "abcdef.txt");
     }
 
     #[test]

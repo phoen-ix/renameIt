@@ -1,42 +1,41 @@
-//! Space Trimming.
-//!
-//! Space Trimming, plus the panel's shipped defaults —
-//! everything on, Maintain Space Before `([{` and After `)]};,`.
+//! Space Trimming, with the panel's shipped defaults — everything on, Maintain
+//! Space Before `([{` and After `)]};,`.
 //!
 //! The options say nothing about what order they run in, and the order decides
-//! the answer. Ours is fixed and documented below.
+//! the answer. Ours is fixed (P18) and explained in `apply`.
 
 use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
 
-use super::casing::shipped_rules;
+use super::casing::shipped_space;
 use super::{EvalCx, NameTransform, OpError};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SpaceTrim {
-    /// *"Removes spaces before the first character in the filename."*
+    /// Remove spaces before the first character.
     pub leading: bool,
-    /// *"Removes spaces after the last character in the filename."*
+    /// Remove spaces after the last character.
     pub trailing: bool,
-    /// *"If several spaces are found next to each other they will be replaced
-    /// by a single one."*
+    /// Collapse a run of spaces into one.
     pub shrink: bool,
-    /// *"If needed, insert a space character right before the specified
-    /// characters."* Empty disables it.
+    /// Make sure a space comes before each of these characters — unless the
+    /// name starts with it, or it follows another of them (`((`). Empty
+    /// disables it.
     pub maintain_before: String,
-    /// *"If needed, insert a space character right after the specified
-    /// characters."* Empty disables it.
+    /// Make sure a space comes after each of these characters — unless the
+    /// name ends with it, or what follows is another of them or punctuation
+    /// (`),`). Empty disables it.
     pub maintain_after: String,
-    /// *"Replace underscore by space. Self explanatory."*
+    /// Turn every underscore into a space.
     pub underscores_to_spaces: bool,
 }
 
 impl Default for SpaceTrim {
     /// The panel ships with every box ticked.
     fn default() -> Self {
-        let space = &shipped_rules().space;
+        let space = shipped_space();
         Self {
             leading: true,
             trailing: true,
@@ -44,18 +43,6 @@ impl Default for SpaceTrim {
             maintain_before: space.maintain_before.clone(),
             maintain_after: space.maintain_after.clone(),
             underscores_to_spaces: true,
-        }
-    }
-}
-
-impl SpaceTrim {
-    /// Only the three trim options, with nothing inserted.
-    pub fn trim_only() -> Self {
-        Self {
-            maintain_before: String::new(),
-            maintain_after: String::new(),
-            underscores_to_spaces: false,
-            ..Default::default()
         }
     }
 }
@@ -109,7 +96,12 @@ impl NameTransform for SpaceTrim {
                 // rules armed came out `a)  (b` — two spaces — and only the
                 // shrink stage hid it. With shrink unticked, which is a
                 // user-facing checkbox, the doubles were visible.
-                if self.maintain_before.contains(c) && !spaced.is_empty() && !spaced.ends_with(' ')
+                //
+                // Two openers in a row are one unit, `((`, not `( (`.
+                if self.maintain_before.contains(c)
+                    && !spaced.is_empty()
+                    && !spaced.ends_with(' ')
+                    && !spaced.ends_with(|previous| self.maintain_before.contains(previous))
                 {
                     spaced.push(' ');
                 }
@@ -119,7 +111,17 @@ impl NameTransform for SpaceTrim {
                 // the name there is nothing to separate from, so nothing is
                 // added — the trim stage used to clean that up, but only when
                 // trimming was on.
-                if self.maintain_after.contains(c) && chars.peek().is_some_and(|next| *next != ' ')
+                //
+                // Nor does a space go between a closer and what closes the
+                // phrase after it — another closer, or punctuation: the rule
+                // is there to separate a bracket from the next *word*, and
+                // `Song (Live) , 2020` is not what anyone writes.
+                if self.maintain_after.contains(c)
+                    && chars.peek().is_some_and(|&next| {
+                        next != ' '
+                            && !self.maintain_after.contains(next)
+                            && !CLOSING_PUNCTUATION.contains(next)
+                    })
                 {
                     spaced.push(' ');
                 }
@@ -159,6 +161,10 @@ impl NameTransform for SpaceTrim {
     }
 }
 
+/// Punctuation that ends a phrase. The maintain-after rule never puts a space
+/// in front of one, whether or not it is in the user's list.
+const CLOSING_PUNCTUATION: &str = ",;.:!?";
+
 impl SpaceTrim {
     /// True when no stage has anything to do on `subject`, decided in one
     /// pass over its characters and without allocating.
@@ -194,41 +200,46 @@ mod tests {
     use super::super::testing::run;
     use super::*;
 
-    /// "Removes spaces before the first character in the filename."
+    /// Only the three trim options, with nothing inserted.
+    fn trim_only() -> SpaceTrim {
+        SpaceTrim {
+            maintain_before: String::new(),
+            maintain_after: String::new(),
+            underscores_to_spaces: false,
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn leading_spaces_are_removed() {
         let op = SpaceTrim {
             trailing: false,
             shrink: false,
-            ..SpaceTrim::trim_only()
+            ..trim_only()
         };
         assert_eq!(run(&op, "   name  "), "name  ");
     }
 
-    /// "Removes spaces after the last character in the filename."
     #[test]
     fn trailing_spaces_are_removed() {
         let op = SpaceTrim {
             leading: false,
             shrink: false,
-            ..SpaceTrim::trim_only()
+            ..trim_only()
         };
         assert_eq!(run(&op, "   name  "), "   name");
     }
 
-    /// "If several spaces are found next to each other they will be replaced by
-    /// a single one."
     #[test]
     fn multiple_spaces_shrink_into_one() {
         let op = SpaceTrim {
             leading: false,
             trailing: false,
-            ..SpaceTrim::trim_only()
+            ..trim_only()
         };
         assert_eq!(run(&op, "a    b   c"), "a b c");
     }
 
-    /// "Replace underscore by space. Self explanatory."
     #[test]
     fn underscores_become_spaces() {
         let op = SpaceTrim {
@@ -239,8 +250,6 @@ mod tests {
         assert_eq!(run(&op, "my_holiday_photo"), "my holiday photo");
     }
 
-    /// "Maintain space asserts that certain characters always are surrounded by
-    /// spaces."
     #[test]
     fn maintain_space_inserts_before_the_listed_characters() {
         let op = SpaceTrim {
@@ -310,6 +319,32 @@ mod tests {
         assert_eq!(run(&op, "a, b"), "a, b");
         // And one that genuinely needs the space still gets exactly one.
         assert_eq!(run(&op, "a,b"), "a, b");
+        // A closer followed by punctuation or another closer, and an opener
+        // after another opener, are one unit: no space inside them.
+        assert_eq!(run(&op, "Song (Live), 2020"), "Song (Live), 2020");
+        assert_eq!(run(&op, "((x))"), "((x))");
+        assert_eq!(
+            run(&op, "Album [Deluxe (Remastered)]"),
+            "Album [Deluxe (Remastered)]"
+        );
+        assert_eq!(run(&op, "(live).mp3"), "(live).mp3");
+        assert_eq!(run(&op, "[x]; y"), "[x]; y");
+    }
+
+    /// The shipped cleanup preset runs these defaults over music names, and a
+    /// closing bracket before a comma is the commonest shape there is.
+    #[test]
+    fn the_defaults_leave_punctuation_after_a_bracket_alone() {
+        let op = SpaceTrim::default();
+        assert_eq!(
+            run(&op, "Song (Live), 2020 [Remix]; Edit"),
+            "Song (Live), 2020 [Remix]; Edit"
+        );
+        assert_eq!(
+            run(&op, "a(b)c"),
+            "a (b) c",
+            "a word either side is still spaced"
+        );
     }
 
     #[test]
@@ -338,6 +373,8 @@ mod tests {
             "a(b)c",
             "x,y",
             "(a) [b]",
+            "(a), b",
+            "((a))",
             "",
             " ",
             "_",
