@@ -42,6 +42,13 @@ pub struct InFlight {
     /// A rename in flight is a file under one of two names and nothing worse; a
     /// tag write or a script's write in flight is a file that may be
     /// **half-written**. They need different sentences.
+    ///
+    /// A tag write from this build goes into a copy that is swapped in whole
+    /// (`meta::write`), so its file is as it was or fully written, with at
+    /// worst a [`crate::meta::write::SCRATCH_PREFIX`] copy left beside it. It
+    /// is still counted here: a journal from an earlier build describes a
+    /// write made in place, and nothing in the journal says which build
+    /// wrote it.
     pub rewrote_contents: bool,
 }
 

@@ -193,7 +193,8 @@ mod tests {
                 &[FieldWrite {
                     field: MusicField::Artist,
                     value: "X".into()
-                }]
+                }],
+                ren_platform::host().as_ref()
             )
             .is_err(),
             "the write path reads with properties on, and there is no audio track"

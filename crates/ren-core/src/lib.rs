@@ -36,6 +36,8 @@ pub mod regex_flavor;
 pub mod run;
 pub mod script;
 pub mod template;
+#[cfg(test)]
+mod test_platform;
 pub mod text;
 pub mod wildcard;
 

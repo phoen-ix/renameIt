@@ -1,6 +1,7 @@
 //! Running a plan against the filesystem.
 
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use ren_platform::Platform;
 
@@ -311,6 +312,10 @@ fn apply_journalled(
     // which — see the variant. `completed` is what the message says.
     let mut completed = 0usize;
     let mut parked = Parked::default();
+    let mut notices = ShellNotices {
+        platform,
+        folders: BTreeMap::new(),
+    };
 
     // Every physical change is journalled, temp-name hops included, so undo
     // unwinds a broken cycle by replaying them in reverse (P6).
@@ -364,7 +369,7 @@ fn apply_journalled(
                     journal
                         .append(Record::Completed { seq })
                         .map_err(|e| interrupted(&journal, completed, e))?;
-                    record_success(&mut report, &mut parked, op, platform);
+                    record_success(&mut report, &mut parked, &mut notices, op);
                     if let Some(progress) = &options.progress {
                         progress.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
@@ -556,22 +561,57 @@ fn subject_of(op: &PlannedOp) -> PathBuf {
     }
 }
 
+/// The folders a run changed, each told to the file manager once, when the
+/// run ends.
+///
+/// Once per folder rather than once per change: a ten-thousand-file run in
+/// one folder asked Explorer to read that folder again ten thousand times
+/// while the run was still going. Told on drop, so a run that stops at a
+/// failure, or at a journal write that failed, still has what it changed
+/// shown.
+struct ShellNotices<'a> {
+    platform: &'a dyn Platform,
+    /// Each folder, with a path inside it: `notify_shell_changed` takes a
+    /// path and tells the folder that holds it.
+    folders: BTreeMap<PathBuf, PathBuf>,
+}
+
+impl ShellNotices<'_> {
+    fn changed(&mut self, path: &Path) {
+        if let Some(folder) = path.parent()
+            && !self.folders.contains_key(folder)
+        {
+            self.folders
+                .insert(folder.to_path_buf(), path.to_path_buf());
+        }
+    }
+}
+
+impl Drop for ShellNotices<'_> {
+    fn drop(&mut self) {
+        for path in self.folders.values() {
+            self.platform.notify_shell_changed(path);
+        }
+    }
+}
+
 /// What the report says about an op that succeeded.
 fn record_success(
     report: &mut ApplyReport,
     parked: &mut Parked,
+    notices: &mut ShellNotices<'_>,
     op: &PlannedOp,
-    platform: &dyn Platform,
 ) {
     match op {
         PlannedOp::CreateDir { path } => {
+            notices.changed(path);
             report.reversible += 1;
             report.created_dirs.push(path.clone());
         }
         PlannedOp::WriteFile {
             path, undoability, ..
         } => {
-            platform.notify_shell_changed(path);
+            notices.changed(path);
             if undoability.is_reversible() {
                 report.reversible += 1;
             }
@@ -586,7 +626,10 @@ fn record_success(
         // still records every hop, because undo needs them; the *report* is
         // what the user reads.
         PlannedOp::Rename { from, to, kind } => {
-            platform.notify_shell_changed(to);
+            // Both folders: a move into a subfolder (D31) changes the one it
+            // left as well as the one it arrived in.
+            notices.changed(from);
+            notices.changed(to);
             report.reversible += 1;
             if let Some(pair) = parked.renamed(from, to, *kind) {
                 report.renamed.push(pair);
@@ -598,7 +641,7 @@ fn record_success(
             undoability,
             ..
         } => {
-            platform.notify_shell_changed(path);
+            notices.changed(path);
             if undoability.is_reversible() {
                 report.reversible += 1;
             }
@@ -654,13 +697,15 @@ pub(crate) fn write_effect(
         Effect::Times(times) => platform
             .set_times(path, times.to_change())
             .map_err(|e| e.to_string()),
-        // Not through `Platform`: writing a tag is the same file IO on every
-        // OS, so D3's rule points the other way — putting it behind the trait
-        // would mean two implementations of one thing.
-        Effect::WriteTags { fields, .. } => crate::meta::write::write_fields(path, fields)
-            .map(|_| ())
-            .map_err(|e| e.to_string()),
-        Effect::RemoveTags { kinds } => crate::meta::write::remove_tags(path, kinds)
+        // lofty's file IO is the same on every OS. The platform is for the
+        // last step: the tags go into a copy, which `Platform::replace_file`
+        // swaps in, because what a swap keeps of the file differs by OS.
+        Effect::WriteTags { fields, .. } => {
+            crate::meta::write::write_fields(path, fields, platform)
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        }
+        Effect::RemoveTags { kinds } => crate::meta::write::remove_tags(path, kinds, platform)
             .map(|_| ())
             .map_err(|e| e.to_string()),
         // Refused, loudly. A change we cannot name is a change we must not
@@ -928,6 +973,83 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, ["a_1.txt", "a_2.txt", "a_3.txt"]);
+    }
+
+    /// A run tells the file manager about each folder it changed once, not
+    /// once per file: a ten-thousand-file run in one folder used to ask
+    /// Explorer to read that folder again ten thousand times while the run
+    /// was still going.
+    #[test]
+    fn the_file_manager_hears_once_about_each_folder_a_run_changed() {
+        let dir = tempfile::TempDir::new().unwrap();
+        for name in ["a_1.txt", "a_2.txt", "a_3.txt"] {
+            std::fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        let entries = crate::list(dir.path(), Default::default()).unwrap();
+        let pipeline = Pipeline::new().then(Replace::new("_", "-"));
+        let platform = crate::test_platform::Spy::default();
+        let plan = plan(&entries, &pipeline, &platform);
+        assert_eq!(plan.ops.len(), 3);
+
+        let journals = tempfile::TempDir::new().unwrap();
+        let options = ApplyOptions {
+            journal_dir: journals.path().to_path_buf(),
+            ..Default::default()
+        };
+        let report = apply(&plan, &platform, &options).unwrap();
+        assert_eq!(report.renamed.len(), 3);
+
+        let notified = platform.notified();
+        assert_eq!(notified.len(), 1, "{notified:?}");
+        assert_eq!(notified[0].parent(), Some(dir.path()));
+    }
+
+    /// The platform reaches the tag write. A swap that fails is that row's
+    /// failure, and the file it was writing is as it was.
+    #[test]
+    fn a_tag_change_that_cannot_be_swapped_in_fails_its_row_and_changes_nothing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = crate::meta::testing::Mp3::tagged("A", "B").write(dir.path(), "t.mp3");
+        let before = std::fs::read(&path).unwrap();
+        let plan = Plan {
+            ops: vec![PlannedOp::Act {
+                path: path.clone(),
+                op: "remove_tags",
+                effect: Effect::RemoveTags {
+                    kinds: vec![crate::meta::write::TagKind::Id3v2],
+                },
+                undoability: Undoability::None,
+                describe: "Remove ID3v2, if present".to_owned(),
+            }],
+            ..Default::default()
+        };
+        let journals = tempfile::TempDir::new().unwrap();
+        let options = ApplyOptions {
+            journal_dir: journals.path().to_path_buf(),
+            allow_irreversible: true,
+            ..Default::default()
+        };
+        let platform = crate::test_platform::Spy {
+            fail_swap: true,
+            ..Default::default()
+        };
+
+        let report = apply(&plan, &platform, &options).unwrap();
+        assert_eq!(platform.swaps(), 1);
+        assert_eq!(report.failed.len(), 1, "{report:?}");
+        assert!(
+            report.failed[0]
+                .1
+                .contains("could not put the copy in the file's place"),
+            "{:?}",
+            report.failed
+        );
+        assert!(std::fs::read(&path).unwrap() == before, "the file changed");
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["t.mp3"], "the copy was left behind");
     }
 
     /// The state the unsynced `Completed` line makes possible: op *k* ran

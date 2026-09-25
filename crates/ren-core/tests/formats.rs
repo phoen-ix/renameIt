@@ -15,6 +15,7 @@
 
 use ren_core::meta::testing::{Flac, M4a, Mp3, OggVorbis, WavPack};
 use ren_core::meta::write::{FieldWrite, MusicField, TagKind, remove_tags, write_fields};
+use ren_platform::host;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
@@ -101,7 +102,7 @@ fn a_name_is_built_from_the_tags_of_every_format() {
             ))),
             ren_core::StepConfig::for_op(&ren_core::OpKind::MusicRename(Default::default())),
         );
-        let plan = ren_core::plan(&entries, &pipeline, ren_platform::host().as_ref());
+        let plan = ren_core::plan(&entries, &pipeline, host().as_ref());
 
         assert_eq!(plan.items.len(), 1, "{}", format.name);
         assert_eq!(
@@ -132,6 +133,7 @@ fn writing_one_field_leaves_the_others_alone_on_every_format() {
                 field: MusicField::Artist,
                 value: "NewArtist".into(),
             }],
+            host().as_ref(),
         )
         .unwrap_or_else(|e| panic!("{}: {e}", format.name));
         assert_eq!(written, [MusicField::Artist], "{}", format.name);
@@ -193,6 +195,7 @@ fn every_field_round_trips_on_every_format() {
                     value: "a comment".into(),
                 },
             ],
+            host().as_ref(),
         )
         .unwrap_or_else(|e| panic!("{}: {e}", format.name));
 
@@ -236,7 +239,9 @@ fn an_m4a_is_untouched_by_every_kind_remove_tags_offers() {
     let before = std::fs::read(&path).unwrap();
     for _ in 0..2 {
         assert!(
-            remove_tags(&path, &TagKind::ALL).unwrap().is_empty(),
+            remove_tags(&path, &TagKind::ALL, host().as_ref())
+                .unwrap()
+                .is_empty(),
             "an M4A carries none of the three kinds on offer"
         );
     }
@@ -264,7 +269,12 @@ fn removing_a_tag_an_ogg_cannot_carry_leaves_its_comments_alone() {
     let path = OggVorbis::tagged("Metallica", "One").write(dir.path(), "t.ogg");
     let before = std::fs::read(&path).unwrap();
 
-    let removed = remove_tags(&path, &[TagKind::Id3v1, TagKind::Id3v2, TagKind::Lyrics3]).unwrap();
+    let removed = remove_tags(
+        &path,
+        &[TagKind::Id3v1, TagKind::Id3v2, TagKind::Lyrics3],
+        host().as_ref(),
+    )
+    .unwrap();
     assert!(
         removed.is_empty(),
         "an Ogg carries none of those, so none can be removed"
@@ -288,7 +298,11 @@ fn removing_a_tag_a_flac_cannot_carry_does_not_panic() {
     let path = Flac::tagged("Metallica", "One").write(dir.path(), "t.flac");
     let before = std::fs::read(&path).unwrap();
 
-    assert!(remove_tags(&path, &[TagKind::Id3v1]).unwrap().is_empty());
+    assert!(
+        remove_tags(&path, &[TagKind::Id3v1], host().as_ref())
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(std::fs::read(&path).unwrap(), before);
 }
 
@@ -310,6 +324,7 @@ fn a_tag_write_never_reaches_the_audio() {
             field: MusicField::Artist,
             value: "NewArtist".into(),
         }],
+        host().as_ref(),
     )
     .unwrap();
 
@@ -352,7 +367,7 @@ fn a_one_field_write_keeps_the_fields_lofty_has_no_name_for() {
         .field("MY_OWN_KEY", "kept")
         .cover(cover)
         .write(dir.path(), "rip.flac");
-    write_fields(&flac, &artist).unwrap();
+    write_fields(&flac, &artist, host().as_ref()).unwrap();
     assert!(contains(&flac, b"CUESHEET=FILE rip.wav WAVE"), "CUESHEET");
     assert!(contains(&flac, b"MY_OWN_KEY=kept"), "a user's own key");
     assert!(contains(&flac, cover), "the FLAC's picture block");
@@ -364,7 +379,7 @@ fn a_one_field_write_keeps_the_fields_lofty_has_no_name_for() {
         .binary("Cover Art (Front)", cover)
         .field("MY_OWN_KEY", "kept")
         .write(dir.path(), "track.wv");
-    write_fields(&wv, &artist).unwrap();
+    write_fields(&wv, &artist, host().as_ref()).unwrap();
     assert!(contains(&wv, b"Cover Art (Front)"), "the cover's key");
     assert!(contains(&wv, cover), "the cover itself");
     assert!(contains(&wv, b"MY_OWN_KEY"), "a user's own key");
