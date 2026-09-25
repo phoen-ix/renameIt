@@ -4,14 +4,14 @@
 //! longer matches the journal are reported and skipped rather than forced: an
 //! undo is only safe while no other program has changed the names in between.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use ren_platform::Platform;
 
 use super::ExecError;
-use super::journal::{Journal, Record};
+use super::journal::{Journal, Record, Written};
 use crate::effect::{Before, Effect, TimeSet, TimeStamp};
 
 #[derive(Debug, Clone, Default)]
@@ -19,6 +19,11 @@ pub struct UndoReport {
     pub txn: String,
     pub journal: PathBuf,
     /// `(current name, restored name)` pairs, in the order they were reverted.
+    ///
+    /// **One pair per file**, however many hops it took. A file that broke a
+    /// cycle went `a → __renameit-tmp-0 → b`, and undo walks both hops back;
+    /// reported hop by hop, a two-file swap "restored 3 items" and named a
+    /// temp file the user never saw. The hops are joined into `(b, a)`.
     pub restored: Vec<(PathBuf, PathBuf)>,
     pub skipped: Vec<(PathBuf, String)>,
     /// `(path, what was put back)` for every metadata change reverted.
@@ -38,13 +43,25 @@ pub struct UndoReport {
     pub removed_dirs: Vec<PathBuf>,
     /// Folders it created but left alone, because something else is in them
     /// now. Not a failure — deleting a folder the user has since filled would
-    /// be far worse than leaving an empty-looking one behind.
+    /// be far worse than leaving an empty-looking one behind. A folder that is
+    /// already gone is in neither list: there was nothing to keep or remove.
     pub kept_dirs: Vec<PathBuf>,
+    /// The undo happened but could not be recorded in the journal — the
+    /// `Undone` stamp failed (a full disk, a folder turned read-only).
+    ///
+    /// Carried on the report rather than returned as an error, because by
+    /// then the files *have* moved and the caller has to say which: an error
+    /// dropped this report, and the next press replayed the batch, found
+    /// every file already back, and reported them all as skipped. Makes
+    /// [`Self::is_complete`] false, so `ren-cli undo` exits 3 (D103) — the
+    /// transaction still reads as undoable, and whoever automates against it
+    /// has to know.
+    pub not_recorded: Option<String>,
 }
 
 impl UndoReport {
     pub fn is_complete(&self) -> bool {
-        self.skipped.is_empty()
+        self.skipped.is_empty() && self.not_recorded.is_none()
     }
 }
 
@@ -56,8 +73,38 @@ pub fn undo_last(platform: &dyn Platform, journal_dir: &Path) -> Result<UndoRepo
 }
 
 /// Undoes one specific journal file.
+///
+/// **One reverse walk over every op the journal announced**, newest first,
+/// deciding each by what the journal and the disk say about it:
+///
+/// * `Failed` — it never happened. Skipped outright: "`to` present, `from`
+///   absent" would otherwise read as proof that a failed rename landed, and
+///   undo moved a stranger's file that had appeared at `to`.
+/// * `Completed` — it happened, and is put back, or skipped with a reason if
+///   something has changed it since.
+/// * Neither — announced and never confirmed. The op runs *before* its
+///   `Completed` is written, and since D168 that record is not even synced on
+///   its own, so a crash can leave an op that ran with nothing saying so.
+///   The disk decides, as D84 decided for renames: a rename whose new name is
+///   there and old name free happened; an action whose value is still the
+///   one we wrote happened; a folder that exists was ours (the planner only
+///   announces folders that did not exist); a created file that holds exactly
+///   what we meant to write is ours. Otherwise it never ran, and there is
+///   nothing to say about it.
+///
+/// Newest first is what makes the disk decisive: each unconfirmed rename's
+/// `from` has been vacated by the later ones by the time it is asked for.
+/// Actions come off before any rename (they ran after every rename, P46), and
+/// a script's files before either, so a file written into a folder the run
+/// renamed is removed while that folder still has the name it was written
+/// under. Folders come off last, deepest first, once everything that moved
+/// into them has moved back out.
 pub fn undo_transaction(path: &Path, platform: &dyn Platform) -> Result<UndoReport, ExecError> {
-    let lines = Journal::read(path)?;
+    // Held for the whole undo: nothing else writes this journal meanwhile,
+    // and a second window cannot roll the same batch back twice. A run still
+    // writing it refuses here (`JournalInUse`).
+    let mut file = Journal::open_exclusive(path)?;
+    let lines = Journal::read_from(&mut file, path)?;
     Journal::check_understood(path, &lines)?;
     let txn = lines.first().map(|l| l.txn.clone()).unwrap_or_default();
 
@@ -68,13 +115,13 @@ pub fn undo_transaction(path: &Path, platform: &dyn Platform) -> Result<UndoRepo
         return Err(ExecError::NothingToUndo(path.to_path_buf()));
     }
 
-    // Only operations the journal says actually happened.
     let mut planned: HashMap<u64, (PathBuf, PathBuf)> = HashMap::new();
     let mut created: HashMap<u64, PathBuf> = HashMap::new();
-    let mut written: HashMap<u64, PathBuf> = HashMap::new();
+    let mut written: HashMap<u64, (PathBuf, Option<Written>)> = HashMap::new();
     let mut acted: HashMap<u64, Act> = HashMap::new();
     let mut irreversible: HashMap<u64, (PathBuf, String)> = HashMap::new();
-    let mut completed: Vec<u64> = Vec::new();
+    let mut finished: HashSet<u64> = HashSet::new();
+    let mut failed: HashSet<u64> = HashSet::new();
     // Exhaustive on purpose. This used to end in `_ => {}`, which meant a new
     // record kind would be *silently* skipped — undo quietly not restoring
     // anything, with no error, no skip and no log line. Every arm now either
@@ -91,6 +138,7 @@ pub fn undo_transaction(path: &Path, platform: &dyn Platform) -> Result<UndoRepo
                 seq,
                 path,
                 replaced,
+                written: what,
             } => {
                 if *replaced {
                     // Nothing was kept, so there is nothing to put back. Same
@@ -98,7 +146,7 @@ pub fn undo_transaction(path: &Path, platform: &dyn Platform) -> Result<UndoRepo
                     // batch whose renames came back perfectly still exits zero.
                     irreversible.insert(*seq, (path.clone(), "overwrote a file".to_owned()));
                 } else {
-                    written.insert(*seq, path.clone());
+                    written.insert(*seq, (path.clone(), *what));
                 }
             }
             Record::PlanAct {
@@ -120,9 +168,14 @@ pub fn undo_transaction(path: &Path, platform: &dyn Platform) -> Result<UndoRepo
             Record::PlanIrreversible { seq, path, op, .. } => {
                 irreversible.insert(*seq, (path.clone(), op.clone()));
             }
-            Record::Completed { seq } => completed.push(*seq),
+            Record::Completed { seq } => {
+                finished.insert(*seq);
+            }
+            Record::Failed { seq, .. } => {
+                failed.insert(*seq);
+            }
             // Bookkeeping, not work: nothing to take back.
-            Record::Begin { .. } | Record::Failed { .. } | Record::Commit { .. } => {}
+            Record::Begin { .. } | Record::Commit { .. } => {}
             // `Undone` is rejected above, and `Unknown` by `check_understood`
             // — reaching either here would mean one of those checks was
             // removed.
@@ -136,145 +189,212 @@ pub fn undo_transaction(path: &Path, platform: &dyn Platform) -> Result<UndoRepo
         ..Default::default()
     };
 
-    // Renames that were written ahead and never confirmed.
-    //
-    // The rename syscall happens *before* its `Completed` record is written, so
-    // a crash in that window leaves the file under its **new** name with
-    // nothing in the journal saying it landed. Replaying only `completed` — as
-    // this did until M6 — left those files renamed for good, while
-    // `Unfinished.in_flight`'s own doc comment promised *"a file that may be
-    // under either name — recovery checks before touching it"*. Nothing
-    // checked.
-    //
-    // `check_staleness` is that check, and it is decisive in both directions:
-    // if the new name is absent the rename never happened and there is nothing
-    // to do; if it is there and the old name is free, the rename landed and
-    // comes back. First, so it is unwound before anything earlier in the batch.
-    // A set for the membership test: `completed` is a `Vec` because its order
-    // is the replay order, and `contains` on it made undoing a 10 000-file
-    // batch a hundred million comparisons.
-    let finished: std::collections::HashSet<u64> = completed.iter().copied().collect();
-    let in_flight: Vec<u64> = planned
+    let mut announced: Vec<u64> = planned
         .keys()
+        .chain(created.keys())
+        .chain(written.keys())
+        .chain(acted.keys())
+        .chain(irreversible.keys())
         .copied()
-        .filter(|seq| !finished.contains(seq))
+        .filter(|seq| !failed.contains(seq))
         .collect();
-    let mut folders_in_flight: Vec<PathBuf> = Vec::new();
-    for seq in in_flight.into_iter().rev() {
-        // A folder announced and never confirmed: the planner only announces
-        // folders that did not exist, so one that exists now is ours — and it
-        // is removed after the renames below, once the files that may have
-        // moved into it have moved back out. `remove_dir` refusing a folder
-        // that is not empty is the guard against being wrong about that.
-        if let Some(dir) = created.get(&seq) {
-            folders_in_flight.push(dir.clone());
-            continue;
-        }
-        let Some((from, to)) = planned.get(&seq) else {
-            continue;
-        };
-        // Silent when the rename never happened: an announced-but-not-performed
-        // rename is not a skip, because there is nothing about it to report.
-        if check_staleness(platform, from, to).is_err() {
-            continue;
-        }
-        match platform.rename(to, from) {
-            Ok(()) => {
-                platform.notify_shell_changed(from);
-                report.restored.push((to.clone(), from.clone()));
-            }
-            Err(e) => report.skipped.push((to.clone(), e.to_string())),
-        }
-    }
+    announced.sort_unstable_by(|a, b| b.cmp(a));
+    announced.dedup();
 
-    // Reverse order, which is already right for actions: a file that was
-    // renamed *and* acted on has its action reverted first, while the recorded
-    // path still resolves, and only then is the rename taken back.
-    for seq in completed.iter().copied().rev() {
+    let mut hops = Hops::new(&planned);
+    let mut folders: Vec<PathBuf> = Vec::new();
+    for seq in announced {
+        let done = finished.contains(&seq);
         if let Some((path, op)) = irreversible.get(&seq) {
             // Reported, never attempted. Saying so is the whole point: a user
             // who undoes a batch that both renamed and rewrote tags has to be
-            // told which half came back.
-            report
-                .irreversible
-                .push((path.clone(), format!("{op} cannot be undone")));
-            continue;
-        }
-        if let Some(act) = acted.get(&seq) {
-            match revert(platform, act) {
-                Ok(Some(what)) => report.reverted.push((act.path.clone(), what)),
-                Ok(None) => {}
-                Err(reason) => report.skipped.push((act.path.clone(), reason)),
+            // told which half came back. One that never ran is the recovery
+            // banner's to name, not this report's.
+            if done {
+                report
+                    .irreversible
+                    .push((path.clone(), format!("{op} cannot be undone")));
             }
-            continue;
-        }
-        let Some((from, to)) = planned.get(&seq) else {
-            continue;
-        };
-        if let Err(reason) = check_staleness(platform, from, to) {
-            report.skipped.push((to.clone(), reason));
-            continue;
-        }
-        match platform.rename(to, from) {
-            Ok(()) => {
-                platform.notify_shell_changed(from);
-                report.restored.push((to.clone(), from.clone()));
+        } else if let Some(act) = acted.get(&seq) {
+            // Unconfirmed: put back only if our value is still the file's —
+            // otherwise the change never ran, and there is nothing to say.
+            if done || check_value_staleness(platform, act).is_ok() {
+                match revert(platform, act) {
+                    Ok(Some(what)) => report.reverted.push((act.path.clone(), what)),
+                    Ok(None) => {}
+                    Err(reason) => report.skipped.push((act.path.clone(), reason)),
+                }
             }
-            Err(e) => report.skipped.push((to.clone(), e.to_string())),
+        } else if let Some((path, what)) = written.get(&seq) {
+            remove_written(&mut report, path, what.as_ref(), done);
+        } else if let Some(dir) = created.get(&seq) {
+            // A folder announced and never confirmed that exists now is ours:
+            // the planner only announces folders that did not exist.
+            if done || dir.symlink_metadata().is_ok() {
+                folders.push(dir.clone());
+            }
+        } else if let Some((from, to)) = planned.get(&seq) {
+            if let Err(reason) = check_staleness(platform, from, to) {
+                // Silent when unconfirmed: a rename that never happened is not
+                // a skip, because there is nothing about it to report.
+                if done {
+                    report.skipped.push((to.clone(), reason));
+                }
+                continue;
+            }
+            match platform.rename(to, from) {
+                Ok(()) => {
+                    platform.notify_shell_changed(from);
+                    if let Some(pair) = hops.restored(from, to) {
+                        report.restored.push(pair);
+                    }
+                }
+                Err(e) => report.skipped.push((to.clone(), e.to_string())),
+            }
         }
     }
 
-    // Files this transaction created come off before the folders, so a script
-    // that wrote a playlist into a folder the same run created leaves that
-    // folder empty and removable rather than stubbornly occupied.
-    for path in completed.iter().rev().filter_map(|seq| written.get(seq)) {
-        match std::fs::remove_file(path) {
-            Ok(()) => report.removed_files.push(path.clone()),
-            // Already gone is the outcome we wanted; anything else is a skip
-            // the user should see.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                report.removed_files.push(path.clone());
-            }
-            Err(e) => report.skipped.push((path.clone(), e.to_string())),
-        }
-    }
-
-    // Folders the transaction created come off last and deepest first, once
-    // the files it put in them have moved back out. The announced-and-never-
-    // confirmed ones go with them: silent when never created, because a
-    // folder that is not there is not a skip.
-    let mut folders: Vec<PathBuf> = completed
-        .iter()
-        .rev()
-        .filter_map(|seq| created.get(seq).cloned())
-        .chain(
-            folders_in_flight
-                .into_iter()
-                .filter(|dir| dir.symlink_metadata().is_ok()),
-        )
-        .collect();
+    // `remove_dir` refuses a folder that is not empty, which is exactly the
+    // check we want and one that no race can defeat.
     folders.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
     for dir in folders {
-        // `remove_dir` refuses a folder that is not empty, which is exactly the
-        // check we want and one that no race can defeat.
         match std::fs::remove_dir(&dir) {
             Ok(()) => report.removed_dirs.push(dir),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(_) => report.kept_dirs.push(dir),
         }
     }
 
     let n = lines.last().map(|l| l.n + 1).unwrap_or(0);
-    Journal::append_to(
-        path,
-        &txn,
-        n,
-        Record::Undone {
-            restored: report.restored.len(),
-            skipped: report.skipped.len(),
-        },
-    )?;
+    let stamped = if stamp_fails() {
+        Err(ExecError::io(
+            path,
+            std::io::Error::new(std::io::ErrorKind::StorageFull, "test: the disk is full"),
+        ))
+    } else {
+        Journal::stamp(
+            &mut file,
+            path,
+            &txn,
+            n,
+            Record::Undone {
+                restored: report.restored.len(),
+                skipped: report.skipped.len(),
+            },
+        )
+    };
+    if let Err(error) = stamped {
+        report.not_recorded = Some(error.to_string());
+    }
 
     Ok(report)
+}
+
+// Test seam: makes the `Undone` stamp fail, the one failure that comes after
+// the files have already moved.
+#[cfg(test)]
+thread_local! {
+    static FAIL_STAMP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn stamp_fails() -> bool {
+    FAIL_STAMP.with(std::cell::Cell::get)
+}
+
+#[cfg(not(test))]
+fn stamp_fails() -> bool {
+    false
+}
+
+/// Takes a script's file off again, if it is still the file the run wrote.
+///
+/// Confirmed: removed, unless the journal knows what was written and the file
+/// no longer holds it — then it is the user's file now, and deleting it would
+/// lose their edits, so it is a skip with the reason. Already gone is not
+/// "removed": nothing was.
+///
+/// Unconfirmed: removed only when it holds exactly what the run meant to write,
+/// which proves it is ours and complete. Anything else is a half-written file
+/// or a stranger's, and the recovery banner has already named it.
+fn remove_written(report: &mut UndoReport, path: &Path, what: Option<&Written>, done: bool) {
+    let intact = what.map(|expected| holds(path, expected));
+    let remove = match (done, intact) {
+        (true, Some(false)) => {
+            if path.symlink_metadata().is_ok() {
+                report.skipped.push((
+                    path.to_path_buf(),
+                    format!(
+                        "{} was changed after this run wrote it, so it was left in place",
+                        path.display()
+                    ),
+                ));
+            }
+            false
+        }
+        (true, _) => true,
+        (false, Some(true)) => true,
+        (false, _) => false,
+    };
+    if !remove {
+        return;
+    }
+    match std::fs::remove_file(path) {
+        Ok(()) => report.removed_files.push(path.to_path_buf()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => report.skipped.push((path.to_path_buf(), e.to_string())),
+    }
+}
+
+/// Whether the file at `path` holds exactly what `expected` describes.
+fn holds(path: &Path, expected: &Written) -> bool {
+    std::fs::metadata(path).is_ok_and(|meta| meta.len() == expected.len)
+        && std::fs::read(path).is_ok_and(|bytes| Written::of(&bytes) == *expected)
+}
+
+/// Joins the hops of a broken cycle back into one pair per file.
+///
+/// A temp name is a path one rename in the journal moved a file *to* and a
+/// later one moved it on *from* — which in a plan is only ever a cycle's
+/// `__renameit-tmp-N` (P6). Walking back, the finish (`b → tmp`) comes first:
+/// the file is parked, and nothing is reported. The stage (`tmp → a`) comes
+/// next and reports `(b, a)`.
+struct Hops {
+    temps: HashSet<PathBuf>,
+    /// Where each parked file was before this undo, by its temp name.
+    parked: HashMap<PathBuf, PathBuf>,
+}
+
+impl Hops {
+    fn new(planned: &HashMap<u64, (PathBuf, PathBuf)>) -> Self {
+        let left_at: HashMap<&Path, u64> = planned
+            .iter()
+            .map(|(seq, (from, _))| (from.as_path(), *seq))
+            .collect();
+        let temps = planned
+            .iter()
+            .filter(|(seq, (_, to))| left_at.get(to.as_path()).is_some_and(|later| later > seq))
+            .map(|(_, (_, to))| to.clone())
+            .collect();
+        Self {
+            temps,
+            parked: HashMap::new(),
+        }
+    }
+
+    /// `to → from` has just been reversed: the pair to report, if any.
+    fn restored(&mut self, from: &Path, to: &Path) -> Option<(PathBuf, PathBuf)> {
+        if self.temps.contains(from) {
+            self.parked.insert(from.to_path_buf(), to.to_path_buf());
+            return None;
+        }
+        let current = if self.temps.contains(to) {
+            self.parked.remove(to).unwrap_or_else(|| to.to_path_buf())
+        } else {
+            to.to_path_buf()
+        };
+        Some((current, from.to_path_buf()))
+    }
 }
 
 /// One journalled metadata change, ready to be put back.
@@ -438,4 +558,226 @@ fn check_staleness(platform: &dyn Platform, from: &Path, to: &Path) -> Result<()
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::effect::TimeSet;
+    use crate::exec::recover::{rollback, unfinished};
+    use tempfile::TempDir;
+
+    /// A journal that announces `records` and then stops, as a crash leaves it.
+    fn crashed(journals: &Path, records: Vec<Record>) {
+        let mut journal = Journal::create(journals).unwrap();
+        journal
+            .write(Record::Begin {
+                platform: "test".into(),
+                items: records.len(),
+            })
+            .unwrap();
+        for record in records {
+            journal.write(record).unwrap();
+        }
+    }
+
+    fn roll_back(journals: &Path) -> UndoReport {
+        let found = unfinished(journals).0;
+        assert_eq!(found.len(), 1, "{found:?}");
+        rollback(&found[0], ren_platform::host().as_ref()).unwrap()
+    }
+
+    /// A folder created and never confirmed. Since D168 a `Completed` is
+    /// appended without a sync, so a power cut right after `create_dir` leaves
+    /// exactly this, and rollback has to take the folder away again — the
+    /// planner only announces folders that did not exist, and `remove_dir`
+    /// refuses one that has anything in it.
+    #[test]
+    fn rollback_removes_a_folder_created_but_never_confirmed() {
+        let journals = TempDir::new().unwrap();
+        let tree = TempDir::new().unwrap();
+        let folder = tree.path().join("A");
+        crashed(
+            journals.path(),
+            vec![Record::PlanCreateDir {
+                seq: 0,
+                path: folder.clone(),
+            }],
+        );
+        std::fs::create_dir(&folder).unwrap();
+
+        let report = roll_back(journals.path());
+        assert!(!folder.exists(), "{report:?}");
+        assert_eq!(report.removed_dirs, [folder]);
+    }
+
+    /// Unconfirmed renames are replayed newest first, so each one's `from` has
+    /// been vacated by the time it is asked for. A chain of six, all performed
+    /// and none confirmed, comes back only in exactly that order — any other
+    /// finds a `from` still occupied, reads it as "recreated by something
+    /// else", and leaves the file where it is.
+    #[test]
+    fn unconfirmed_renames_are_replayed_newest_first() {
+        let journals = TempDir::new().unwrap();
+        let tree = TempDir::new().unwrap();
+        let at = |i: usize| tree.path().join(format!("x{i}"));
+        // seq 0: x5 → x6, seq 1: x4 → x5, … seq 5: x0 → x1: the order a chain
+        // runs in, from its free end.
+        let records = (0..6)
+            .map(|seq| Record::PlanRename {
+                seq: seq as u64,
+                from: at(5 - seq),
+                to: at(6 - seq),
+            })
+            .collect();
+        crashed(journals.path(), records);
+        for i in 1..=6 {
+            std::fs::write(at(i), format!("was x{}", i - 1)).unwrap();
+        }
+
+        let report = roll_back(journals.path());
+        assert_eq!(report.restored.len(), 6, "{report:?}");
+        for i in 0..6 {
+            assert_eq!(std::fs::read_to_string(at(i)).unwrap(), format!("was x{i}"));
+        }
+        assert!(!at(6).exists());
+    }
+
+    fn act(seq: u64, path: &Path, before: u64, after: u64) -> Record {
+        Record::PlanAct {
+            seq,
+            path: path.to_path_buf(),
+            op: "set_date".into(),
+            change: Effect::Times(TimeSet {
+                modified: Some(TimeStamp {
+                    secs: after as i64,
+                    nanos: 0,
+                }),
+                ..Default::default()
+            }),
+            before: Before::Times(TimeSet {
+                modified: Some(TimeStamp {
+                    secs: before as i64,
+                    nanos: 0,
+                }),
+                ..Default::default()
+            }),
+        }
+    }
+
+    fn set_modified(path: &Path, secs: u64) {
+        let file = std::fs::File::options().write(true).open(path).unwrap();
+        file.set_modified(std::time::UNIX_EPOCH + Duration::from_secs(secs))
+            .unwrap();
+    }
+
+    fn modified(path: &Path) -> u64 {
+        std::fs::metadata(path)
+            .unwrap()
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    }
+
+    /// A metadata change that ran and whose confirmation was lost is decided
+    /// the way D84 decides a rename: from the disk. The file carries the value
+    /// we wrote, so we wrote it, and it goes back.
+    #[test]
+    fn rollback_reverts_an_action_that_ran_but_was_never_confirmed() {
+        let journals = TempDir::new().unwrap();
+        let tree = TempDir::new().unwrap();
+        let file = tree.path().join("a.txt");
+        std::fs::write(&file, b"x").unwrap();
+        crashed(journals.path(), vec![act(0, &file, 1_000_000, 2_000_000)]);
+        set_modified(&file, 2_000_000);
+
+        let report = roll_back(journals.path());
+        assert_eq!(modified(&file), 1_000_000, "{report:?}");
+        assert_eq!(report.reverted.len(), 1);
+        assert!(report.is_complete());
+    }
+
+    /// And one that never ran is left alone, silently: the file still has its
+    /// old value, so there is nothing to put back and nothing to report.
+    #[test]
+    fn rollback_leaves_an_action_that_never_ran_alone() {
+        let journals = TempDir::new().unwrap();
+        let tree = TempDir::new().unwrap();
+        let file = tree.path().join("a.txt");
+        std::fs::write(&file, b"x").unwrap();
+        set_modified(&file, 1_000_000);
+        crashed(journals.path(), vec![act(0, &file, 1_000_000, 2_000_000)]);
+
+        let report = roll_back(journals.path());
+        assert_eq!(modified(&file), 1_000_000);
+        assert!(report.reverted.is_empty(), "{report:?}");
+        assert!(report.skipped.is_empty(), "{report:?}");
+    }
+
+    /// The `Undone` stamp is the one step that comes after the files have
+    /// moved. When it fails, the report of what moved has to survive it — as
+    /// an error it was dropped, the CLI exited as if the command line had been
+    /// wrong, and the next press replayed the batch and reported every file
+    /// as skipped.
+    #[test]
+    fn an_undo_that_cannot_be_recorded_still_reports_what_it_restored() {
+        let journals = TempDir::new().unwrap();
+        let tree = TempDir::new().unwrap();
+        let (from, to) = (tree.path().join("a"), tree.path().join("b"));
+        std::fs::write(&to, b"x").unwrap();
+        let mut journal = Journal::create(journals.path()).unwrap();
+        journal
+            .write(Record::PlanRename {
+                seq: 0,
+                from: from.clone(),
+                to: to.clone(),
+            })
+            .unwrap();
+        journal.write(Record::Completed { seq: 0 }).unwrap();
+        let path = journal.path().to_path_buf();
+        drop(journal);
+
+        FAIL_STAMP.with(|fail| fail.set(true));
+        let report = undo_transaction(&path, ren_platform::host().as_ref());
+        FAIL_STAMP.with(|fail| fail.set(false));
+
+        let report = report.expect("the files moved, so the report comes back");
+        assert_eq!(report.restored, [(to, from.clone())]);
+        assert!(report.not_recorded.is_some(), "{report:?}");
+        assert!(
+            !report.is_complete(),
+            "an unrecorded undo is not a complete one"
+        );
+        assert!(from.exists());
+    }
+
+    /// `kept_dirs` means "something else is in it now". A created folder that
+    /// is already gone is not that, and reporting it there told the user a
+    /// folder had been kept that no longer exists.
+    #[test]
+    fn a_created_folder_that_is_already_gone_is_not_reported_as_kept() {
+        let journals = TempDir::new().unwrap();
+        let tree = TempDir::new().unwrap();
+        let mut journal = Journal::create(journals.path()).unwrap();
+        journal
+            .write(Record::PlanCreateDir {
+                seq: 0,
+                path: tree.path().join("gone"),
+            })
+            .unwrap();
+        journal.write(Record::Completed { seq: 0 }).unwrap();
+        journal
+            .write(Record::Commit {
+                renamed: 0,
+                failed: 0,
+            })
+            .unwrap();
+        let path = journal.path().to_path_buf();
+        drop(journal);
+
+        let report = undo_transaction(&path, ren_platform::host().as_ref()).unwrap();
+        assert!(report.kept_dirs.is_empty(), "{report:?}");
+    }
 }

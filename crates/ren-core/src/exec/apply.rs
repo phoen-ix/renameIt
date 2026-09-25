@@ -116,6 +116,17 @@ pub fn apply(
         return Err(ExecError::Blocked {
             conflicts: plan.conflicts(),
             errors: plan.errors(),
+            blockers: plan.blockers.clone(),
+        });
+    }
+    if let Some(path) = plan
+        .ops
+        .iter()
+        .flat_map(op_paths)
+        .find(|p| !p.is_absolute())
+    {
+        return Err(ExecError::RelativePath {
+            path: path.to_path_buf(),
         });
     }
 
@@ -138,14 +149,16 @@ pub fn apply(
     };
 
     if options.simulate {
+        let mut parked = Parked::default();
         for op in &plan.ops {
             match op {
                 // A simulation reports what the user asked for, not the
                 // temp-name bookkeeping that makes it possible.
-                PlannedOp::Rename { from, to, kind } if *kind != RenameKind::CycleStage => {
-                    report.renamed.push((from.clone(), to.clone()));
+                PlannedOp::Rename { from, to, kind } => {
+                    if let Some(pair) = parked.renamed(from, to, *kind) {
+                        report.renamed.push(pair);
+                    }
                 }
-                PlannedOp::Rename { .. } => {}
                 PlannedOp::CreateDir { path } => report.created_dirs.push(path.clone()),
                 PlannedOp::WriteFile {
                     path, undoability, ..
@@ -171,6 +184,50 @@ pub fn apply(
     apply_journalled(plan, platform, options, journal, report)
 }
 
+/// Every path an op names, for the absolute-path check.
+fn op_paths(op: &PlannedOp) -> impl Iterator<Item = &std::path::Path> {
+    let (first, second) = match op {
+        PlannedOp::Rename { from, to, .. } => (from.as_path(), Some(to.as_path())),
+        PlannedOp::CreateDir { path }
+        | PlannedOp::WriteFile { path, .. }
+        | PlannedOp::Act { path, .. } => (path.as_path(), None),
+    };
+    std::iter::once(first).chain(second)
+}
+
+/// The files a cycle has parked under a temp name, by that name.
+///
+/// A broken cycle moves its victim twice — `a → tmp`, then `tmp → b` — and
+/// only the second hop is a rename the user asked for. Reported as
+/// `tmp → b`, it was a pair nobody could use: a front end reads `renamed` as
+/// an old → new map, to carry a hand-set order across the relist (D157), to
+/// rekey a picture, to write the log. Remembering where each temp name came
+/// from reports it as `a → b`.
+#[derive(Debug, Default)]
+struct Parked(std::collections::HashMap<PathBuf, PathBuf>);
+
+impl Parked {
+    /// The pair to report for this hop, if any.
+    fn renamed(
+        &mut self,
+        from: &std::path::Path,
+        to: &std::path::Path,
+        kind: RenameKind,
+    ) -> Option<(PathBuf, PathBuf)> {
+        match kind {
+            RenameKind::CycleStage => {
+                self.0.insert(to.to_path_buf(), from.to_path_buf());
+                None
+            }
+            RenameKind::CycleFinish => Some((
+                self.0.remove(from).unwrap_or_else(|| from.to_path_buf()),
+                to.to_path_buf(),
+            )),
+            RenameKind::Direct => Some((from.to_path_buf(), to.to_path_buf())),
+        }
+    }
+}
+
 fn options_cancelled(options: &ApplyOptions) -> bool {
     options
         .cancel
@@ -183,7 +240,7 @@ fn options_cancelled(options: &ApplyOptions) -> bool {
 /// **One, and the property test is why.** The executor is shaped so that a
 /// window of sixty-four is a one-constant change — announce the window,
 /// sync once, perform, confirm — and
-/// `a_crash_at_any_rename_is_recovered_exactly` in `tests/properties.rs`
+/// `a_crash_at_any_change_is_recovered_exactly` in `tests/properties.rs`
 /// was written to gate exactly that widening. It fails at anything above
 /// one, with the same shape every time: a swap through a temp name whose
 /// three renames are announced together and *none* performed. Recovery
@@ -196,15 +253,16 @@ fn options_cancelled(options: &ApplyOptions) -> bool {
 /// A window of one cannot produce that state: at most the op being
 /// performed and the one before it are ever unconfirmed at once, and the
 /// one before it has always run. Every case the test generates — chains,
-/// cycles, subfolder moves, a folder row, a crash before and after every
-/// syscall — recovers exactly at one.
+/// cycles, subfolder moves, a folder row, metadata actions, a crash before
+/// and after every change, and a power cut that loses the unsynced tail —
+/// recovers exactly at one.
 ///
 /// Widening it needs recovery to know *which file* is where rather than
 /// only which names exist — a file identity in the intent, or a replay of
 /// the announced prefix against the disk — which is a journal-format
-/// change with its own decision (P99). The halving of syncs that this
-/// commit does deliver comes from `Completed` being appended unsynced and
-/// carried by the next intent's sync, not from the window.
+/// change with its own decision (P99). The halving of syncs D168 delivered
+/// comes from `Completed` being appended unsynced and carried by the next
+/// intent's sync, not from the window.
 pub const WRITE_AHEAD_WINDOW: usize = 1;
 
 /// The run itself, once a journal is open.
@@ -234,15 +292,25 @@ fn apply_journalled(
 ) -> Result<ApplyReport, ExecError> {
     report.txn = Some(journal.txn().to_owned());
     report.journal = Some(journal.path().to_path_buf());
-    journal.write(Record::Begin {
+    if let Err(error) = journal.write(Record::Begin {
         platform: platform.name().to_owned(),
         items: plan.ops.len(),
-    })?;
+    }) {
+        // Nothing announced, so nothing touched — and a journal left behind
+        // here would be "a batch that did not finish" at the next start, with
+        // no files and nothing to roll back. Removed; the disk being full is
+        // the likeliest reason, and the caller still hears it.
+        let path = journal.path().to_path_buf();
+        drop(journal);
+        let _ = std::fs::remove_file(path);
+        return Err(error);
+    }
 
     // From here on a journal write that fails is `ExecError::Interrupted`: the
     // run has started, files may have moved, and the caller has to be told
     // which — see the variant. `completed` is what the message says.
     let mut completed = 0usize;
+    let mut parked = Parked::default();
 
     // Every physical change is journalled, temp-name hops included, so undo
     // unwinds a broken cycle by replaying them in reverse (P6).
@@ -296,7 +364,7 @@ fn apply_journalled(
                     journal
                         .append(Record::Completed { seq })
                         .map_err(|e| interrupted(&journal, completed, e))?;
-                    record_success(&mut report, op, platform);
+                    record_success(&mut report, &mut parked, op, platform);
                     if let Some(progress) = &options.progress {
                         progress.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
@@ -360,16 +428,20 @@ fn announce(
             })?;
         }
         PlannedOp::WriteFile {
-            path, undoability, ..
+            path,
+            undoability,
+            contents,
         } => {
             // `replaced` comes from the plan's decision rather than a fresh
             // `stat`, so the file the user consented to overwrite is the
             // file the journal says was overwritten. Re-checking here would
-            // let the two disagree.
+            // let the two disagree — and for a create it need not: `perform`
+            // refuses to replace anything.
             journal.append(Record::PlanWriteFile {
                 seq,
                 path: path.clone(),
                 replaced: !undoability.is_reversible(),
+                written: Some(super::journal::Written::of(contents.as_bytes())),
             })?;
         }
         PlannedOp::Rename { from, to, .. } => {
@@ -433,12 +505,45 @@ fn announce(
 fn perform(op: &PlannedOp, platform: &dyn Platform) -> Result<(), String> {
     match op {
         PlannedOp::CreateDir { path } => std::fs::create_dir(path).map_err(|e| e.to_string()),
-        PlannedOp::WriteFile { path, contents, .. } => {
-            std::fs::write(path, contents).map_err(|e| e.to_string())
-        }
+        PlannedOp::WriteFile {
+            path,
+            contents,
+            undoability,
+        } => write_file(path, contents, *undoability),
         PlannedOp::Rename { from, to, .. } => platform.rename(from, to).map_err(|e| e.to_string()),
         PlannedOp::Act { path, effect, .. } => write_effect(path, platform, effect),
     }
+}
+
+/// Writes a script's file, holding a create to being one.
+///
+/// A write the plan decided creates a file (`Undoability::Full`) was never
+/// shown to anyone as destroying one, so it is opened `create_new`: a file
+/// that appeared between the preview and the run fails the op rather than
+/// being truncated under a promise that nothing was there. An overwrite had
+/// P2's consent for exactly that file, and replaces it.
+fn write_file(
+    path: &std::path::Path,
+    contents: &str,
+    undoability: Undoability,
+) -> Result<(), String> {
+    use std::io::Write as _;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true);
+    if undoability.is_reversible() {
+        options.create_new(true);
+    } else {
+        options.create(true).truncate(true);
+    }
+    let mut file = options.open(path).map_err(|e| match e.kind() {
+        std::io::ErrorKind::AlreadyExists => format!(
+            "{} appeared after the preview, and this run was not asked to replace it",
+            path.display()
+        ),
+        _ => e.to_string(),
+    })?;
+    file.write_all(contents.as_bytes())
+        .map_err(|e| e.to_string())
 }
 
 /// The path a failure is reported against.
@@ -452,7 +557,12 @@ fn subject_of(op: &PlannedOp) -> PathBuf {
 }
 
 /// What the report says about an op that succeeded.
-fn record_success(report: &mut ApplyReport, op: &PlannedOp, platform: &dyn Platform) {
+fn record_success(
+    report: &mut ApplyReport,
+    parked: &mut Parked,
+    op: &PlannedOp,
+    platform: &dyn Platform,
+) {
     match op {
         PlannedOp::CreateDir { path } => {
             report.reversible += 1;
@@ -469,16 +579,17 @@ fn record_success(report: &mut ApplyReport, op: &PlannedOp, platform: &dyn Platf
                 .wrote
                 .push((path.clone(), !undoability.is_reversible()));
         }
-        // The same filter the simulate branch applies, and for the same
-        // reason — it was missing here, so two files swapping names reported
-        // **three** renames and the status bar could say "Renamed 3 of 2".
-        // The journal still records every hop, because undo needs them; the
-        // *report* is what the user reads.
+        // The same bookkeeping the simulate branch does, and for the same
+        // reason — without it two files swapping names reported **three**
+        // renames and the status bar could say "Renamed 3 of 2", and the one
+        // that went through a temp name was reported from it. The journal
+        // still records every hop, because undo needs them; the *report* is
+        // what the user reads.
         PlannedOp::Rename { from, to, kind } => {
             platform.notify_shell_changed(to);
             report.reversible += 1;
-            if *kind != RenameKind::CycleStage {
-                report.renamed.push((from.clone(), to.clone()));
+            if let Some(pair) = parked.renamed(from, to, *kind) {
+                report.renamed.push(pair);
             }
         }
         PlannedOp::Act {
@@ -566,6 +677,7 @@ mod tests {
     use super::*;
     use crate::ops::Replace;
     use crate::{Pipeline, plan};
+    use std::path::Path;
 
     /// A journal that dies after the second rename has happened is the one
     /// failure with files already moved behind it, and it has to say so:
@@ -624,7 +736,7 @@ mod tests {
 
         // The open journal is left behind for recovery, with both renames
         // confirmed, so `unfinished` can offer to take them back.
-        let unfinished = crate::exec::unfinished(journals.path()).unwrap();
+        let unfinished = crate::exec::unfinished(journals.path()).0;
         assert_eq!(unfinished.len(), 1);
         assert_eq!(unfinished[0].completed, 2);
         let report = crate::exec::rollback(&unfinished[0], platform.as_ref()).unwrap();
@@ -635,6 +747,65 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, ["a_1.txt", "a_2.txt", "a_3.txt"]);
+    }
+
+    /// A journal that cannot even record its `Begin` has announced nothing and
+    /// touched nothing, so it must not stay behind: at the next start it would
+    /// be "a batch that did not finish", with no files and nothing to roll
+    /// back. Removed, and the error still reaches the caller.
+    #[test]
+    fn a_journal_that_cannot_record_its_start_is_removed() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("a_1.txt"), b"x").unwrap();
+        let entries = crate::list(dir.path(), Default::default()).unwrap();
+        let pipeline = Pipeline::new().then(Replace::new("_", "-"));
+        let platform = ren_platform::host();
+        let plan = plan(&entries, &pipeline, platform.as_ref());
+
+        let journals = tempfile::TempDir::new().unwrap();
+        let mut journal = Journal::create(journals.path()).unwrap();
+        journal.fail_writes_from(0);
+        let error = apply_journalled(
+            &plan,
+            platform.as_ref(),
+            &ApplyOptions::default(),
+            journal,
+            ApplyReport::default(),
+        )
+        .expect_err("the Begin write fails");
+        assert!(matches!(error, ExecError::Io { .. }), "{error:?}");
+        assert_eq!(
+            std::fs::read_dir(journals.path()).unwrap().count(),
+            0,
+            "the empty journal was left behind"
+        );
+        assert!(dir.path().join("a_1.txt").exists());
+    }
+
+    /// A journal records paths exactly as the plan gives them, and a relative
+    /// one resolves against the working directory *at undo time*. Refused
+    /// before a journal exists, whatever the op.
+    #[test]
+    fn a_plan_that_names_a_relative_path_is_refused() {
+        let journals = tempfile::TempDir::new().unwrap();
+        let options = ApplyOptions {
+            journal_dir: journals.path().to_path_buf(),
+            ..Default::default()
+        };
+        let plan = Plan {
+            ops: vec![PlannedOp::Rename {
+                from: PathBuf::from("a.txt"),
+                to: PathBuf::from("b.txt"),
+                kind: RenameKind::Direct,
+            }],
+            ..Default::default()
+        };
+        let error = apply(&plan, ren_platform::host().as_ref(), &options).unwrap_err();
+        assert!(
+            matches!(&error, ExecError::RelativePath { path } if path == Path::new("a.txt")),
+            "{error:?}"
+        );
+        assert_eq!(std::fs::read_dir(journals.path()).unwrap().count(), 0);
     }
 
     /// A cancelled run is a shorter run: what happened before the stop is
@@ -741,7 +912,7 @@ mod tests {
 
         // Committed, so it is offered for undo rather than for recovery, and
         // undo puts back exactly the one.
-        assert!(crate::exec::unfinished(journals.path()).unwrap().is_empty());
+        assert!(crate::exec::unfinished(journals.path()).0.is_empty());
         let undo = crate::exec::undo_last(platform.as_ref(), journals.path()).unwrap();
         assert_eq!(undo.restored.len(), 1);
         let mut names: Vec<String> = std::fs::read_dir(dir.path())
@@ -797,7 +968,7 @@ mod tests {
         drop(journal);
 
         let platform = ren_platform::host();
-        let unfinished = crate::exec::unfinished(journals.path()).unwrap();
+        let unfinished = crate::exec::unfinished(journals.path()).0;
         assert_eq!(unfinished[0].in_flight.len(), 2);
         let report = crate::exec::rollback(&unfinished[0], platform.as_ref()).unwrap();
         assert_eq!(report.restored.len(), 1, "{report:?}");

@@ -2067,8 +2067,9 @@ impl RenameItApp {
                 kind: RenameKind::Direct,
             }],
             // A single in-place rename runs no pipeline, so there is nothing to
-            // have produced a note.
+            // have produced a note, and no script to have asked for a write.
             notes: Vec::new(),
+            blockers: Vec::new(),
         };
         // An inline rename of one file: a rename is always reversible.
         match self

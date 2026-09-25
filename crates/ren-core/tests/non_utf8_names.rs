@@ -157,6 +157,7 @@ fn such_a_file_can_be_renamed_by_hand_and_undone_exactly() {
             kind: RenameKind::Direct,
         }],
         notes: Vec::new(),
+        blockers: Vec::new(),
     };
 
     let report = apply(

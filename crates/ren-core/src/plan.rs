@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use rayon::prelude::*;
 use ren_platform::{NameProblem, Platform};
@@ -63,13 +63,29 @@ pub enum ConflictKind {
     /// filesystem can do it — Linux answers `EINVAL`, Windows
     /// `ERROR_SHARING_VIOLATION` — and P4 is that a conflict blocks the run
     /// rather than failing mid-batch. Found by the M8 property generator, once
-    /// it started putting folders in the tree.
+    /// it started putting folders in the tree. Compared through the volume's
+    /// naming rules, so `Holiday` → `holiday/holiday` is caught where the two
+    /// spellings are one folder.
     IntoItself,
+    /// A `<\>` move into a folder that this same run renames.
+    ///
+    /// `img.jpg` → `2024/img.jpg` while `2024` → `2024 (sorted)` has no order
+    /// that keeps the preview's promise: the folder renamed first leaves the
+    /// file's destination missing and the run fails part-way; the file moved
+    /// first rides along into `2024 (sorted)`, which the preview never
+    /// showed. The ordering edges and the landing resolution both follow a
+    /// row's *source* folders, and this row's trouble is in its target's.
+    /// Refused in P94's conservative spirit rather than supported — making it
+    /// work means resolving a target through a folder's landing, which is a
+    /// feature rather than a fix.
+    IntoRenamedFolder { path: PathBuf },
     /// Part of a rename cycle that could not be broken.
     ///
-    /// Cycles are normally resolved with a temp name (P6). This is only
-    /// reported when no free temp name could be found in the directory, which
-    /// takes a deliberately hostile set of existing files.
+    /// Cycles are normally resolved with a temp name (P6), and each folder
+    /// hands them out from its own counter, so a thousand swaps in one folder
+    /// cost a thousand names. This is only reported when more than a thousand
+    /// files named like the temp names already sit in the folder, which takes
+    /// a deliberately hostile set of existing files.
     UnresolvedCycle,
     /// This platform cannot do what a step asks (P5).
     ///
@@ -107,6 +123,11 @@ impl fmt::Display for ConflictKind {
             ),
             Self::InvalidName(p) => write!(f, "invalid name: {p}"),
             Self::IntoItself => write!(f, "a folder cannot be moved inside itself"),
+            Self::IntoRenamedFolder { path } => write!(
+                f,
+                "{} is a folder this run renames, so nothing can move into it in the same run",
+                path.display()
+            ),
             Self::UnresolvedCycle => write!(
                 f,
                 "part of a rename cycle, and no free temporary name was available"
@@ -166,13 +187,18 @@ impl PlanItem {
         self.state.is_changed() || self.acts()
     }
 
-    /// Where the file will be when its actions run: its target if it moves,
-    /// otherwise where it already is.
+    /// Where the file will be when its actions run, and where the preview
+    /// promises it ends up.
+    ///
+    /// The target for every row the run can execute — a renamed row's, and an
+    /// untouched row's too, because a row that keeps its name still moves when
+    /// a folder above it is renamed (see
+    /// `resolve_targets_under_renamed_ancestors`). A row in conflict or in
+    /// error goes nowhere, so it answers its source.
     pub fn final_path(&self) -> &Path {
-        if self.state.is_changed() {
-            &self.target
-        } else {
-            &self.source
+        match self.state {
+            RowState::Changed | RowState::Unchanged => &self.target,
+            RowState::Conflict(_) | RowState::Error(_) => &self.source,
         }
     }
 }
@@ -240,6 +266,16 @@ pub struct Plan {
     /// batch. A note never blocks execution — see
     /// [`Self::is_executable`], which does not consult it.
     pub notes: Vec<String>,
+    /// Reasons the run as a whole cannot go ahead, which belong to no row.
+    ///
+    /// Today these are script writes the planner refused (P60 as amended): a
+    /// path outside the folders the run lists, or one that collides with
+    /// something the run itself moves or creates. A blocker rather than a
+    /// note because a note is read *after* the run, and the user has to see
+    /// this before anything is touched. [`Self::is_executable`] consults it,
+    /// and `apply` quotes it in [`crate::ExecError::Blocked`]. The row counts
+    /// ([`Counts`]) deliberately do not include it: they count rows.
+    pub blockers: Vec<String>,
 }
 
 /// Every row count a summary wants, from one pass over the items.
@@ -370,9 +406,10 @@ impl Plan {
         })
     }
 
-    /// P4: conflicts hard-block execution rather than being skipped silently.
+    /// P4: conflicts hard-block execution rather than being skipped silently,
+    /// and so does anything in [`Self::blockers`].
     pub fn is_executable(&self) -> bool {
-        self.conflicts() == 0 && self.errors() == 0
+        self.conflicts() == 0 && self.errors() == 0 && self.blockers.is_empty()
     }
 }
 
@@ -395,9 +432,20 @@ pub fn plan(entries: &[FileEntry], pipeline: &Pipeline, platform: &dyn Platform)
     let lossy_names = entries.iter().filter(|e| e.name_is_lossy).count();
 
     let keys = Keys::build(&items, platform);
-    detect_blocked_subfolders(&mut items);
+    // The two `<\>` passes ask the disk about the same few folders for every
+    // row that moves; one answer per folder does for both.
+    let mut disk = DiskProbe::default();
+    detect_blocked_subfolders(&mut items, platform, &mut disk);
     detect_duplicate_targets(&keys, &mut items);
     detect_existing_targets(&keys, platform, &mut items);
+    // Whether a folder is in the listing at all — and the common run, Files
+    // without Folders, never has one. The passes below that are only about
+    // folders cost a hash per row when they run, so they are told rather than
+    // left to find out.
+    let any_dir = entries.iter().any(|e| e.is_dir);
+    if any_dir {
+        detect_moves_into_renamed_folders(&keys, platform, &mut items);
+    }
 
     // Before the targets are resolved, not after: a `<\>` subfolder has to be
     // created under the name its parent still has when the rename op runs. And
@@ -405,23 +453,22 @@ pub fn plan(entries: &[FileEntry], pipeline: &Pipeline, platform: &dyn Platform)
     // — it can add an `UnresolvedCycle`, never clear one, so computing the
     // folders here can only include one belonging to a row that is about to
     // become a conflict, in a plan nothing will run.
-    let wanted = wanted_directories(&items);
+    let wanted = wanted_directories(&items, platform, &mut disk);
+    let wanted_keys: HashMap<&str, &Path> = wanted
+        .iter()
+        .map(|(dir, key)| (key.as_str(), dir.as_path()))
+        .collect();
     // Before `order_renames` for the other half of that reason too: a row this
     // turns into a conflict must not still have a rename op built for it. The
     // plan would be unexecutable either way, but a plan whose ops describe a
     // row it has already refused is a plan that reads wrong.
-    detect_targets_needed_as_folders(&keys, platform, &wanted, &mut items);
-    // Whether a folder is in the listing at all — and the common run, Files
-    // without Folders, never has one. Two passes below are only about folders
-    // and cost a hash per row when they run, so they are told rather than
-    // left to find out.
-    let any_dir = entries.iter().any(|e| e.is_dir);
-    let renames = order_renames(&keys, platform, any_dir, &mut items);
+    detect_targets_needed_as_folders(&keys, &wanted_keys, &mut items);
+    let renames = order_renames(&keys, platform, any_dir, &wanted_keys, &mut items);
 
     // Folders first: a rename into a subfolder needs it to exist (D31). The
     // overwhelmingly common case is that there are none, and then the renames
     // are the plan — no second vector, no copy.
-    let mut creations = directory_creations(wanted);
+    let mut creations = directory_creations(&wanted);
     if any_dir {
         resolve_targets_under_renamed_ancestors(&mut items);
     }
@@ -451,10 +498,15 @@ pub fn plan(entries: &[FileEntry], pipeline: &Pipeline, platform: &dyn Platform)
     // written here is not one any of them should touch.
     let outcome = pipeline.end_run();
     let mut notes = outcome.notes;
-    for write in outcome.writes {
-        match write_op(write) {
-            Ok(op) => ops.push(op),
-            Err(note) => notes.push(note),
+    let mut blockers = Vec::new();
+    if !outcome.writes.is_empty() {
+        let check = WriteCheck::new(&items, &keys, &wanted_keys, platform, any_dir);
+        for write in outcome.writes {
+            match check.plan(write) {
+                Ok(op) => ops.push(op),
+                Err(Refused::Note(note)) => notes.push(note),
+                Err(Refused::Blocked(reason)) => blockers.push(reason),
+            }
         }
     }
 
@@ -467,7 +519,12 @@ pub fn plan(entries: &[FileEntry], pipeline: &Pipeline, platform: &dyn Platform)
         ));
     }
 
-    Plan { items, ops, notes }
+    Plan {
+        items,
+        ops,
+        notes,
+        blockers,
+    }
 }
 
 /// One row of the plan: the produced name validated, the target it implies,
@@ -551,34 +608,207 @@ fn plan_item(
     }
 }
 
-/// Turn a requested write into a planned one, or say why it cannot be.
+/// Why a requested write did not become a planned one.
+enum Refused {
+    /// Nothing was written and nothing else is affected — a script mistake,
+    /// said in the log the way P59 says a failing `done()`.
+    Note(String),
+    /// The whole run is refused (P60 as amended), with the reason.
+    Blocked(String),
+}
+
+/// Turns a script's write requests into planned writes, or says why not.
 ///
-/// The `stat` here is what decides undoability, and it is deliberately taken
-/// at *plan* time: P2's confirmation has to know whether anything is about to
-/// be destroyed before the executor opens a journal. It is racy in the sense
-/// that anything filesystem-shaped is — a file appearing between the plan and
-/// the run would be overwritten under a promise that it would not — which is
-/// the same window every "does the target exist" check in this file lives with.
-fn write_op(write: crate::ops::FileWrite) -> Result<PlannedOp, String> {
-    // Absolute only. A relative path would resolve against the process's
-    // working directory, which is not a folder the user chose and, for the GUI,
-    // is wherever the app happened to be launched from.
-    if !write.path.is_absolute() {
-        return Err(format!(
-            "script: '{}' is not a full path, so nothing was written",
-            write.path.display()
-        ));
+/// **A script may write only into a folder the run lists** — the folder of a
+/// listed entry, which includes the browsed folder whenever it holds anything
+/// the run lists (D108's `browser_path` is that folder by construction). A
+/// script's `done()` may be code somebody else wrote, and the sandbox removes
+/// `io.create` for exactly that reason; a write request that could name any
+/// absolute path gave it straight back. Compared after lexical normalisation,
+/// so `..` cannot climb out, and through the volume's naming rules, so a
+/// differently cased spelling of a listed folder is that folder.
+///
+/// Refused as well, because each would make the run fail part-way or undo
+/// lie: a path that is the new name of a row (the write would truncate the
+/// file just renamed there), a file the run renames away (undo could not put
+/// it back over the written one), a folder the run creates, and an existing
+/// folder or link.
+///
+/// Undoability is decided here, against the disk as it is *before* the run:
+/// a file already at the path is an overwrite (`Undoability::None`, P2's
+/// consent); anything else is a create, and the executor holds it to that
+/// with `create_new`, so a file that appears between the preview and the run
+/// fails the write rather than being truncated under a promise that nothing
+/// was there.
+struct WriteCheck<'a> {
+    platform: &'a dyn Platform,
+    /// The folders listed entries sit in, as comparison keys.
+    folders: HashSet<String>,
+    /// Rows that move, by the key of the path they leave.
+    moving: HashMap<&'a str, &'a PlanItem>,
+    /// Rows that move, by the key of the path they claim (before any folder
+    /// above them moves — the coordinates a script's paths are written in).
+    claimed: HashMap<&'a str, &'a PlanItem>,
+    wanted: &'a HashMap<&'a str, &'a Path>,
+    /// Where the run leaves each listed path that it moves, by the key of the
+    /// path — so a write aimed at a folder the run renames lands in it.
+    landings: HashMap<String, &'a Path>,
+}
+
+impl<'a> WriteCheck<'a> {
+    fn new(
+        items: &'a [PlanItem],
+        keys: &'a Keys,
+        wanted: &'a HashMap<&'a str, &'a Path>,
+        platform: &'a dyn Platform,
+        any_dir: bool,
+    ) -> Self {
+        let mut folders = HashSet::new();
+        // A listing is sorted by path, so consecutive rows share a folder and
+        // one key per folder is computed, not one per row.
+        let mut last: Option<&Path> = None;
+        for item in items {
+            let Some(parent) = item.source.parent() else {
+                continue;
+            };
+            if last.is_some_and(|seen| same_path(seen, parent)) {
+                continue;
+            }
+            last = Some(parent);
+            folders.insert(path_key(parent, platform.naming_rules(&item.source)));
+        }
+        let changed = || items.iter().filter(|i| i.state.is_changed());
+        // Only a listed *folder* can have a write beneath it, and without one
+        // in the listing nothing a write names can move.
+        let landings = if any_dir {
+            items
+                .iter()
+                .filter(|i| matches!(i.state, RowState::Changed | RowState::Unchanged))
+                .filter(|i| i.target != i.source)
+                .map(|i| {
+                    (
+                        path_key(&i.source, platform.naming_rules(&i.source)),
+                        i.target.as_path(),
+                    )
+                })
+                .collect()
+        } else {
+            HashMap::new()
+        };
+        Self {
+            platform,
+            folders,
+            moving: changed()
+                .map(|i| (keys.source[i.index].as_str(), i))
+                .collect(),
+            claimed: changed()
+                .map(|i| (keys.target[i.index].as_str(), i))
+                .collect(),
+            wanted,
+            landings,
+        }
     }
-    let undoability = if write.path.exists() {
-        Undoability::None
-    } else {
-        Undoability::Full
-    };
-    Ok(PlannedOp::WriteFile {
-        path: write.path,
-        contents: write.contents,
-        undoability,
-    })
+
+    fn plan(&self, write: crate::ops::FileWrite) -> Result<PlannedOp, Refused> {
+        // Absolute only (P60). A relative path would resolve against the
+        // process's working directory, which is not a folder the user chose
+        // and, for the GUI, is wherever the app happened to be launched from.
+        if !write.path.is_absolute() {
+            return Err(Refused::Note(format!(
+                "script: '{}' is not a full path, so nothing was written",
+                write.path.display()
+            )));
+        }
+        let path = normalize_lexically(&write.path);
+        let rules = self.platform.naming_rules(&path);
+        let shown = path.display();
+        let blocked = |why: &str| Err(Refused::Blocked(format!("script: {shown} {why}")));
+
+        let in_listed_folder = path
+            .parent()
+            .is_some_and(|folder| self.folders.contains(&path_key(folder, rules)));
+        if !in_listed_folder {
+            // The one way a well-meaning script ends up here: `fr.path` of a
+            // folder whose name is not text carries U+FFFD (D159), and the
+            // path built from it names a folder that does not exist.
+            return if path.to_string_lossy().contains('\u{FFFD}') {
+                blocked(
+                    "is in a folder whose name is not valid Unicode, so a script cannot name it",
+                )
+            } else {
+                blocked("is outside the folders this run lists")
+            };
+        }
+
+        let key = path_key(&path, rules);
+        if let Some(item) = self.claimed.get(key.as_str()) {
+            return blocked(&format!(
+                "is the new name this run gives {}",
+                item.source.display()
+            ));
+        }
+        if self.moving.contains_key(key.as_str()) {
+            return blocked("is a file this run renames");
+        }
+        if self.wanted.contains_key(key.as_str()) {
+            return blocked("is a folder this run creates");
+        }
+        let undoability = match path.symlink_metadata() {
+            Ok(meta) if meta.is_dir() => return blocked("is a folder"),
+            Ok(meta) if meta.file_type().is_symlink() => return blocked("is a link"),
+            Ok(_) => Undoability::None,
+            Err(_) => Undoability::Full,
+        };
+
+        Ok(PlannedOp::WriteFile {
+            path: self.landing(path, rules),
+            contents: write.contents,
+            undoability,
+        })
+    }
+
+    /// Where `path` is once every rename has run.
+    ///
+    /// A script builds its paths from the listing *before* the run, and the
+    /// write runs after every rename — so a playlist aimed at `My_Album` has
+    /// to go into the folder that is `My Album` by then. The deepest listed
+    /// ancestor already carries every rename above it, so one hop is the
+    /// whole answer.
+    fn landing(&self, path: PathBuf, rules: &ren_platform::NamingRules) -> PathBuf {
+        if self.landings.is_empty() {
+            return path;
+        }
+        for ancestor in path.ancestors() {
+            if let Some(landed) = self.landings.get(&path_key(ancestor, rules)) {
+                let rest = path.strip_prefix(ancestor).unwrap_or(Path::new(""));
+                return if rest.as_os_str().is_empty() {
+                    landed.to_path_buf()
+                } else {
+                    landed.join(rest)
+                };
+            }
+        }
+        path
+    }
+}
+
+/// `path` with `.` dropped and each `..` taking away the component before it,
+/// without asking the disk. A `..` at the root stays at the root, as it does
+/// on every filesystem.
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(out.components().next_back(), Some(Component::Normal(_))) {
+                    out.pop();
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 fn action_ops(items: &[PlanItem]) -> Vec<PlannedOp> {
@@ -640,12 +870,81 @@ fn target_path(parent: &Path, name: &str) -> PathBuf {
     path
 }
 
+/// A comparison key for a path under `rules`: folded when the path is text,
+/// exact when it is not.
+///
+/// Folding goes through `&str`, and a path that is not valid Unicode has no
+/// `&str`. `to_string_lossy` used to stand in, which turned two sibling folders
+/// `Caf\xE9` and `Caf\xE8` into one `Caf\u{FFFD}` — and every file inside
+/// them into a false collision, or a false "freed by another row" that let a
+/// real one through to fail at run time. D159 keeps such folders in play, so
+/// their paths are keyed on their exact bytes instead: a NUL first, which no
+/// path on any platform contains, so an exact key can never equal a folded
+/// one. Unfolded, so on a case-insensitive volume two spellings of such a
+/// path are two keys; `Platform::rename` never replaces (P13), so what that
+/// misses fails safely at run time.
+fn path_key(path: &Path, rules: &ren_platform::NamingRules) -> String {
+    match path.to_str() {
+        Some(text) => rules.fold(text),
+        None => {
+            use std::fmt::Write as _;
+            let bytes = path.as_os_str().as_encoded_bytes();
+            let mut key = String::with_capacity(1 + 2 * bytes.len());
+            key.push('\0');
+            for byte in bytes {
+                let _ = write!(key, "{byte:02x}");
+            }
+            key
+        }
+    }
+}
+
+/// What sits at a path, as far as the `<\>` passes care.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Occupant {
+    Nothing,
+    Folder,
+    /// A file, a link, anything a folder cannot be created over or moved into.
+    Other,
+}
+
+/// The disk, asked once per path.
+///
+/// [`detect_blocked_subfolders`] and [`wanted_directories`] both walk every
+/// ancestor of every row that moves, and a run sorting ten thousand files into
+/// a handful of folders asks about the same handful twenty thousand times — a
+/// handle opened and closed per question on Windows. One answer per folder
+/// does for both passes. `symlink_metadata`, so a link is never followed: to
+/// the first pass it is something a folder cannot be made over, and the
+/// second only sees rows the first let through.
+#[derive(Debug, Default)]
+struct DiskProbe(HashMap<PathBuf, Occupant>);
+
+impl DiskProbe {
+    fn at(&mut self, path: &Path) -> Occupant {
+        if let Some(&occupant) = self.0.get(path) {
+            return occupant;
+        }
+        let occupant = match path.symlink_metadata() {
+            Ok(meta) if meta.is_dir() => Occupant::Folder,
+            Ok(_) => Occupant::Other,
+            Err(_) => Occupant::Nothing,
+        };
+        self.0.insert(path.to_path_buf(), occupant);
+        occupant
+    }
+}
+
 /// A subfolder a move needs, blocked by an existing file of that name (D31).
 ///
 /// Found by the M4 property tests: a file called `(` renamed to `(/(` asks the
 /// executor to create a directory where a file already is, which fails halfway
 /// through the batch. Checking here turns it into a blocked run with a reason.
-fn detect_blocked_subfolders(items: &mut [PlanItem]) {
+fn detect_blocked_subfolders(
+    items: &mut [PlanItem],
+    platform: &dyn Platform,
+    disk: &mut DiskProbe,
+) {
     for item in items.iter_mut().filter(|i| i.state.is_changed()) {
         // A rename that stays in its folder — every row without `<\>`, which
         // is nearly every row — has no subfolder to check and cannot be moving
@@ -664,7 +963,7 @@ fn detect_blocked_subfolders(items: &mut [PlanItem]) {
         let mut at = target_dir;
         let mut blocked = false;
         while at != source_dir {
-            if at.symlink_metadata().is_ok_and(|m| !m.is_dir()) {
+            if disk.at(at) == Occupant::Other {
                 item.state = RowState::Conflict(ConflictKind::BlockedByFile {
                     path: at.to_path_buf(),
                 });
@@ -683,9 +982,66 @@ fn detect_blocked_subfolders(items: &mut [PlanItem]) {
         // file. The walk above names it correctly first; what is left here is
         // a real folder moving into its own subtree, which the walk cannot
         // see because it climbs straight past `source_dir`.
-        if !blocked && target_dir.starts_with(&item.source) {
+        //
+        // The target is the source's folder joined with the produced name's
+        // components, so it is inside the source exactly when the *first*
+        // component is the source's own name — compared through the volume's
+        // rules, because on NTFS `holiday/holiday` from `Holiday` is inside
+        // itself too, and a byte comparison let it through to fail at
+        // `MoveFileExW`.
+        if !blocked && first_component_is_own_name(item, platform.naming_rules(&item.source)) {
             item.state = RowState::Conflict(ConflictKind::IntoItself);
         }
+    }
+}
+
+/// Whether a moving row's produced name starts with the row's own name.
+fn first_component_is_own_name(item: &PlanItem, rules: &ren_platform::NamingRules) -> bool {
+    let first = item
+        .new_name
+        .split(SUBFOLDER_SEPARATOR)
+        .next()
+        .unwrap_or_default();
+    match item.source.file_name().and_then(|name| name.to_str()) {
+        Some(own) => rules.fold(first) == rules.fold(own),
+        None => false,
+    }
+}
+
+/// A `<\>` move into a folder this same run renames (P94, extended).
+///
+/// Walks each moving row's *target* folders down from where it starts and
+/// refuses the row if one of them is the source of another row that moves —
+/// see [`ConflictKind::IntoRenamedFolder`] for why no order can work. Only
+/// asked when a folder is listed, and only of rows whose name carries a
+/// separator, so the common run pays nothing.
+fn detect_moves_into_renamed_folders(keys: &Keys, platform: &dyn Platform, items: &mut [PlanItem]) {
+    let moving: HashSet<&str> = items
+        .iter()
+        .filter(|i| i.state.is_changed())
+        .map(|i| keys.source[i.index].as_str())
+        .collect();
+    let mut refused: Vec<(usize, PathBuf)> = Vec::new();
+    for item in items.iter().filter(|i| i.state.is_changed()) {
+        if !moves_folder(item) {
+            continue;
+        }
+        let source_dir = item.source.parent().unwrap_or(Path::new(""));
+        let rules = platform.naming_rules(&item.source);
+        let mut at = item.target.parent();
+        while let Some(dir) = at {
+            if dir == source_dir {
+                break;
+            }
+            if moving.contains(path_key(dir, rules).as_str()) {
+                refused.push((item.index, dir.to_path_buf()));
+                break;
+            }
+            at = dir.parent();
+        }
+    }
+    for (index, path) in refused {
+        items[index].state = RowState::Conflict(ConflictKind::IntoRenamedFolder { path });
     }
 }
 
@@ -693,23 +1049,35 @@ fn detect_blocked_subfolders(items: &mut [PlanItem]) {
 ///
 /// Only folders that do not already exist are listed, so undo knows that every
 /// one of them is its own to remove.
-fn directory_creations(wanted: Vec<PathBuf>) -> Vec<PlannedOp> {
+fn directory_creations(wanted: &[(PathBuf, String)]) -> Vec<PlannedOp> {
     wanted
-        .into_iter()
-        .map(|path| PlannedOp::CreateDir { path })
+        .iter()
+        .map(|(path, _)| PlannedOp::CreateDir { path: path.clone() })
         .collect()
 }
 
-/// The walk that finds them, hoisted so it happens once.
+/// The walk that finds them, hoisted so it happens once, with each folder's
+/// comparison key.
 ///
 /// Two passes need it — [`directory_creations`] turns it into ops, and
 /// [`detect_targets_needed_as_folders`] has to know whether a row's new name is
-/// one of these — and the walk is the expensive half: an `exists` per ancestor
-/// per row that moves. A run with no `<\>` in it never gets past the first
-/// `continue`, which is why the common case costs a `parent()` compare.
-fn wanted_directories(items: &[PlanItem]) -> Vec<PathBuf> {
-    let mut wanted: Vec<PathBuf> = Vec::new();
-    let mut seen: HashSet<PathBuf> = HashSet::new();
+/// one of these — and the walk is the expensive half: a disk probe per
+/// ancestor per row that moves, answered once per folder by `disk`. A run with
+/// no `<\>` in it never gets past the first `continue`, which is why the
+/// common case costs a `parent()` compare.
+///
+/// **One folder per key, not per spelling.** On a volume that folds case, `a/`
+/// and `A/` asked for by two rows are one folder: the second `CreateDir` would
+/// fail with "already exists" and stop the run before a file was sorted. The
+/// first spelling is created, and the row that asked for the other lands in
+/// it — which is what that volume does with the name anyway.
+fn wanted_directories(
+    items: &[PlanItem],
+    platform: &dyn Platform,
+    disk: &mut DiskProbe,
+) -> Vec<(PathBuf, String)> {
+    let mut wanted: Vec<(PathBuf, String)> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
 
     for item in items.iter().filter(|i| i.state.is_changed()) {
         if !moves_folder(item) {
@@ -720,20 +1088,22 @@ fn wanted_directories(items: &[PlanItem]) -> Vec<PathBuf> {
             continue;
         };
         // Walk up to the folder the file started in, then create downwards.
-        let mut missing: Vec<PathBuf> = Vec::new();
+        let mut missing: Vec<&Path> = Vec::new();
         let mut at = target_dir;
         while at != source_dir {
-            if !at.exists() {
-                missing.push(at.to_path_buf());
+            if disk.at(at) == Occupant::Nothing {
+                missing.push(at);
             }
             match at.parent() {
                 Some(parent) => at = parent,
                 None => break,
             }
         }
+        let rules = platform.naming_rules(&item.source);
         for dir in missing.into_iter().rev() {
-            if seen.insert(dir.clone()) {
-                wanted.push(dir);
+            let key = path_key(dir, rules);
+            if seen.insert(key.clone()) {
+                wanted.push((dir.to_path_buf(), key));
             }
         }
     }
@@ -755,8 +1125,7 @@ fn wanted_directories(items: &[PlanItem]) -> Vec<PathBuf> {
 /// on Windows and do not on ext4.
 fn detect_targets_needed_as_folders(
     keys: &Keys,
-    platform: &dyn Platform,
-    wanted: &[PathBuf],
+    wanted: &HashMap<&str, &Path>,
     items: &mut [PlanItem],
 ) {
     // No `<\>` anywhere in the run means nothing to create and nothing to
@@ -765,18 +1134,10 @@ fn detect_targets_needed_as_folders(
         return;
     }
 
-    let folded: HashMap<String, &Path> = wanted
-        .iter()
-        .map(|dir| {
-            let rules = platform.naming_rules(dir);
-            (rules.fold(&dir.to_string_lossy()), dir.as_path())
-        })
-        .collect();
-
     for item in items.iter_mut().filter(|i| i.state.is_changed()) {
         // A row's own wanted folders are all strict ancestors of its target, so
         // it can never be its own conflict here.
-        if let Some(path) = folded.get(keys.target[item.index].as_str()) {
+        if let Some(path) = wanted.get(keys.target[item.index].as_str()) {
             item.state = RowState::Conflict(ConflictKind::NeededAsFolder {
                 path: path.to_path_buf(),
             });
@@ -800,10 +1161,7 @@ impl Keys {
             .par_iter()
             .map(|item| {
                 let rules = platform.naming_rules(&item.source);
-                (
-                    rules.fold(&item.source.to_string_lossy()),
-                    rules.fold(&item.target.to_string_lossy()),
-                )
+                (path_key(&item.source, rules), path_key(&item.target, rules))
             })
             .unzip();
         Self { source, target }
@@ -908,9 +1266,9 @@ fn detect_existing_targets(keys: &Keys, platform: &dyn Platform, items: &mut [Pl
     }
 }
 
-/// Folded full paths of everything currently in `dir`.
+/// The keys of the full paths of everything currently in `dir`.
 ///
-/// Folded with the *same* rules the target keys use — lower-casing
+/// Keyed with the *same* rules the target keys use — lower-casing
 /// unconditionally would make every comparison miss on a case-sensitive
 /// filesystem, and silently stop reporting `TargetExists` there.
 ///
@@ -922,7 +1280,7 @@ fn read_dir_folded(dir: &Path, rules: &ren_platform::NamingRules) -> HashSet<Str
         return HashSet::new();
     };
     read.filter_map(Result::ok)
-        .map(|e| rules.fold(&e.path().to_string_lossy()))
+        .map(|e| path_key(&e.path(), rules))
         .collect()
 }
 
@@ -943,6 +1301,7 @@ fn order_renames(
     keys: &Keys,
     platform: &dyn Platform,
     any_dir: bool,
+    wanted: &HashMap<&str, &Path>,
     items: &mut [PlanItem],
 ) -> Vec<PlannedOp> {
     let movers: Vec<usize> = items
@@ -1006,16 +1365,23 @@ fn order_renames(
         }
     }
 
-    // Every name this batch touches, so a temp name can avoid all of them.
-    // Borrowed from `keys` rather than cloned: two owned strings per mover was
-    // twenty thousand allocations per keystroke for a set consulted only when
-    // a cycle turns up.
+    // Every name this batch touches, so a temp name can avoid all of them —
+    // the folders it creates included: they do not exist yet when a temp name
+    // is chosen, so the disk probe cannot see them, and `CreateDir` runs
+    // before every rename. Borrowed from `keys` rather than cloned: two owned
+    // strings per mover was twenty thousand allocations per keystroke for a
+    // set consulted only when a cycle turns up.
     let reserved: HashSet<&str> = movers
         .iter()
         .flat_map(|&i| [keys.source[i].as_str(), keys.target[i].as_str()])
+        .chain(wanted.keys().copied())
         .collect();
-    // The temp names handed out so far, which `reserved` cannot hold.
-    let mut temps: Vec<String> = Vec::new();
+    // Where each folder's next temp name is looked for. Temp names are never
+    // released — every finish runs at the end — so a counter that only moves
+    // forward is all the bookkeeping they need: nothing it has passed can be
+    // handed out again, and a thousand swaps in one folder cost a thousand
+    // probes rather than half a million.
+    let mut cursors: HashMap<String, u32> = HashMap::new();
 
     // Deepest first, then by index. Folders + Subfolders puts a folder and the
     // files inside it in one run, and the folder sorts *before* its own
@@ -1082,15 +1448,10 @@ fn order_renames(
         next_victim += 1;
 
         // Break the cycle: move the victim out of the way first.
-        let Some(temp) = temp_path(&items[victim].source, platform, &reserved, &temps) else {
+        let Some(temp) = temp_path(&items[victim].source, platform, &reserved, &mut cursors) else {
             stuck.push(victim);
             continue;
         };
-        temps.push(
-            platform
-                .naming_rules(&items[victim].source)
-                .fold(&temp.to_string_lossy()),
-        );
 
         ops.push(PlannedOp::Rename {
             from: items[victim].source.clone(),
@@ -1174,6 +1535,12 @@ fn depth(path: &Path) -> usize {
 /// folder would otherwise stat a path that had already moved. The rename ops
 /// keep the first: they are the journey, this is the destination.
 ///
+/// **Every row the run can execute gets its landing**, not only the renamed
+/// ones. A row that keeps its name still moves when a folder above it does,
+/// and an action on it runs at [`PlanItem::final_path`] like any other — so
+/// keeping the answer only for renamed rows addressed that action at the
+/// folder's old path, in a plan that said it was executable.
+///
 /// Shallowest first, so a chain composes — `a`→`A` is resolved before `a/b` is
 /// asked where it lands, and `a/b/c.txt` then sees `A/B` already.
 fn resolve_targets_under_renamed_ancestors(items: &mut [PlanItem]) {
@@ -1204,7 +1571,7 @@ fn resolve_targets_under_renamed_ancestors(items: &mut [PlanItem]) {
             }
         }
 
-        if items[i].state.is_changed() {
+        if matches!(items[i].state, RowState::Changed | RowState::Unchanged) {
             items[i].target = resolved.clone();
         }
         lands.insert(source, resolved);
@@ -1234,23 +1601,39 @@ fn release(
     }
 }
 
+/// How many foreign files named like our temp names a folder may hold before
+/// a cycle in it is refused as [`ConflictKind::UnresolvedCycle`].
+///
+/// A bound rather than a search to exhaustion, so a folder full of
+/// `__renameit-tmp-*` files costs a preview a known number of probes.
+const TEMP_NAMES_ON_DISK: u32 = 1_000;
+
 /// A free name in `source`'s directory to park a file under.
 ///
 /// Deterministic, so `plan()` stays a pure function of its inputs and two runs
 /// over the same tree produce byte-identical plans. Checked against both the
-/// names this batch touches and the directory itself.
+/// names this batch touches and the directory itself, starting where the last
+/// temp name handed out in this folder left off.
 fn temp_path(
     source: &Path,
     platform: &dyn Platform,
     reserved: &HashSet<&str>,
-    temps: &[String],
+    cursors: &mut HashMap<String, u32>,
 ) -> Option<PathBuf> {
     let dir = source.parent().unwrap_or(Path::new(""));
     let rules = platform.naming_rules(source);
-    for n in 0..1_000u32 {
-        let candidate = dir.join(format!("__renameit-tmp-{n}"));
-        let folded = rules.fold(&candidate.to_string_lossy());
-        if reserved.contains(folded.as_str()) || temps.contains(&folded) {
+    let cursor = cursors.entry(path_key(dir, rules)).or_insert(0);
+    // Every candidate turned away is one of the reserved names or a file on
+    // disk, and the cursor never revisits one, so this is enough for every
+    // reserved name plus the foreign files the bound allows.
+    let reserved_len = u32::try_from(reserved.len()).unwrap_or(u32::MAX);
+    let limit = cursor
+        .saturating_add(reserved_len)
+        .saturating_add(TEMP_NAMES_ON_DISK);
+    while *cursor < limit {
+        let candidate = dir.join(format!("__renameit-tmp-{cursor}"));
+        *cursor += 1;
+        if reserved.contains(path_key(&candidate, rules).as_str()) {
             continue;
         }
         if candidate.symlink_metadata().is_ok() {

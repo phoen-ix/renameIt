@@ -27,15 +27,6 @@ struct Fixture {
     dir: TempDir,
     scripts: TempDir,
     journal: TempDir,
-    /// Somewhere that is **not** listed, for the files a script writes.
-    ///
-    /// A playlist written into the folder being renamed is itself one of the
-    /// files being renamed, and on a case-insensitive volume that changes what
-    /// the run means: `list.m3u` → `LIST.m3u` is the same file there and two
-    /// different ones here, so the write replaces on Windows and creates on
-    /// Linux. That is a real difference between the platforms and not one any
-    /// of these tests is about.
-    aux: TempDir,
 }
 
 /// A path as a Koto string literal.
@@ -62,7 +53,6 @@ impl Fixture {
             dir,
             scripts: TempDir::new().unwrap(),
             journal: TempDir::new().unwrap(),
-            aux: TempDir::new().unwrap(),
         }
     }
 
@@ -314,19 +304,21 @@ fn overwriting_with_consent_replaces_it_and_undo_says_it_cannot_help() {
 #[test]
 fn undo_of_a_run_that_also_renamed_leaves_the_overwritten_file_alone() {
     let fixture = Fixture::new(&["a.txt", "b.txt"]);
-    // Outside the listing: this is *the user's own* playlist, not one of the
-    // files the run is renaming. Inside it, the run would rename it too, and
-    // whether the write then replaces or creates depends on whether the volume
-    // folds case — which is a difference between Windows and Linux, and not
-    // what this test is asking about.
-    let target = fixture.aux.path().join("list.m3u");
+    // *The user's own* playlist, in the listed folder — the only place a
+    // script may write (P60 as amended) — and left out of the renaming, so
+    // the write replaces it on every volume rather than depending on whether
+    // `list.m3u` → `LIST.m3u` is one file or two.
+    let target = fixture.dir.path().join("list.m3u");
     std::fs::write(&target, "the playlist the user wrote").unwrap();
 
     // Renames *and* overwrites, so the transaction has reversible work in it.
     let op = fixture.script(
         "RenameAndWrite",
         &format!(
-            "rename = || fr.filename.to_uppercase()\n\
+            "rename = ||\n  \
+               if fr.full_filename.ends_with '.txt'\n    \
+                 return fr.filename.to_uppercase()\n  \
+               ''\n\
              done = || {{path: '{}', contents: 'ours'}}\n",
             koto_literal(&target)
         ),

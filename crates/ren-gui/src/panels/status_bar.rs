@@ -312,6 +312,7 @@ mod tests {
                 .collect(),
             ops: Vec::new(),
             notes: Vec::new(),
+            blockers: Vec::new(),
         }
     }
 

@@ -44,6 +44,17 @@ pub enum ExecError {
     },
     #[error("journal {path} contains a record this build does not understand")]
     JournalNotUnderstood { path: PathBuf },
+    /// Another run holds this journal: it is being written right now.
+    ///
+    /// A `Journal` keeps an exclusive lock on its file for as long as it
+    /// lives, so a transaction with no `Commit` whose lock is taken is a batch
+    /// still under way in another window — not one that crashed. Offering it
+    /// for rollback would reverse renames while that run keeps going; undoing
+    /// it would stamp `Undone` in the middle of a journal still being
+    /// appended to. Both refuse with this instead. A crashed process holds no
+    /// lock, so a journal it left behind is never mistaken for this.
+    #[error("journal {path} belongs to a run still going on in another window")]
+    JournalInUse { path: PathBuf },
     /// A record could not be turned into a line.
     ///
     /// This used to be an `.expect("journal records are always serialisable")`,
@@ -63,8 +74,26 @@ pub enum ExecError {
     #[error("refusing to run: {items} item(s) would be changed in a way that cannot be undone")]
     Irreversible { items: usize },
     /// P4: conflicts block the run instead of being skipped one by one.
-    #[error("refusing to run: {conflicts} conflict(s) and {errors} error(s) in the plan")]
-    Blocked { conflicts: usize, errors: usize },
+    ///
+    /// `blockers` carries [`crate::Plan::blockers`] word for word: a run
+    /// refused for a reason that belongs to no row — a script write outside
+    /// the listed folders — would otherwise say "0 conflict(s) and 0 error(s)"
+    /// and nothing else.
+    #[error("refusing to run: {}", blocked_reason(*conflicts, *errors, blockers))]
+    Blocked {
+        conflicts: usize,
+        errors: usize,
+        blockers: Vec<String>,
+    },
+    /// A plan names a path that is not absolute.
+    ///
+    /// A journal records paths exactly as the plan gives them, and a relative
+    /// one resolves against whatever the working directory is *at undo time*
+    /// — so `ren-cli apply .` followed by an undo from another folder would
+    /// replay the batch somewhere else. Refused before a journal is opened;
+    /// front ends make their paths absolute when they list.
+    #[error("refusing to run: {path} is not a full path, so it could not be undone reliably")]
+    RelativePath { path: PathBuf },
     #[error("no transaction to undo in {0}")]
     NothingToUndo(PathBuf),
     /// The run stopped part-way because the *journal* could not be written.
@@ -87,6 +116,16 @@ pub enum ExecError {
         #[source]
         source: Box<ExecError>,
     },
+}
+
+/// The sentence after "refusing to run:".
+fn blocked_reason(conflicts: usize, errors: usize, blockers: &[String]) -> String {
+    let rows = (conflicts > 0 || errors > 0 || blockers.is_empty())
+        .then(|| format!("{conflicts} conflict(s) and {errors} error(s) in the plan"));
+    rows.into_iter()
+        .chain(blockers.iter().cloned())
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 impl ExecError {

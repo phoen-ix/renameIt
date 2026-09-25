@@ -683,13 +683,18 @@ fn run() -> Result<Exit, Box<dyn std::error::Error>> {
         Command::Presets { action } => run_presets(action),
 
         Command::Recover { rollback } => {
-            let pending = ren_core::exec::unfinished(&journal_dir)?;
-            if pending.is_empty() {
+            let (pending, unreadable) = ren_core::exec::unfinished(&journal_dir);
+            // One journal that cannot be judged no longer hides the others:
+            // it is named here, and the run is not reported as complete.
+            for (path, error) in &unreadable {
+                eprintln!("could not check {}: {error}", path.display());
+            }
+            if pending.is_empty() && unreadable.is_empty() {
                 println!("no unfinished transactions in {}", journal_dir.display());
                 return Ok(Exit::Success);
             }
 
-            let mut complete = true;
+            let mut complete = unreadable.is_empty();
             for item in &pending {
                 println!(
                     "transaction {}: {} completed, {} in flight",
@@ -780,6 +785,11 @@ fn print_plan(plan: &ren_core::Plan) {
         ren_core::plural(plan.items.len(), "item"),
         parts.join(", ")
     );
+    // What blocks the run besides its rows — a script's write outside the
+    // listed folders — or the exit code 2 would come with no reason.
+    for reason in &plan.blockers {
+        println!("blocked: {reason}");
+    }
 }
 
 fn store_at(dir: &Option<PathBuf>) -> PresetStore {

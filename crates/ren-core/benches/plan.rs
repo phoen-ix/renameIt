@@ -1,10 +1,10 @@
 //! Planning throughput.
 //!
 //! M1 budgets **a 10 000-file plan under 50 ms**, because this
-//! runs on every keystroke behind the preview. Spike B already measured the
-//! whole GUI round trip (`docs/spikes/preview-perf.md`); this measures the
-//! engine on its own, so a regression can be attributed without a GUI in the
-//! way.
+//! runs on every keystroke behind the preview. The budget itself is enforced
+//! by `examples/plan_budget.rs`, which fails when the p95 is over it (D165);
+//! this measures the same engine with criterion's statistics, so a regression
+//! can be attributed and its size read off.
 //!
 //! ```text
 //! cargo bench -p ren-core --bench plan
@@ -48,7 +48,7 @@ fn minimal() -> Pipeline {
     Pipeline::new().then(Replace::new("_", " "))
 }
 
-/// What a real cleanup preset looks like: five steps, two of them scoped.
+/// What a real cleanup preset looks like: six steps, two of them scoped.
 fn realistic() -> Pipeline {
     Pipeline::new()
         .then(Replace::new("_", " "))
@@ -71,7 +71,7 @@ fn realistic() -> Pipeline {
 ///
 /// `realistic()` above builds its `Pipeline` once, outside `b.iter`, so every
 /// regex is compiled exactly once and the tag engine never appears. The app
-/// rebuilds from `Vec<(OpKind, StepConfig)>` per preview — `to_transform()`
+/// rebuilds from `Vec<(OpKind, StepConfig)>` per preview — `to_step()`
 /// clones, and a clone resets the compiled cache (D21) — so this measures the
 /// clones and the recompiles too.
 fn preset_like() -> Vec<(OpKind, StepConfig)> {
@@ -230,11 +230,12 @@ fn bench_evaluate(c: &mut Criterion) {
 ///
 /// It is not held to the 50 ms keystroke budget, and pretending otherwise
 /// would be the dishonest move: a script is an interpreter call per file, on
-/// one core, and no amount of care makes ten thousand of those free. What the
-/// budget buys instead is that the window never blocks, because M0's
-/// generation counter cancels a stale recompute while it is still running.
-/// This number is here so that a future change which makes it *worse* is
-/// visible.
+/// one core, and no amount of care makes ten thousand of those free. What
+/// keeps the window responsive instead is that planning runs off the UI
+/// thread: requests queued behind a running plan are coalesced into the
+/// newest, but a plan already running finishes before the next one starts,
+/// so a keystroke can wait for up to two of these. This number is here so
+/// that a future change which makes it *worse* is visible.
 fn bench_script(c: &mut Criterion) {
     let platform = ren_platform::host();
     let dir = tempfile::TempDir::new().expect("tempdir");

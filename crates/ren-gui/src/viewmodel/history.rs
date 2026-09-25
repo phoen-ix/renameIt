@@ -119,7 +119,9 @@ impl Default for History {
 
 impl History {
     pub fn in_dir(journal_dir: PathBuf) -> Self {
-        let unfinished = ren_core::exec::unfinished(&journal_dir).unwrap_or_default();
+        // The journals that could not be read, or that a run in another
+        // window still holds, are the second half; not shown yet.
+        let (unfinished, _unreadable) = ren_core::exec::unfinished(&journal_dir);
         Self {
             journal_dir,
             batches: Vec::new(),

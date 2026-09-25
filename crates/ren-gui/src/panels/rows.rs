@@ -458,6 +458,10 @@ pub(crate) fn conflict_help(kind: &ConflictKind) -> String {
             "{kind}.\nThe subfolder <\\> asks for is this folder. Give the subfolder a \
              different name, or untick Folders."
         ),
+        ConflictKind::IntoRenamedFolder { .. } => format!(
+            "{kind}.\nRename the folder in a run of its own first, or send this file \
+             somewhere else."
+        ),
         ConflictKind::InvalidName(_) => format!("{kind}."),
         ConflictKind::UnresolvedCycle => format!("{kind}."),
     }
@@ -663,6 +667,7 @@ mod tests {
             ],
             ops: Vec::new(),
             notes: Vec::new(),
+            blockers: Vec::new(),
         };
         let index = [Some(0), Some(1)];
         // Both items say they are about `/tmp/a.txt`, so both rows must be.
@@ -694,6 +699,7 @@ mod tests {
             items: vec![item(RowState::Changed, "z.txt", vec![])],
             ops: Vec::new(),
             notes: Vec::new(),
+            blockers: Vec::new(),
         };
         let index = [Some(0)];
         let right = [FileEntry::synthetic("/tmp/a.txt")];

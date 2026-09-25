@@ -101,7 +101,9 @@ impl Answers {
 pub struct RunSettings {
     pub counter: CounterSetup,
     pub parts: PartsSpec,
-    /// *"Only rename if all tags are available"* — a checkbox on the Format tab.
+    /// Only rename a file if every tag its template names is available for it
+    /// — the checkbox in Run Settings. A file missing one keeps its name,
+    /// rather than being renamed with a gap where the tag would have been.
     pub require_all_tags: bool,
     /// Keeps `<Rnd*>` reproducible between a preview and the rename that
     /// follows it (P16).
@@ -162,13 +164,14 @@ pub struct RunContext {
     pub parts: CompiledParts,
     pub require_all_tags: bool,
     pub seed: u64,
-    /// *"the path that is currently loaded in the file browser … If using free
-    /// select mode, this is empty."*
+    /// The folder the run's files are in, with a trailing separator — a
+    /// script's `fr.browser_path` (D108).
     ///
     /// Derived rather than plumbed: it is the folder every listed item shares.
     /// A free-select set or a recursive listing spans more than one folder, and
     /// both answer empty — which is the answer that makes a script fall back to
-    /// "beside the first file".
+    /// "beside the first file". So does a folder whose name is not valid
+    /// Unicode (D159): it has no text form a script could build a path from.
     ///
     /// Run-level, so it lives here rather than on the Script operation: a card
     /// cannot know where the listing came from, and a preset that carried one
@@ -196,7 +199,13 @@ impl Default for RunContext {
     }
 }
 
-/// The folder every entry sits in, or empty when they do not agree.
+/// The folder every entry sits in, or empty when they do not agree — or when
+/// its name is not text.
+///
+/// A lossy rendering would hand a script `Caf\u{FFFD}/`, the name of a folder
+/// that does not exist, and a playlist built on it would be refused by the
+/// planner (P60 as amended) after the script had run. Empty is the contract's
+/// existing answer for "no single folder a script can name".
 fn common_parent(entries: &[FileEntry]) -> String {
     let Some(first) = entries.first().and_then(|e| e.path.parent()) else {
         return String::new();
@@ -212,7 +221,10 @@ fn common_parent(entries: &[FileEntry]) -> String {
     }) {
         return String::new();
     }
-    let mut text = first.to_string_lossy().into_owned();
+    let Some(text) = first.to_str() else {
+        return String::new();
+    };
+    let mut text = text.to_owned();
     // The trailing separator is part of the contract: the playlist script
     // concatenates this straight onto a filename.
     if !text.is_empty() && !text.ends_with(std::path::MAIN_SEPARATOR) {
@@ -250,8 +262,10 @@ impl RunContext {
         crate::counter::pad(self.counter(index), self.counter_width)
     }
 
-    /// The value the running counter should start at next time — *"the number
-    /// that would have been next in line if the counter had continued"*.
+    /// The value the running counter should start at next time: the one this
+    /// run's sequence would have produced after its last file, Reset at and
+    /// all — [`CounterSetup::advance`] from the last value used, or the start
+    /// if the run numbered nothing.
     pub fn next_start(&self, settings: &CounterSetup) -> i64 {
         self.counters
             .last()
@@ -344,6 +358,27 @@ mod tests {
         let interaction = NoInteraction;
         assert_eq!(interaction.ask(&AskSpec { slot: 0 }), None);
         assert_eq!(interaction.clipboard(), None);
+    }
+
+    /// A folder whose name is not valid Unicode has no text form, so it has no
+    /// browser path either. Handing a script `Caf\u{FFFD}/` would hand it the
+    /// name of a folder that does not exist; empty is the answer the contract
+    /// already has for "no single folder a script can name" (D108).
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_whose_name_is_not_unicode_has_no_browser_path() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let folder = std::path::Path::new("/x").join(std::ffi::OsStr::from_bytes(b"Caf\xE9"));
+        let entries = [FileEntry::synthetic(folder.join("a.mp3"))];
+        let run = RunContext::build(&entries, &RunSettings::default(), Answers::default());
+        assert_eq!(run.browser_path, "");
+
+        let entries = [FileEntry::synthetic("/x/Cafe/a.mp3")];
+        let run = RunContext::build(&entries, &RunSettings::default(), Answers::default());
+        assert_eq!(
+            run.browser_path,
+            format!("/x/Cafe{}", std::path::MAIN_SEPARATOR)
+        );
     }
 
     /// A **running** counter stores where the next run should begin, and it has

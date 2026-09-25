@@ -590,7 +590,15 @@ fn a_folder_renames_after_a_swap_inside_it_has_finished() {
     let plan = plan(&entries, &pipeline, platform.as_ref());
     assert!(plan.is_executable(), "{:?}", plan.items);
 
-    let report = apply(&plan, platform.as_ref(), &ren_core::ApplyOptions::default()).unwrap();
+    // A journal of its own, like every other test here. `ApplyOptions::default()`
+    // journals into the real per-user folder, so every `cargo test` used to
+    // leave a committed transaction in the developer's own undo history.
+    let journal = TempDir::new().unwrap();
+    let options = ApplyOptions {
+        journal_dir: journal.path().to_path_buf(),
+        ..Default::default()
+    };
+    let report = apply(&plan, platform.as_ref(), &options).unwrap();
     assert!(report.is_success(), "{:?}", report.failed);
 
     let mut left: Vec<String> = std::fs::read_dir(dir.path().join("2"))
@@ -603,10 +611,11 @@ fn a_folder_renames_after_a_swap_inside_it_has_finished() {
 
 // --- M3 acceptance -----------------------------------------------------------
 
-/// The documented collision warning: *"renaming is sequential, so '+1 to all
-/// numbers' collides with not-yet-renamed files"*, and its workaround was two
-/// passes (add 101, then subtract 100). M1's topological ordering makes the
-/// warning obsolete — this is the test that says so.
+/// A renamer that runs one file at a time in listing order cannot add one to
+/// every number: `File 01` → `File 02` collides with the `File 02` that has not
+/// moved yet, and the only way round it is two passes (add 101, then subtract
+/// 100). P6's topological ordering runs the chain from its free end in one
+/// pass — this is the test that says so.
 #[test]
 fn adding_one_to_every_number_no_longer_collides() {
     use ren_core::ops::{NumberAction, NumberTarget, ReNumber};
@@ -1307,8 +1316,10 @@ fn an_announced_action_counts_as_in_flight() {
             }),
         })
         .unwrap();
+    // The process died here: nothing holds the journal any more.
+    drop(journal);
 
-    let unfinished = ren_core::exec::unfinished(dir.path()).unwrap();
+    let unfinished = ren_core::exec::unfinished(dir.path()).0;
     assert_eq!(unfinished.len(), 1);
     assert_eq!(
         unfinished[0].in_flight.len(),
@@ -1321,7 +1332,7 @@ fn an_announced_action_counts_as_in_flight() {
         std::path::PathBuf::from("/x/a.txt")
     );
     assert!(
-        !unfinished[0].any_contents_rewritten(),
+        !unfinished[0].in_flight.iter().any(|f| f.rewrote_contents),
         "a metadata edit leaves the file's contents alone"
     );
 }
@@ -1348,7 +1359,8 @@ fn setting_an_attribute_changes_it_on_disk_and_undo_puts_it_back() {
         "fixture starts writable"
     );
 
-    // The documented CD example: clear write protection, leave the rest grey.
+    // Tick the attributes to set and leave the rest grey: a grey box means
+    // "leave it alone", so nothing else about the files may change.
     let mut op = ren_core::ops::SetAttributes {
         read_only: Some(true),
         ..Default::default()
@@ -1746,8 +1758,10 @@ fn an_announced_irreversible_change_counts_as_in_flight() {
             change: Effect::Times(TimeSet::default()),
         })
         .unwrap();
+    // The process died here: nothing holds the journal any more.
+    drop(journal);
 
-    let unfinished = ren_core::exec::unfinished(dir.path()).unwrap();
+    let unfinished = ren_core::exec::unfinished(dir.path()).0;
     assert_eq!(unfinished.len(), 1);
     assert_eq!(unfinished[0].in_flight.len(), 1);
     // The whole point of naming them: this is the file that may be
@@ -1758,7 +1772,7 @@ fn an_announced_irreversible_change_counts_as_in_flight() {
     );
     assert_eq!(unfinished[0].in_flight[0].op, "music_tagger");
     assert!(
-        unfinished[0].any_contents_rewritten(),
+        unfinished[0].in_flight.iter().any(|f| f.rewrote_contents),
         "a tag write rewrites the file in place, so it may be half-written"
     );
 }
@@ -2303,7 +2317,7 @@ fn a_rename_interrupted_before_its_completed_record_is_rolled_back() {
     // No `Completed`, no `Commit` — the process died here.
     drop(journal);
 
-    let found = ren_core::exec::unfinished(fixture.journal.path()).unwrap();
+    let found = ren_core::exec::unfinished(fixture.journal.path()).0;
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].in_flight.len(), 1);
 
@@ -2339,7 +2353,7 @@ fn a_rename_that_never_happened_is_not_reported_as_a_skip() {
         .unwrap();
     drop(journal);
 
-    let found = ren_core::exec::unfinished(fixture.journal.path()).unwrap();
+    let found = ren_core::exec::unfinished(fixture.journal.path()).0;
     let report = ren_core::exec::rollback(&found[0], ren_platform::host().as_ref()).unwrap();
     assert_eq!(fixture.names(), ["a.txt"], "nothing should have moved");
     assert!(report.restored.is_empty());
@@ -2456,6 +2470,33 @@ fn a_swap_reports_two_renames_not_three() {
         real.renamed.len(),
         "a simulation must report what the run reports"
     );
+
+    // **The pairs, not only the count.** A front end reads `renamed` as an
+    // old → new map — to carry a hand-set order across the relist (D157), to
+    // rekey a thumbnail, to write the log — so the file that was parked under
+    // a temp name has to be reported from the name it started under, not
+    // from `__renameit-tmp-0`.
+    let sorted = |mut pairs: Vec<(std::path::PathBuf, std::path::PathBuf)>| {
+        pairs.sort();
+        pairs
+    };
+    let swapped = vec![
+        (fixture.path("a.txt"), fixture.path("b.txt")),
+        (fixture.path("b.txt"), fixture.path("a.txt")),
+    ];
+    assert_eq!(sorted(real.renamed.clone()), swapped, "{:?}", real.renamed);
+    assert_eq!(sorted(simulated.renamed.clone()), swapped);
+
+    // Undo is the mirror: one `(current, original)` pair per file, however
+    // many hops the file took.
+    let undo = undo_last(platform.as_ref(), fixture.journal.path()).unwrap();
+    assert_eq!(
+        sorted(undo.restored.clone()),
+        swapped,
+        "{:?}",
+        undo.restored
+    );
+    assert_eq!(snapshot(fixture.dir.path())["a.txt"], b"contents of 0");
 }
 
 /// One file, two action cards: the gate quotes rows, so the result must too.
@@ -2977,4 +3018,591 @@ fn the_one_pass_counts_agree_with_the_per_question_methods() {
     assert_eq!(counts.errors, plan.errors());
     assert!(counts.conflicts >= 2, "{counts:?}");
     assert!(counts.unchanged >= 1, "{counts:?}");
+}
+
+// --- Rows under a folder the same run renames -----------------------------
+
+/// An action on a row whose *name* does not change still has to find the file
+/// where the run leaves it.
+///
+/// Actions run after every rename (P46), so a Set Date on `IMG0001.JPG` inside
+/// `my_photos` runs once the folder is already `my photos`. The planner
+/// resolved where every row lands, and then kept that answer only for the rows
+/// whose own name changed — so the action on the untouched file was addressed
+/// at the folder's old path, the plan said it was executable, and the run
+/// stopped part-way on a file that was not there.
+#[test]
+fn an_action_on_an_unchanged_file_inside_a_renamed_folder_finds_it_where_it_landed() {
+    let platform = ren_platform::host();
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir(dir.path().join("my_photos")).unwrap();
+    std::fs::write(dir.path().join("my_photos/IMG0001.JPG"), b"jpeg").unwrap();
+    let entries = list(
+        dir.path(),
+        ListOptions {
+            folders: true,
+            subfolders: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let pipeline = Pipeline::new()
+        .with(
+            Step::Name(Box::new(ren_core::Replace::new("_", " "))),
+            StepConfig::scoped(Scope::Name),
+        )
+        .with(
+            Step::Action(Box::new(StampModified(stamp()))),
+            StepConfig::default(),
+        );
+    let plan = plan(&entries, &pipeline, platform.as_ref());
+    assert!(plan.is_executable(), "{:?}", plan.items);
+
+    let journal = TempDir::new().unwrap();
+    let options = ApplyOptions {
+        journal_dir: journal.path().to_path_buf(),
+        ..Default::default()
+    };
+    let report = apply(&plan, platform.as_ref(), &options).unwrap();
+    assert!(report.is_success(), "{:?}", report.failed);
+    let landed = dir.path().join("my photos").join("IMG0001.JPG");
+    assert_eq!(
+        std::fs::metadata(&landed).unwrap().modified().unwrap(),
+        stamp(),
+        "the file that kept its name was dated where it landed"
+    );
+
+    let undo = undo_last(platform.as_ref(), journal.path()).unwrap();
+    assert!(undo.is_complete(), "{:?}", undo.skipped);
+    assert!(dir.path().join("my_photos/IMG0001.JPG").exists());
+}
+
+/// A `<\>` move *into* a folder the same run renames has no order that keeps
+/// the preview's promise: the file has to land in `2024/img.jpg`, and `2024`
+/// is on its way to being `2024 (sorted)`. Whichever runs first, the run
+/// either fails part-way or puts the file somewhere the preview never showed.
+/// Refused, the conservative way P94 refuses a name a created folder needs.
+#[test]
+fn a_move_into_a_folder_the_same_run_renames_is_a_conflict() {
+    let platform = ren_platform::host();
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir(dir.path().join("2024")).unwrap();
+    std::fs::write(dir.path().join("img.jpg"), b"x").unwrap();
+    let entries = list(
+        dir.path(),
+        ListOptions {
+            folders: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(entries.len(), 2, "{entries:?}");
+
+    let pipeline = pipeline_of(
+        MapNames::new(&[("img.jpg", "2024/img.jpg"), ("2024", "2024 (sorted)")]),
+        Scope::Both,
+    );
+    let plan = plan(&entries, &pipeline, platform.as_ref());
+    assert!(!plan.is_executable(), "{:?}", plan.items);
+    let img = plan
+        .items
+        .iter()
+        .find(|i| i.source.ends_with("img.jpg"))
+        .unwrap();
+    assert!(
+        matches!(
+            &img.state,
+            RowState::Conflict(ConflictKind::IntoRenamedFolder { path }) if path.ends_with("2024")
+        ),
+        "{:?}",
+        img.state
+    );
+}
+
+/// Reversing the numbering of a few thousand files is a thousand-odd pairwise
+/// swaps in one folder, each needing its own temp name. Temp names used to be
+/// capped at a thousand per folder and never reused, so the swaps past the
+/// thousandth were refused as unbreakable cycles — with no hostile file in
+/// sight.
+#[test]
+fn more_than_a_thousand_swaps_in_one_folder_all_resolve() {
+    let platform = ren_platform::host();
+    let dir = TempDir::new().unwrap();
+    let pairs: Vec<(String, String)> = (0..1_100)
+        .flat_map(|i| {
+            [
+                (format!("a{i}"), format!("b{i}")),
+                (format!("b{i}"), format!("a{i}")),
+            ]
+        })
+        .collect();
+    let refs: Vec<(&str, &str)> = pairs
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    // Synthetic entries, so nothing is written: the planner only reads the
+    // folder, and an empty one is the case being asked about.
+    let entries: Vec<ren_core::FileEntry> = pairs
+        .iter()
+        .map(|(from, _)| ren_core::FileEntry::synthetic(dir.path().join(from)))
+        .collect();
+
+    let plan = plan(
+        &entries,
+        &pipeline_of(MapNames::new(&refs), Scope::Both),
+        platform.as_ref(),
+    );
+    assert_eq!(plan.conflicts(), 0, "no swap here is unbreakable");
+    let stages = plan
+        .ops
+        .iter()
+        .filter(|op| {
+            matches!(
+                op,
+                PlannedOp::Rename {
+                    kind: ren_core::RenameKind::CycleStage,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(stages, 1_100, "one temp name per swap");
+}
+
+/// On a case-insensitive volume `/x/holiday` *is* `/x/Holiday`, so a folder
+/// renamed to `holiday/holiday` is being moved inside itself exactly as much as
+/// one renamed to `Holiday/Holiday` — and no filesystem can do either (D118).
+/// The check compared the two paths byte for byte, so it only caught the
+/// second.
+#[test]
+fn a_folder_moved_inside_itself_is_caught_through_the_volumes_case_rules() {
+    let platform = WindowsFolding::new();
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir(dir.path().join("Holiday")).unwrap();
+    let entries = list(
+        dir.path(),
+        ListOptions {
+            folders: true,
+            files: false,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let pipeline = pipeline_of(
+        MapNames::new(&[("Holiday", "holiday/holiday")]),
+        Scope::Both,
+    );
+    let plan = plan(&entries, &pipeline, &platform);
+    assert!(
+        matches!(
+            plan.items[0].state,
+            RowState::Conflict(ConflictKind::IntoItself)
+        ),
+        "{:?}",
+        plan.items[0].state
+    );
+}
+
+/// Two sibling folders whose names differ only in a byte that is not valid
+/// UTF-8 are two folders, and the files inside them are different files.
+/// Comparing them through `to_string_lossy` turned both folders into
+/// `Caf\u{FFFD}`, so a rename in one read as colliding with a file in the
+/// other.
+#[cfg(unix)]
+#[test]
+fn files_in_two_folders_whose_names_are_not_unicode_do_not_collide() {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let platform = ren_platform::host();
+    let dir = TempDir::new().unwrap();
+    for raw in [&b"Caf\xE9"[..], &b"Caf\xE8"[..]] {
+        let folder = dir.path().join(std::ffi::OsStr::from_bytes(raw));
+        if std::fs::create_dir(&folder).is_err() {
+            return; // A filesystem that insists on UTF-8 cannot hold this case.
+        }
+        std::fs::write(folder.join("a.txt"), b"x").unwrap();
+    }
+    std::fs::write(
+        dir.path()
+            .join(std::ffi::OsStr::from_bytes(b"Caf\xE8"))
+            .join("b.txt"),
+        b"y",
+    )
+    .unwrap();
+    let entries = list(
+        dir.path(),
+        ListOptions {
+            subfolders: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(entries.len(), 3, "{entries:?}");
+
+    // `a` → `b` in the `\xE9` folder is free; in the `\xE8` folder the listed
+    // `b.txt` already has that name.
+    let pipeline = pipeline_of(MapNames::new(&[("a", "b")]), Scope::Name);
+    let plan = plan(&entries, &pipeline, platform.as_ref());
+    for item in &plan.items {
+        let in_e9 = item.source.as_os_str().as_bytes().contains(&0xE9);
+        let named_a = item.source.ends_with("a.txt");
+        match (in_e9, named_a) {
+            (true, true) => assert_eq!(item.state, RowState::Changed, "{item:?}"),
+            (false, true) => assert!(
+                matches!(
+                    &item.state,
+                    RowState::Conflict(ConflictKind::DuplicateTarget { others }) if others.len() == 1
+                ),
+                "{item:?}"
+            ),
+            _ => {}
+        }
+    }
+}
+
+/// A temp name has to avoid the folders this run creates as well as the names
+/// it touches: those do not exist yet when the temp name is chosen, so the
+/// disk probe cannot see them, and `CreateDir` runs before every rename.
+#[test]
+fn a_temp_name_never_lands_on_a_folder_the_run_creates() {
+    let fixture = Fixture::new(&["a", "b", "c"]);
+    let platform = ren_platform::host();
+    let pipeline = pipeline_of(
+        MapNames::new(&[("a", "b"), ("b", "a"), ("c", "__renameit-tmp-0/c")]),
+        Scope::Both,
+    );
+    let plan = plan(&fixture.entries(), &pipeline, platform.as_ref());
+    assert!(plan.is_executable(), "{:?}", plan.items);
+
+    let report = apply(&plan, platform.as_ref(), &fixture.options()).unwrap();
+    assert!(report.is_success(), "{:?}", report.failed);
+    assert_eq!(std::fs::read(fixture.path("a")).unwrap(), b"contents of 1");
+    assert_eq!(std::fs::read(fixture.path("b")).unwrap(), b"contents of 0");
+}
+
+/// Two rows asking for `a/` and `A/` on a volume that folds case are asking for
+/// one folder. Created twice, the second `CreateDir` fails with "already
+/// exists" and the run stops before a single file is sorted.
+#[test]
+fn folders_that_differ_only_in_case_are_created_once_where_case_folds() {
+    let platform = WindowsFolding::new();
+    let fixture = Fixture::new(&["apple.jpg", "Avocado.jpg"]);
+    let pipeline = pipeline_of(
+        MapNames::new(&[
+            ("apple.jpg", "a/apple.jpg"),
+            ("Avocado.jpg", "A/Avocado.jpg"),
+        ]),
+        Scope::Both,
+    );
+    let plan = plan(&fixture.entries(), &pipeline, &platform);
+    let created: Vec<_> = plan
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            PlannedOp::CreateDir { path } => Some(path.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(created.len(), 1, "{created:?}");
+}
+
+// --- Script writes ------------------------------------------------------------
+
+/// A script, written into `dir` and forgotten by the store so the next plan
+/// reads this text.
+fn script_in(dir: &Path, name: &str, source: &str) -> ren_core::ops::Script {
+    ren_core::script::store::forget_all();
+    std::fs::write(dir.join(name).with_extension("koto"), source).unwrap();
+    ren_core::ops::Script::new(name).in_dir(dir)
+}
+
+/// A path as a Koto string literal: Koto reads escapes in both quote styles,
+/// and a Windows path is mostly backslashes.
+fn koto_literal(path: &Path) -> String {
+    path.display()
+        .to_string()
+        .replace('\\', "\\\\")
+        .replace('\'', "\\'")
+}
+
+/// A script that renames nothing and asks for `target` to be written.
+fn writer(scripts: &Path, name: &str, target: &Path) -> ren_core::ops::Script {
+    script_in(
+        scripts,
+        name,
+        &format!(
+            "rename = || ''\ndone = || {{path: '{}', contents: 'written by a script'}}\n",
+            koto_literal(target)
+        ),
+    )
+}
+
+/// **A script may only write into a folder the run lists** (P60 as amended).
+///
+/// `done()` is code somebody else may have written, and the sandbox removes
+/// `io.create` for exactly that reason; a write request that could name any
+/// absolute path gave it straight back. The planner now refuses one outside
+/// the listing's folders, and refuses the *run*, with the path in the reason —
+/// a note would only be read after the renames had happened.
+#[test]
+fn a_script_write_outside_the_listed_folders_blocks_the_run() {
+    let fixture = Fixture::new(&["a.txt"]);
+    let scripts = TempDir::new().unwrap();
+    let platform = ren_platform::host();
+
+    let outside = fixture.aux.path().join("startup.cmd");
+    // And the same folder reached by walking back up out of the listing.
+    let climbing = fixture.path("..").join("climbed.txt");
+    for (name, target) in [("Outside", &outside), ("Climbing", &climbing)] {
+        let op = writer(scripts.path(), name, target);
+        let plan = plan(
+            &fixture.entries(),
+            &Pipeline::new().then(op),
+            platform.as_ref(),
+        );
+        assert!(
+            !plan.is_executable(),
+            "{target:?} was planned: {:?}",
+            plan.ops
+        );
+
+        let error = apply(&plan, platform.as_ref(), &fixture.options()).unwrap_err();
+        assert!(
+            matches!(error, ren_core::ExecError::Blocked { .. }),
+            "{error:?}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains(&target.file_name().unwrap().to_string_lossy().into_owned()),
+            "the refusal names the path: {error}"
+        );
+    }
+    assert!(!outside.exists());
+    assert!(
+        !fixture
+            .dir
+            .path()
+            .parent()
+            .unwrap()
+            .join("climbed.txt")
+            .exists()
+    );
+}
+
+/// A write onto the name a rename in the same run produces would truncate the
+/// file that was just renamed there, and undo would then "restore" a file
+/// whose contents are gone. A write onto a listed file the run renames away
+/// is the other half: undo could not put the renamed file back over it.
+#[test]
+fn a_script_write_onto_a_name_this_run_moves_blocks_the_run() {
+    let fixture = Fixture::new(&["a.txt", "b.txt"]);
+    let scripts = TempDir::new().unwrap();
+    let platform = ren_platform::host();
+
+    // a.txt → out.txt, and done() writes out.txt.
+    let onto_target = script_in(
+        scripts.path(),
+        "OntoTarget",
+        &format!(
+            "rename = ||\n  if fr.filename == 'a'\n    return 'out'\n  ''\n\
+             done = || {{path: '{}', contents: 'x'}}\n",
+            koto_literal(&fixture.path("out.txt"))
+        ),
+    );
+    let planned = plan(
+        &fixture.entries(),
+        &Pipeline::new().then(onto_target),
+        platform.as_ref(),
+    );
+    assert!(!planned.is_executable(), "{:?}", planned.ops);
+
+    // b.txt → c.txt, and done() writes b.txt.
+    let onto_source = script_in(
+        scripts.path(),
+        "OntoSource",
+        &format!(
+            "rename = ||\n  if fr.filename == 'b'\n    return 'c'\n  ''\n\
+             done = || {{path: '{}', contents: 'x'}}\n",
+            koto_literal(&fixture.path("b.txt"))
+        ),
+    );
+    let planned = plan(
+        &fixture.entries(),
+        &Pipeline::new().then(onto_source),
+        platform.as_ref(),
+    );
+    assert!(!planned.is_executable(), "{:?}", planned.ops);
+}
+
+/// A script builds its path from the listing *before* the run, and the write
+/// runs after every rename — so a playlist aimed at `My_Album` has to be
+/// written into the folder that is `My Album` by then.
+#[test]
+fn a_script_write_into_a_folder_the_run_renames_lands_under_its_new_name() {
+    let platform = ren_platform::host();
+    let dir = TempDir::new().unwrap();
+    let scripts = TempDir::new().unwrap();
+    std::fs::create_dir(dir.path().join("My_Album")).unwrap();
+    std::fs::write(dir.path().join("My_Album/track.mp3"), b"mp3").unwrap();
+    let entries = list(
+        dir.path(),
+        ListOptions {
+            folders: true,
+            subfolders: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let aimed = dir.path().join("My_Album").join("list.m3u");
+    let pipeline = Pipeline::new()
+        .with(
+            Step::Name(Box::new(ren_core::Replace::new("_", " "))),
+            StepConfig::scoped(Scope::Name),
+        )
+        .then(writer(scripts.path(), "IntoRenamed", &aimed));
+    let plan = plan(&entries, &pipeline, platform.as_ref());
+    assert!(plan.is_executable(), "{:?} {:?}", plan.items, plan.notes);
+
+    let journal = TempDir::new().unwrap();
+    let options = ApplyOptions {
+        journal_dir: journal.path().to_path_buf(),
+        ..Default::default()
+    };
+    let report = apply(&plan, platform.as_ref(), &options).unwrap();
+    assert!(report.is_success(), "{:?}", report.failed);
+    let landed = dir.path().join("My Album").join("list.m3u");
+    assert_eq!(
+        std::fs::read_to_string(&landed).unwrap(),
+        "written by a script"
+    );
+
+    // Undo takes the file off *before* the folder goes back to its old name:
+    // reverse order, which is the order the run performed them in, turned
+    // round. Afterwards the old folder holds exactly what it held before.
+    let undo = undo_last(platform.as_ref(), journal.path()).unwrap();
+    assert!(undo.is_complete(), "{:?}", undo.skipped);
+    assert_eq!(undo.removed_files, [landed]);
+    let mut left: Vec<String> = std::fs::read_dir(dir.path().join("My_Album"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    left.sort();
+    assert_eq!(left, ["track.mp3"]);
+}
+
+/// A write planned as a *create* must stay one. The plan decided it replaced
+/// nothing, so no one was asked (P2) — and a file another program saved there
+/// since the preview is somebody's work, not something to truncate.
+#[test]
+fn a_file_that_appeared_since_planning_is_not_overwritten() {
+    let fixture = Fixture::new(&["a.txt"]);
+    let scripts = TempDir::new().unwrap();
+    let platform = ren_platform::host();
+    let target = fixture.path("list.m3u");
+    let plan = plan(
+        &fixture.entries(),
+        &Pipeline::new().then(writer(scripts.path(), "Appeared", &target)),
+        platform.as_ref(),
+    );
+    assert!(plan.is_executable());
+
+    std::fs::write(&target, "the user's own playlist").unwrap();
+    let report = apply(&plan, platform.as_ref(), &fixture.options()).unwrap();
+    assert!(!report.is_success(), "the write should have been refused");
+    assert_eq!(
+        std::fs::read_to_string(&target).unwrap(),
+        "the user's own playlist"
+    );
+}
+
+/// Undo removes a file the run created — unless somebody has changed it since.
+/// Then it is the user's file, and deleting it would lose their edits.
+#[test]
+fn undo_leaves_a_script_written_file_the_user_has_since_edited() {
+    let fixture = Fixture::new(&["a.txt"]);
+    let scripts = TempDir::new().unwrap();
+    let platform = ren_platform::host();
+    let target = fixture.path("list.m3u");
+    let plan = plan(
+        &fixture.entries(),
+        &Pipeline::new().then(writer(scripts.path(), "Edited", &target)),
+        platform.as_ref(),
+    );
+    apply(&plan, platform.as_ref(), &fixture.options()).unwrap();
+    std::fs::write(&target, "written by a script, then edited by hand").unwrap();
+
+    let undo = undo_last(platform.as_ref(), fixture.journal.path()).unwrap();
+    assert!(undo.removed_files.is_empty(), "{:?}", undo.removed_files);
+    assert_eq!(undo.skipped.len(), 1, "{:?}", undo.skipped);
+    assert_eq!(
+        std::fs::read_to_string(&target).unwrap(),
+        "written by a script, then edited by hand"
+    );
+}
+
+/// A folder whose name is not valid Unicode has no text form a script could
+/// build a path from: `fr.path` hands it U+FFFD, and the path it builds names
+/// a folder that does not exist. Refused while planning, with the reason,
+/// rather than failing after every rename.
+#[cfg(unix)]
+#[test]
+fn a_script_write_into_a_folder_whose_name_is_not_unicode_is_refused() {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let platform = ren_platform::host();
+    let dir = TempDir::new().unwrap();
+    let scripts = TempDir::new().unwrap();
+    let folder = dir.path().join(std::ffi::OsStr::from_bytes(b"Caf\xE9"));
+    if std::fs::create_dir(&folder).is_err() {
+        return;
+    }
+    std::fs::write(folder.join("a.mp3"), b"mp3").unwrap();
+    let entries = list(&folder, ListOptions::default()).unwrap();
+
+    let op = script_in(
+        scripts.path(),
+        "LossyFolder",
+        "state = {dir: ''}\n\
+         rename = ||\n  state.dir = fr.path\n  ''\n\
+         done = || {path: state.dir + 'list.m3u', contents: 'x'}\n",
+    );
+    let plan = plan(&entries, &Pipeline::new().then(op), platform.as_ref());
+    assert!(!plan.is_executable(), "{:?}", plan.ops);
+}
+
+// --- Undo and recovery ----------------------------------------------------------
+
+/// A rename the journal records as **failed** never happened, and undo must
+/// not read the disk as saying it did. Here `b_1.txt → b-1.txt` failed because
+/// a stranger's `b-1.txt` appeared after planning; the user then moved
+/// `b_1.txt` away themselves. "`b-1.txt` present, `b_1.txt` absent" looks
+/// exactly like a rename that landed, and undo used to move the stranger's
+/// file onto `b_1.txt`.
+#[test]
+fn undo_never_replays_a_rename_the_journal_says_failed() {
+    let fixture = Fixture::new(&["a_1.txt", "b_1.txt"]);
+    let platform = ren_platform::host();
+    let pipeline = pipeline_of(ren_core::Replace::new("_", "-"), Scope::Name);
+    let plan = plan(&fixture.entries(), &pipeline, platform.as_ref());
+    assert!(plan.is_executable());
+
+    std::fs::write(fixture.path("b-1.txt"), b"a stranger").unwrap();
+    let report = apply(&plan, platform.as_ref(), &fixture.options()).unwrap();
+    assert_eq!(report.renamed.len(), 1, "{report:?}");
+    assert_eq!(report.failed.len(), 1, "{report:?}");
+    std::fs::rename(fixture.path("b_1.txt"), fixture.path("c.txt")).unwrap();
+
+    let journal = report.journal.clone().unwrap();
+    let undo = ren_core::exec::undo_transaction(&journal, platform.as_ref()).unwrap();
+    assert_eq!(undo.restored.len(), 1, "{:?}", undo.restored);
+    assert_eq!(
+        std::fs::read(fixture.path("b-1.txt")).unwrap(),
+        b"a stranger",
+        "the stranger's file was moved"
+    );
+    assert!(!fixture.path("b_1.txt").exists());
+    assert!(fixture.path("a_1.txt").exists());
 }

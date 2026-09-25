@@ -13,14 +13,16 @@
 //! cases that historically eat data: chains, swaps, case-only renames, unicode
 //! and emoji.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
+use std::time::SystemTime;
 
 use proptest::prelude::*;
 use ren_core::model::Scope;
 use ren_core::ops::{
-    AddCounter, AddRemove, BatchReplace, CaseMode, Casing, CounterPlacement, FreeFormat,
-    MoveSection, NumberAction, NumberTarget, OpKind, ReNumber, Replace, SpaceTrim, ZeroPadding,
+    AddCounter, AddRemove, BatchReplace, CaseMode, Casing, CounterPlacement, DateTargets,
+    FreeFormat, MoveSection, NumberAction, NumberTarget, OpKind, ReNumber, Replace, SetAttributes,
+    SetDate, SpaceTrim, WallClock, ZeroPadding,
 };
 use ren_core::{
     ApplyOptions, CounterSetup, IncludeFilter, ListOptions, MatchSpec, Pipeline, PreProcessor,
@@ -87,13 +89,19 @@ fn template() -> impl Strategy<Value = String> {
     ])
 }
 
-/// Every operation the user can add, as data.
+/// The operations the invariants run over, as data.
 ///
-/// This is deliberately `OpKind` rather than a boxed transform: it is what the
-/// GUI edits, what a preset stores, and what a job file parses into, so the
-/// invariants below now cover the whole surface — templates, counters, filters
-/// and pre-processors included — instead of the six General operations they
-/// used to.
+/// Deliberately `OpKind` rather than a boxed transform: it is what the GUI
+/// edits, what a preset stores, and what a job file parses into. Covered: the
+/// General name operations, templates (with `<\>`), counters, number edits,
+/// and the two metadata actions whose changes undo takes back — Set Date and
+/// Set Attributes — so every invariant also holds for a run that acts on
+/// files as well as renaming them. Not covered here, each for a reason: Script
+/// and the CSV list need files of their own beside the listing (a script has
+/// a property of its own, `a_scripted_preview_is_what_executes`); the
+/// Filename Editor needs a list that matches the listing; the Music and tag
+/// operations read and write audio files, and their writes cannot be undone
+/// (P2).
 fn op_kind() -> impl Strategy<Value = OpKind> {
     prop_oneof![
         ("[a-z ._]{0,3}", "[A-Z0-9 ]{0,3}")
@@ -145,6 +153,26 @@ fn op_kind() -> impl Strategy<Value = OpKind> {
                 OpKind::ReNumber(ReNumber::new(target, action).with_operand(operand.to_string()))
             }),
         template().prop_map(|pattern| OpKind::FreeFormat(FreeFormat::new(pattern))),
+        // The modified date — the one stamp every platform can write, so a
+        // generated run is not simply refused as unsupported (P5) on Linux.
+        (0u32..28).prop_map(|day| {
+            let when = chrono::NaiveDate::from_ymd_opt(2001, 9, day + 1)
+                .unwrap()
+                .and_hms_opt(12, 0, 0)
+                .unwrap();
+            OpKind::SetDate(SetDate {
+                date: WallClock::from_naive(when),
+                targets: DateTargets::default(),
+                ..Default::default()
+            })
+        }),
+        // Read-only, the one attribute every platform can write.
+        prop::option::of(any::<bool>()).prop_map(|read_only| {
+            OpKind::SetAttributes(SetAttributes {
+                read_only,
+                ..Default::default()
+            })
+        }),
     ]
 }
 
@@ -162,15 +190,14 @@ fn step_config() -> impl Strategy<Value = StepConfig> {
         4 => Just(None),
         1 => (0usize..4).prop_map(|n| Some(PreProcessor::new().skipping_first(n))),
     ];
-    (scope, any::<bool>(), filter, preproc).prop_map(|(scope, enabled, filter, preproc)| {
-        StepConfig {
-            scope,
-            // Weighted towards enabled: a pipeline of disabled steps proves
-            // nothing, but a disabled step among live ones proves a lot.
-            enabled: enabled || true,
-            filter,
-            preproc,
-        }
+    // Weighted towards enabled: a pipeline of disabled steps proves nothing,
+    // but a disabled step among live ones proves a lot.
+    let enabled = prop_oneof![4 => Just(true), 1 => Just(false)];
+    (scope, enabled, filter, preproc).prop_map(|(scope, enabled, filter, preproc)| StepConfig {
+        scope,
+        enabled,
+        filter,
+        preproc,
     })
 }
 
@@ -245,21 +272,70 @@ impl Tree {
     }
 }
 
-/// `relative path -> (contents, mtime)` for the whole tree.
-///
-/// Recursive, because `<\\>` moves files into subfolders (D31): a
-/// non-recursive snapshot would read a moved file as a lost one.
-fn snapshot(dir: &Path) -> BTreeMap<String, (Vec<u8>, std::time::SystemTime)> {
-    let mut out = BTreeMap::new();
-    collect_files(dir, dir, &mut out);
+/// A generated Set Attributes step can leave a file read-only, and a read-only
+/// file is one Windows will not let `TempDir` delete.
+impl Drop for Tree {
+    fn drop(&mut self) {
+        fn writable(dir: &Path) {
+            let Ok(read) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in read.filter_map(Result::ok) {
+                let path = entry.path();
+                if path.is_dir() {
+                    writable(&path);
+                } else if let Ok(meta) = std::fs::metadata(&path) {
+                    let mut permissions = meta.permissions();
+                    #[allow(clippy::permissions_set_readonly_false)]
+                    permissions.set_readonly(false);
+                    let _ = std::fs::set_permissions(&path, permissions);
+                }
+            }
+        }
+        writable(self.dir.path());
+    }
+}
+
+/// Everything on disk under a root, as the invariants compare it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Snapshot {
+    /// `relative path -> (contents, mtime)` for every file.
+    files: BTreeMap<String, (Vec<u8>, SystemTime)>,
+    /// Every folder, by relative path. Without these, a folder an undo left
+    /// behind or a simulation created was invisible to every "exact"
+    /// assertion. No mtime: a folder's changes whenever anything inside it is
+    /// renamed, and undo cannot put that back.
+    dirs: BTreeSet<String>,
+}
+
+/// The whole tree, recursively, because `<\>` moves files into subfolders
+/// (D31): a non-recursive snapshot would read a moved file as a lost one.
+fn snapshot(dir: &Path) -> Snapshot {
+    let mut out = Snapshot {
+        files: BTreeMap::new(),
+        dirs: BTreeSet::new(),
+    };
+    collect(dir, dir, &mut out);
     out
 }
 
-fn collect_files(
-    root: &Path,
-    dir: &Path,
-    out: &mut BTreeMap<String, (Vec<u8>, std::time::SystemTime)>,
-) {
+/// A path relative to `root`, spelled with `/` whatever the platform uses.
+///
+/// `PlanItem::new_name` is the name the *preview* showed, and D31 makes `/`
+/// the one canonical separator in a produced name — so on Windows a file
+/// moved into a subfolder is `sub\file` on disk and `sub/file` in the plan.
+/// Comparing those without normalising fails for a difference in spelling
+/// rather than in behaviour, which is what the Windows runner caught.
+fn relative(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join(&ren_core::plan::SUBFOLDER_SEPARATOR.to_string())
+}
+
+fn collect(root: &Path, dir: &Path, out: &mut Snapshot) {
     let Ok(read) = std::fs::read_dir(dir) else {
         return;
     };
@@ -267,24 +343,11 @@ fn collect_files(
         let path = entry.path();
         let Ok(meta) = entry.metadata() else { continue };
         if meta.is_dir() {
-            collect_files(root, &path, out);
+            out.dirs.insert(relative(root, &path));
+            collect(root, &path, out);
         } else {
-            // Spelled with `/`, whatever the platform uses. `PlanItem::new_name`
-            // is the name the *preview* showed, and D31 makes `/` the one
-            // canonical separator in a produced name — so on Windows a file
-            // moved into a subfolder is `sub\file` on disk and `sub/file` in
-            // the plan. Comparing those without normalising fails for a
-            // difference in spelling rather than in behaviour, which is what
-            // the Windows runner caught.
-            let key = path
-                .strip_prefix(root)
-                .unwrap_or(&path)
-                .components()
-                .map(|c| c.as_os_str().to_string_lossy())
-                .collect::<Vec<_>>()
-                .join(&ren_core::plan::SUBFOLDER_SEPARATOR.to_string());
-            out.insert(
-                key,
+            out.files.insert(
+                relative(root, &path),
                 (
                     std::fs::read(&path).unwrap_or_default(),
                     meta.modified().expect("mtime"),
@@ -292,6 +355,36 @@ fn collect_files(
             );
         }
     }
+}
+
+/// **Each file's contents are where the preview said that file would be.**
+///
+/// The name-level invariants compare *sets* — of names, of contents — and a
+/// swap executed as a no-op leaves both sets exactly as they were. This is the
+/// check that tells `a` becoming `b` apart from `a` staying `a`: every file
+/// row's landing place (`final_path`, the preview's promise) holds the bytes
+/// its source held before the run.
+fn contents_followed_their_files(
+    root: &Path,
+    plan: &ren_core::Plan,
+    before: &Snapshot,
+) -> Result<(), TestCaseError> {
+    for item in &plan.items {
+        // Folder rows have no contents of their own; their files are rows too.
+        let Some((contents, _)) = before.files.get(&relative(root, &item.source)) else {
+            continue;
+        };
+        let landed = item.final_path();
+        let now = std::fs::read(landed).ok();
+        prop_assert_eq!(
+            now.as_ref(),
+            Some(contents),
+            "{} should hold what {} held",
+            landed.display(),
+            item.source.display()
+        );
+    }
+    Ok(())
 }
 
 proptest! {
@@ -339,13 +432,14 @@ proptest! {
         prop_assert!(report.is_success(), "{:?}", report.failed);
 
         let after = snapshot(tree.dir.path());
-        prop_assert_eq!(before.len(), after.len(), "file count changed");
+        prop_assert_eq!(before.files.len(), after.files.len(), "file count changed");
 
-        let mut before_contents: Vec<_> = before.values().map(|(c, _)| c.clone()).collect();
-        let mut after_contents: Vec<_> = after.values().map(|(c, _)| c.clone()).collect();
+        let mut before_contents: Vec<_> = before.files.values().map(|(c, _)| c.clone()).collect();
+        let mut after_contents: Vec<_> = after.files.values().map(|(c, _)| c.clone()).collect();
         before_contents.sort();
         after_contents.sort();
         prop_assert_eq!(before_contents, after_contents, "contents changed");
+        contents_followed_their_files(tree.dir.path(), &plan, &before)?;
     }
 
     /// The name shown in the preview is the name written to disk. This is the
@@ -357,6 +451,7 @@ proptest! {
     ) {
         let Some(tree) = Tree::new(&names) else { return Ok(()); };
         let platform = ren_platform::host();
+        let before = snapshot(tree.dir.path());
         let entries = list(tree.dir.path(), ListOptions::default()).unwrap();
         let plan = plan(&entries, &build(steps), platform.as_ref());
         if !plan.is_executable() {
@@ -367,10 +462,13 @@ proptest! {
         let report = apply(&plan, platform.as_ref(), &tree.options()).unwrap();
         prop_assert!(report.is_success(), "{:?}", report.failed);
 
-        let mut on_disk: Vec<String> = snapshot(tree.dir.path()).into_keys().collect();
+        let mut on_disk: Vec<String> = snapshot(tree.dir.path()).files.into_keys().collect();
         previewed.sort();
         on_disk.sort();
         prop_assert_eq!(previewed, on_disk);
+        // The names agreeing as a set is not enough: each has to be the right
+        // file's name.
+        contents_followed_their_files(tree.dir.path(), &plan, &before)?;
     }
 
     /// The same two promises — the preview is the truth, and undo is exact —
@@ -418,13 +516,15 @@ proptest! {
                 target.display()
             );
         }
+        contents_followed_their_files(tree.dir.path(), &plan, &before)?;
 
         // A pipeline that changed nothing wrote no transaction, so there is
         // nothing to take back and nothing to check.
-        if report.renamed.is_empty() {
+        if report.reversible == 0 {
             return Ok(());
         }
-        undo_last(platform.as_ref(), tree.journal.path()).unwrap();
+        let undo = undo_last(platform.as_ref(), tree.journal.path()).unwrap();
+        prop_assert!(undo.is_complete(), "{:?}", undo.skipped);
         prop_assert_eq!(before, snapshot(tree.dir.path()), "undo was not exact");
     }
 
@@ -527,8 +627,11 @@ proptest! {
                 ren_core::PlannedOp::Rename { to, .. } => to,
                 ren_core::PlannedOp::CreateDir { path } => path,
                 ren_core::PlannedOp::Act { path, .. } => path,
-                // A script's write is held to the same rule as everything
-                // else: nothing this plan touches may sit outside the root.
+                // Never generated here — `op_kind` has no Script — so this arm
+                // only states the rule. The planner enforces it (P60 as
+                // amended): a script may write only into a folder the run
+                // lists, and every listed folder is under the root. The
+                // engine tests hold the refusals.
                 ren_core::PlannedOp::WriteFile { path, .. } => path,
             };
             prop_assert!(
@@ -850,14 +953,38 @@ proptest! {
     }
 }
 
-/// A platform that performs `survives` renames faithfully and then dies —
+/// A platform that performs `survives` changes faithfully and then dies —
 /// either instead of the next one (the crash came before the syscall) or
 /// right after it (the syscall landed, its `Completed` line never did). The
 /// two windows a crash can fall into, and recovery has to be right in both.
+///
+/// A "change" is every call the executor makes to alter a file: a rename, and
+/// the date and attribute writes of the metadata actions. Folder creations
+/// are not routed through the platform, so a crash cannot land *on* one —
+/// the power-loss variants in [`crash_and_recover`] reach the state that
+/// matters there instead, a folder created and never confirmed.
 struct CrashingPlatform {
     inner: std::sync::Arc<dyn ren_platform::Platform>,
     survives: std::sync::atomic::AtomicUsize,
     after: bool,
+}
+
+impl CrashingPlatform {
+    /// Runs `change` unless this is the call the crash lands on.
+    fn change<T>(
+        &self,
+        change: impl FnOnce() -> ren_platform::Result<T>,
+    ) -> ren_platform::Result<T> {
+        use std::sync::atomic::Ordering;
+        if self.survives.load(Ordering::SeqCst) == 0 {
+            if self.after {
+                change()?;
+            }
+            std::panic::panic_any(CRASH);
+        }
+        self.survives.fetch_sub(1, Ordering::SeqCst);
+        change()
+    }
 }
 
 impl std::fmt::Debug for CrashingPlatform {
@@ -874,15 +1001,7 @@ impl ren_platform::Platform for CrashingPlatform {
         self.inner.capabilities()
     }
     fn rename(&self, from: &Path, to: &Path) -> ren_platform::Result<()> {
-        use std::sync::atomic::Ordering;
-        if self.survives.load(Ordering::SeqCst) == 0 {
-            if self.after {
-                self.inner.rename(from, to)?;
-            }
-            std::panic::panic_any(CRASH);
-        }
-        self.survives.fetch_sub(1, Ordering::SeqCst);
-        self.inner.rename(from, to)
+        self.change(|| self.inner.rename(from, to))
     }
     fn get_attributes(&self, path: &Path) -> ren_platform::Result<ren_platform::FileAttributes> {
         self.inner.get_attributes(path)
@@ -892,13 +1011,13 @@ impl ren_platform::Platform for CrashingPlatform {
         path: &Path,
         change: ren_platform::AttributeChange,
     ) -> ren_platform::Result<()> {
-        self.inner.set_attributes(path, change)
+        self.change(|| self.inner.set_attributes(path, change))
     }
     fn get_times(&self, path: &Path) -> ren_platform::Result<ren_platform::FileTimes> {
         self.inner.get_times(path)
     }
     fn set_times(&self, path: &Path, change: ren_platform::TimeChange) -> ren_platform::Result<()> {
-        self.inner.set_times(path, change)
+        self.change(|| self.inner.set_times(path, change))
     }
     fn naming_rules(&self, path: &Path) -> &'static ren_platform::NamingRules {
         self.inner.naming_rules(path)
@@ -917,14 +1036,75 @@ impl ren_platform::Platform for CrashingPlatform {
 /// The payload the crash carries, so a real panic is not mistaken for it.
 const CRASH: &str = "simulated crash";
 
-/// Runs `plan` until the `survives`th rename, "crashes" there, recovers, and
-/// checks the tree is exactly what it was.
+/// What reached the disk before the crash, beyond what the executor synced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Loss {
+    /// A process death: everything the executor wrote is in the page cache,
+    /// and the next reader sees it.
+    Nothing,
+    /// A power cut before the current intent's sync: the previous op's
+    /// `Completed` (appended unsynced, D168) and the intent after it are both
+    /// gone. The previous op *ran*; nothing on disk says so.
+    CompletedAndIntent,
+    /// The same, with the intent's page written back and the confirmation's
+    /// not — nothing orders the two, so recovery has to be right either way.
+    CompletedOnly,
+}
+
+/// Drops what `loss` says a power cut would have taken from the only journal
+/// in `dir`. `false` when the journal does not end in the shape that loss
+/// needs — an intent with the confirmation of the op before it just above —
+/// so there is no such state to test.
+fn lose_unsynced_tail(dir: &Path, loss: Loss) -> bool {
+    if loss == Loss::Nothing {
+        return true;
+    }
+    let path = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|e| e == "jsonl"))
+        .expect("a journal");
+    let lines = ren_core::exec::Journal::read(&path).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    let raw: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(raw.len(), lines.len());
+    let n = lines.len();
+    let intent = |r: &ren_core::exec::Record| {
+        use ren_core::exec::Record::*;
+        matches!(
+            r,
+            PlanRename { .. } | PlanCreateDir { .. } | PlanAct { .. } | PlanIrreversible { .. }
+        )
+    };
+    if n < 2
+        || !intent(&lines[n - 1].record)
+        || !matches!(
+            lines[n - 2].record,
+            ren_core::exec::Record::Completed { .. }
+        )
+    {
+        return false;
+    }
+    let keep = match loss {
+        Loss::CompletedAndIntent => raw[..n - 2].to_vec(),
+        Loss::CompletedOnly => [&raw[..n - 2], &raw[n - 1..]].concat(),
+        Loss::Nothing => unreachable!(),
+    };
+    let mut out = keep.join("\n");
+    out.push('\n');
+    std::fs::write(&path, out).unwrap();
+    true
+}
+
+/// Runs `plan` until the `survives`th change, "crashes" there, loses what
+/// `loss` says, recovers, and checks the tree is exactly what it was.
 fn crash_and_recover(
     tree: &Tree,
     plan: &ren_core::Plan,
-    before: &BTreeMap<String, (Vec<u8>, std::time::SystemTime)>,
+    before: &Snapshot,
     survives: usize,
     after: bool,
+    loss: Loss,
 ) -> Result<(), TestCaseError> {
     let platform = CrashingPlatform {
         inner: ren_platform::host(),
@@ -939,29 +1119,37 @@ fn crash_and_recover(
             let ours = payload.downcast_ref::<&str>().is_some_and(|p| *p == CRASH);
             prop_assert!(ours, "a real panic, not the simulated crash");
         }
-        // Fewer renames than `survives`: the run finished. Undo instead, which
+        // Fewer changes than `survives`: the run finished. Undo instead, which
         // exercises the same replay over a committed journal.
         Ok(report) => {
             let report = report.unwrap();
             prop_assert!(report.is_success(), "{:?}", report.failed);
-            if !report.renamed.is_empty() {
+            if report.reversible > 0 {
                 undo_last(ren_platform::host().as_ref(), tree.journal.path()).unwrap();
             }
             prop_assert_eq!(before, &snapshot(tree.dir.path()));
             return Ok(());
         }
     }
+    if !lose_unsynced_tail(tree.journal.path(), loss) {
+        // No such state at this crash point. Put the tree back through the
+        // ordinary path so the next case starts from `before`.
+        let unfinished = ren_core::exec::unfinished(tree.journal.path()).0;
+        ren_core::exec::rollback(&unfinished[0], ren_platform::host().as_ref()).unwrap();
+        return Ok(());
+    }
 
-    let unfinished = ren_core::exec::unfinished(tree.journal.path()).unwrap();
+    let unfinished = ren_core::exec::unfinished(tree.journal.path()).0;
     prop_assert_eq!(unfinished.len(), 1, "one open transaction");
     let report = ren_core::exec::rollback(&unfinished[0], ren_platform::host().as_ref()).unwrap();
     prop_assert!(report.skipped.is_empty(), "{:?}", report.skipped);
     prop_assert_eq!(
         before,
         &snapshot(tree.dir.path()),
-        "after a crash at rename {} ({} the syscall)",
+        "after a crash at change {} ({} the syscall, {:?} lost)",
         survives,
-        if after { "after" } else { "before" }
+        if after { "after" } else { "before" },
+        loss
     );
     Ok(())
 }
@@ -970,16 +1158,19 @@ proptest! {
     #![proptest_config(ProptestConfig { cases: 48, ..ProptestConfig::default() })]
 
     /// **A crash at any point of a run is recovered exactly** — with chains,
-    /// swaps, subfolder moves and a folder row in the tree.
+    /// swaps, subfolder moves, a folder row and metadata actions in the tree.
     ///
-    /// The gate for the write-ahead window: the executor announces up to
-    /// sixty-four renames per sync, so a crash can leave that many announced
-    /// and unconfirmed, some performed and some not, and recovery has to
-    /// decide each from the disk (D84) in the right order. Every crash point
-    /// of the plan is tried, in both of the windows a crash can fall into:
-    /// before the syscall, and after it but before its journal line.
+    /// The gate for the write-ahead window, which is **one** (P99): the
+    /// executor announces one rename or folder creation, syncs, performs it,
+    /// and appends its `Completed` unsynced for the next sync to carry (D168).
+    /// Any future widening has to pass this first. Every change of the plan
+    /// is a crash point, in both windows a crash can fall into — before the
+    /// syscall, and after it but before its journal line — and a crash before
+    /// the syscall is also tried as a power cut, which takes the unsynced
+    /// confirmation of the op before it (and maybe the new intent) with it.
+    /// Recovery decides each announced-but-unconfirmed op from the disk (D84).
     #[test]
-    fn a_crash_at_any_rename_is_recovered_exactly(
+    fn a_crash_at_any_change_is_recovered_exactly(
         names in file_names(),
         folder in file_name(),
         steps in pipeline_steps(),
@@ -997,15 +1188,20 @@ proptest! {
         if !plan.is_executable() || plan.ops.is_empty() {
             return Ok(());
         }
-        let renames = plan
+        let changes = plan
             .ops
             .iter()
-            .filter(|op| matches!(op, ren_core::PlannedOp::Rename { .. }))
+            .filter(|op| matches!(op, ren_core::PlannedOp::Rename { .. } | ren_core::PlannedOp::Act { .. }))
             .count();
 
-        for survives in 0..renames {
-            for after in [false, true] {
-                crash_and_recover(&tree, &plan, &before, survives, after)?;
+        for survives in 0..changes {
+            for (after, loss) in [
+                (false, Loss::Nothing),
+                (true, Loss::Nothing),
+                (false, Loss::CompletedAndIntent),
+                (false, Loss::CompletedOnly),
+            ] {
+                crash_and_recover(&tree, &plan, &before, survives, after, loss)?;
                 // Each crash leaves a rolled-back journal behind; start the
                 // next one clean so `unfinished` sees exactly one.
                 for entry in std::fs::read_dir(tree.journal.path()).unwrap() {
