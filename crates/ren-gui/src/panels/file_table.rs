@@ -709,7 +709,15 @@ mod tests {
     /// will keep an mtime of `@100000000000000` for anyone who sets one.
     #[test]
     fn a_date_past_the_calendar_shows_a_dash_rather_than_taking_the_window_down() {
-        let far = std::time::UNIX_EPOCH + std::time::Duration::from_secs(100_000_000_000_000);
+        // Unrepresentable as a `SystemTime` on some platforms — Windows' ends
+        // long before chrono's calendar does, so the case cannot arise there
+        // and `+` would panic building it. Same guard as the engine's test
+        // (`a_timestamp_beyond_the_calendar_is_missing_rather_than_a_panic`).
+        let Some(far) =
+            std::time::UNIX_EPOCH.checked_add(std::time::Duration::from_secs(100_000_000_000_000))
+        else {
+            return;
+        };
         assert_eq!(human_time_in(&chrono::Utc, far), None);
         assert_eq!(human_time(far), "—");
     }
