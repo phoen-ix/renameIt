@@ -90,6 +90,19 @@ ignore = [
     # What would make it reach us: it becoming a *vulnerability* advisory, us
     # adding a wasm32 target, or koto moving to web-time (then drop this entry).
     { id = "RUSTSEC-2024-0384", reason = "instant: unmaintained under koto_runtime; on our non-wasm targets it is a re-export of std::time::Instant" },
+    # `circular-buffer` 1.x arrives under `koto_bytecode` (koto 0.16.1, the latest
+    # release). The advisory is panic-safety unsoundness: `truncate_*`, `clear` and
+    # `extend_from_slice` drop elements before updating the buffer's bounds, so an
+    # element whose `Drop` panics leaves already-dropped elements live.
+    #
+    # Why it does not reach us: koto keeps exactly one `CircularBuffer`, of
+    # `ChainRegister { register: u8, is_temporary: bool }` (koto_bytecode's
+    # compiler.rs) - a type with no `Drop`, so nothing can panic during a drop.
+    #
+    # What would make it reach us: koto storing a type with a `Drop` in it, or a
+    # second use of the crate. Drop this entry once koto moves to circular-buffer
+    # 2.x, where it is fixed (2.0.1).
+    { id = "RUSTSEC-2026-0256", reason = "circular-buffer: unsound only for elements whose Drop panics; koto_bytecode stores a plain u8+bool struct" },
 ]
 
 [sources]
