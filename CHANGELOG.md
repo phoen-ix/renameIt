@@ -6,6 +6,14 @@ Two things this file does **not** track. Engine and UI decisions live in
 `docs/DECISIONS.md`, which is the authority on why anything behaves as it does;
 and the reasoning behind each default lives beside the code it governs.
 
+## [Unreleased]
+
+### Changed
+
+- Built with Rust 1.99.0 (was 1.97.1, **D12**), and every dependency is on its
+  newest release, among them eframe/egui 0.36.2 and lofty 0.25.4 (upstream
+  fixes to ID3v2, MP4, FLAC and WAV/AIFF tag reading and writing).
+
 ## [1.5.0] - 2026-09-25
 
 The second audit: a read of the whole workspace — engine, platform layer, both
