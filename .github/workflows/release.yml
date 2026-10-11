@@ -68,7 +68,7 @@ jobs:
     needs: gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-about
@@ -80,7 +80,7 @@ jobs:
           cargo about generate --locked about.hbs -o dist/THIRD-PARTY-LICENSES.html
           test -s dist/THIRD-PARTY-LICENSES.html
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: third-party-licenses
           path: dist/THIRD-PARTY-LICENSES.html
@@ -90,7 +90,7 @@ jobs:
     needs: [gate, notices]
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # No toolchain action: `rust-toolchain.toml` pins an exact version (D12)
       # and rustup honours it, which is how `ci.yml` does it too. Pinning here
       # and taking `stable` there would mean a release built with a compiler
@@ -101,7 +101,7 @@ jobs:
       - name: Build
         run: cargo build --locked --release --bin renameit --bin ren-cli
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: third-party-licenses
           path: dist/notices
@@ -168,7 +168,7 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path dist/RenameIt -DestinationPath dist/RenameIt-windows-x64.zip
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: RenameIt-windows-x64
           path: dist/RenameIt-windows-x64.zip
@@ -180,7 +180,7 @@ jobs:
 
       - name: Publish
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/RenameIt-windows-x64.zip
           body_path: dist/notes.md
@@ -191,7 +191,7 @@ jobs:
     needs: [gate, notices]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
 
       # The same list `ci.yml` builds with, so the release is built in the
@@ -209,7 +209,7 @@ jobs:
       - name: Build
         run: cargo build --locked --release --bin renameit --bin ren-cli
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: third-party-licenses
           path: dist/notices
@@ -261,7 +261,7 @@ jobs:
       - name: Tar
         run: tar -czf dist/RenameIt-linux-x64.tar.gz -C dist RenameIt
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: RenameIt-linux-x64
           path: dist/RenameIt-linux-x64.tar.gz
@@ -273,7 +273,7 @@ jobs:
 
       - name: Publish
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/RenameIt-linux-x64.tar.gz
           body_path: dist/notes.md

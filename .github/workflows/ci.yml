@@ -27,7 +27,7 @@ jobs:
     name: Linux — fmt, clippy, tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # eframe/winit/glow need these headers. The toolchain itself comes from
       # rust-toolchain.toml, which rustup honours automatically (D12).
@@ -119,7 +119,7 @@ jobs:
     name: Windows — tests, GUI build
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
 
       # The only place created dates, DOS attributes and case-insensitive
@@ -143,7 +143,7 @@ jobs:
       # never confused, and GitHub expires it on its own.
       - name: Keep the executables
         if: github.event_name == 'push'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: renameit-windows-${{ github.sha }}
           path: |
@@ -164,7 +164,7 @@ jobs:
     name: Dependency licences and advisories
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # D2 is a hard rule: MIT project, no GPL/LGPL, allowlist in deny.toml.
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
