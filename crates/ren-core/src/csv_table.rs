@@ -188,13 +188,13 @@ fn utf16(bytes: &[u8]) -> Result<Option<String>, CsvError> {
         line: 0,
         message: "the file is marked as UTF-16 but is not valid UTF-16".to_owned(),
     };
-    if rest.len() % 2 != 0 {
+    let (pairs, odd_byte) = rest.as_chunks::<2>();
+    if !odd_byte.is_empty() {
         return Err(malformed());
     }
-    let units: Vec<u16> = rest
-        .chunks_exact(2)
-        .map(|pair| {
-            let pair = [pair[0], pair[1]];
+    let units: Vec<u16> = pairs
+        .iter()
+        .map(|&pair| {
             if little_endian {
                 u16::from_le_bytes(pair)
             } else {
@@ -504,11 +504,20 @@ mod tests {
     fn a_broken_utf16_csv_is_an_error() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("list.csv");
-        std::fs::write(&path, [0xFF, 0xFE, b'a', 0, 0x00, 0xD8, b',', 0]).unwrap();
-        assert!(matches!(
-            parse(&path, comma()),
-            Err(CsvError::Malformed { line: 0, .. })
-        ));
+        // A lone surrogate, and a byte count that is not whole code units.
+        for bytes in [
+            &[0xFF, 0xFE, b'a', 0, 0x00, 0xD8, b',', 0][..],
+            &[0xFF, 0xFE, b'a', 0, b','][..],
+        ] {
+            std::fs::write(&path, bytes).unwrap();
+            assert!(
+                matches!(
+                    parse(&path, comma()),
+                    Err(CsvError::Malformed { line: 0, .. })
+                ),
+                "{bytes:?}"
+            );
+        }
     }
 
     /// A file that could not be read is asked again next time. A permissions

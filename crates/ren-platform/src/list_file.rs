@@ -60,9 +60,12 @@ fn text_lines(text: &str) -> Vec<OsString> {
 /// file — is replaced rather than refused: the path then does not exist, and
 /// the caller names it, which is louder than failing the whole list.
 fn utf16_lines(bytes: &[u8], unit: fn([u8; 2]) -> u16) -> Vec<OsString> {
+    // An odd trailing byte is dropped, as `chunks_exact` did.
     let units: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|pair| unit([pair[0], pair[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&pair| unit(pair))
         .collect();
     text_lines(&String::from_utf16_lossy(&units))
 }
