@@ -6,13 +6,20 @@ Two things this file does **not** track. Engine and UI decisions live in
 `docs/DECISIONS.md`, which is the authority on why anything behaves as it does;
 and the reasoning behind each default lives beside the code it governs.
 
-## [Unreleased]
+## [1.5.1] - 2026-10-17
+
+A maintenance release: a newer compiler and dependencies.
 
 ### Changed
 
-- Built with Rust 1.99.0 (was 1.97.1, **D12**), and every dependency is on its
+- Built with Rust 1.99.1 (was 1.97.1, **D12**), and every dependency is on its
   newest release, among them eframe/egui 0.36.2 and lofty 0.25.4 (upstream
   fixes to ID3v2, MP4, FLAC and WAV/AIFF tag reading and writing).
+- rust_decimal 1.43 takes `rkyv` 0.7 (RUSTSEC-2026-0235) out of the dependency
+  tree; it was never compiled into the app. The `circular-buffer` advisory
+  under the script engine (RUSTSEC-2026-0256) and the zbus 5 crates under
+  Linux screen-reader support, now unmaintained (RUSTSEC-2026-0370–0372), do
+  not reach RenameIt, and `deny.toml` records why.
 
 ## [1.5.0] - 2026-09-25
 
