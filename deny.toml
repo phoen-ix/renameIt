@@ -103,6 +103,21 @@ ignore = [
     # second use of the crate. Drop this entry once koto moves to circular-buffer
     # 2.x, where it is fixed (2.0.1).
     { id = "RUSTSEC-2026-0256", reason = "circular-buffer: unsound only for elements whose Drop panics; koto_bytecode stores a plain u8+bool struct" },
+    # `zvariant`, `zvariant_derive` and `zbus_names` arrive under zbus 5, which
+    # eframe's screen-reader support (D218) uses on Linux: egui-winit ->
+    # accesskit_winit -> accesskit_unix -> atspi / zbus 5. The advisories are
+    # "unmaintained, merged into zbus 6.0.0 (2026-10-16)", not vulnerabilities,
+    # and there is no safe upgrade: no accesskit or atspi release is on zbus 6.
+    #
+    # Why it does not reach us: the crates are still the D-Bus wire format and
+    # name types zbus 5 is built on, and nothing in them is reported unsound or
+    # vulnerable. The Windows build does not compile them at all.
+    #
+    # What would make it reach us: a *vulnerability* advisory against zbus 5 or
+    # these crates. Drop these entries once accesskit_unix moves to zbus 6.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant: unmaintained (merged into zbus 6); under accesskit_unix's zbus 5, Linux AT-SPI only, no upgrade yet" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names: unmaintained (merged into zbus 6); under accesskit_unix's zbus 5, Linux AT-SPI only, no upgrade yet" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: unmaintained (merged into zbus 6); under accesskit_unix's zbus 5, Linux AT-SPI only, no upgrade yet" },
 ]
 
 [sources]
