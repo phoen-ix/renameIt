@@ -22,7 +22,7 @@ Known deltas — where the plan below and the program differ, with the decision 
 - **Tag writes** change a copy that `Platform::replace_file` swaps in (D203, D217); they remain `Undoability::None` (P2). A tag write on a symbolic link is a conflict in the preview (D241), and a copy a failed swap left as the only copy of the file is kept and named (D243).
 - **Dependencies** that §6 lists and the workspace does not use: `img-parts`, `lopdf` (P69), `unicase`, `unicode-segmentation`, `id3` (D60), `insta`.
 - **GUI**: a drop in Browser mode switches to Free Select at once rather than offering to; the status bar has one **Undo** button, not an *Undo ▾* stack; F2 and double-click open the inline rename (no middle-click); the row menu is D125's (plus P111's *Remove from Free Select*), with no *exclude from this run*, *open* or *properties*; there are no per-row resolution actions and no conflict policy (P4, P114); Settings has Batch Replace, Music Styles, Casing Exceptions, Display, File System, Startup, Shell Integration, Appearance and Problem Solver, and no Renaming, Scripting or Advanced page (P71, P88).
-- **Quality strategy**: no golden snapshot tests (`insta` is not a dependency — behaviour is pinned by named tests and proptest invariants); the performance gate is `plan_budget`'s absolute budget plus Spike B's frame and tile checks (D165), not a criterion trend gate; and CI type-checks Windows with `clippy --target` rather than `cargo xwin build` (D17).
+- **Quality strategy**: no golden snapshot tests of data (`insta` is not a dependency — behaviour is pinned by named tests and proptest invariants); the GUI's screens are image snapshots, rendered on lavapipe on Linux, and double as the docs' screenshots (D248); the performance gate is `plan_budget`'s absolute budget plus Spike B's frame and tile checks (D165), not a criterion trend gate; and CI type-checks Windows with `clippy --target` rather than `cargo xwin build` (D17).
 
 
 
@@ -394,7 +394,7 @@ Acceptance: the behaviour sweep closed; zip + exe artifacts published by CI tag 
 - *Preview truth*: the previewed name equals the on-disk name after execute, for every item, including multi-op pipelines and counters.
 - *Case-insensitivity safety*: plans containing case-only renames and A↔B swaps succeed via temp-name two-phase on a case-insensitive FS (exercised for real on the Windows runner).
 
-~~**Golden tests (insta).**~~ **As built: named behaviour tests, not snapshots** — `insta` is not a dependency. Fixtures: the shipped presets, the batch-replace rules, the casing exception lists and the nine example scripts, each exercised end to end on synthetic trees (`tests/engine.rs`, `tests/ported_scripts.rs`, and `ren-cli`'s test that loads every shipped example).
+~~**Golden tests (insta).**~~ **As built: named behaviour tests, not snapshots** — `insta` is not a dependency. The one exception is pixels: `crates/ren-gui/tests/snapshots.rs` compares each documented screen with its image in `docs/screenshots/` (D248). Fixtures: the shipped presets, the batch-replace rules, the casing exception lists and the nine example scripts, each exercised end to end on synthetic trees (`tests/engine.rs`, `tests/ported_scripts.rs`, and `ren-cli`'s test that loads every shipped example).
 
 **Integration tests.** `tempfile`/`assert_fs` trees; hostile cases: locked file mid-batch (Windows), read-only targets, >260-char paths, unicode/emoji, reserved names (`CON`, trailing dots/spaces), partial-failure rollback and journal recovery after a simulated crash.
 

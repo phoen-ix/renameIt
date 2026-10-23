@@ -26,6 +26,17 @@ ships first. MIT-licensed.
   first.
 - **Data is ours (D6):** shipped defaults — presets, scripts, casing rules,
   the batch-replace list — are our own data in our own formats.
+- **glow only in the shipped app (D14, D248):** `wgpu` is a Linux
+  dev-dependency of `ren-gui` for the snapshot suite and nothing else. CI fails
+  if `cargo tree -e no-dev -i wgpu` (or `-i colored`, D248's test-only
+  MPL-2.0 crate) finds anything on either target.
+- **The snapshots are the docs' screenshots (D248):**
+  `crates/ren-gui/tests/snapshots.rs` compares each screen with
+  `docs/screenshots/<name>.png`, rendered on Mesa's lavapipe (Linux only; apt
+  `mesa-vulkan-drivers`, without which those tests fail). A change that moves
+  pixels fails `cargo test` until the images are regenerated — look at every
+  changed PNG before committing it. Demo folders sit at fixed paths under
+  `/tmp/renameit-docs/` so the address bar renders the same everywhere.
 - **Session hygiene:** before ending a session, the quality gate below must be
   green, decisions recorded, work committed.
 
@@ -37,6 +48,8 @@ ships first. MIT-licensed.
 - `docs/MIGRATION-legacy-scripts.md` — porting a legacy `.frs` script to Koto
 - `docs/manual-checks.md` — the few things CI cannot prove, and how to check them
 - `docs/spikes/` — written verdicts on the risky assumptions
+- `docs/screenshots/` — the snapshot images and their gallery (`README.md`);
+  `scripts/docs-screenshots.sh [outdir]` renders them all
 - `deny.toml` / `about.toml` — which licences are allowed (D2, D238) / the
   notices a release ships (D237)
 - `crates/` — Cargo workspace: `ren-core` (engine), `ren-platform` (OS traits),
@@ -47,6 +60,9 @@ ships first. MIT-licensed.
 - Engine semantics: unit tests beside the code, plus proptest invariants (no
   plan collision, no file loss, exact undo, preview == disk result) in
   `crates/ren-core/tests/properties.rs`.
+- Screens: `UPDATE_SNAPSHOTS=1 cargo test -p ren-gui --test snapshots` rewrites
+  the images that changed; `scripts/docs-screenshots.sh` renders every one and
+  runs oxipng (`OXIPNG=` names the binary).
 - Run the GUI: `cargo run -p ren-gui`. Headless: `cargo run -p ren-cli -- preview|apply|undo`
   on a tempdir.
 - Windows behaviour (attributes, created-date, case-insensitive renames) is
@@ -63,6 +79,7 @@ cargo clippy --workspace --lib --bins --target x86_64-pc-windows-msvc -- -D warn
 cargo test --workspace
 TZ=Asia/Kolkata cargo test --workspace   # P61: a UTC agent cannot tell Local from Utc
 cargo deny check
+for t in x86_64-unknown-linux-gnu x86_64-pc-windows-msvc; do for p in wgpu colored; do cargo tree -e no-dev -i $p --target $t; done; done   # prints nothing (D248)
 cargo run --release -p ren-core --example plan_budget   # a 10k-file preset plan, p95 under 50 ms
 cargo run --release -p ren-gui --example spike_preview_headless -- 10000 100        # frame budget (D165)
 cargo run --release -p ren-gui --example spike_preview_headless -- 10000 100 grid   # grid tile count (D165)

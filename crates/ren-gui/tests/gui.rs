@@ -467,10 +467,11 @@ fn refreshing_reads_the_files_again_rather_than_trusting_what_it_remembers() {
 
 /// With the Thumbnail column on, a picture shows a small preview of itself.
 ///
-/// The picture itself cannot be asserted headlessly — there is no GPU and no
-/// snapshot testing (D24) — so what is asserted is the alt text, which is the
-/// only route a texture has into the accessibility tree and therefore both the
-/// screen-reader label and the handle every test here has on a tile (P73).
+/// The picture itself is not asserted here — this suite has no GPU (D24), and
+/// the pixels are `tests/snapshots.rs`'s (D248) — so what is asserted is the
+/// alt text, which is the only route a texture has into the accessibility tree
+/// and therefore both the screen-reader label and the handle every test here
+/// has on a tile (P73).
 #[test]
 fn a_picture_gets_a_thumbnail_in_the_list() {
     let fixture = Fixture::pictures(&["holiday.jpg", "notes.txt"]);

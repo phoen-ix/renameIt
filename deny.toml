@@ -34,6 +34,8 @@ allow = [
     "Zlib",
 ]
 confidence-threshold = 0.93
+# The test tree too (D248): it is built on CI and on every developer's machine.
+include-dev = true
 # So an entry nothing uses any more shows up, instead of quietly widening the
 # list (D238).
 unused-allowed-license = "warn"
@@ -49,6 +51,16 @@ unused-allowed-license = "warn"
 [[licenses.exceptions]]
 name = "epaint_default_fonts"
 allow = ["OFL-1.1", "Ubuntu-font-1.0"]
+
+# D248: `colored` (MPL-2.0) is the terminal colouring of `dify`, the image
+# diff `egui_kittest` compares snapshots with. A dev-dependency of a
+# dev-dependency: it is built for the Linux snapshot tests and never linked
+# into anything we ship — CI's no-wgpu check also asserts it stays out of the
+# non-dev tree. Scoped to the crate, like the font exception above, so no crate
+# of shipped code can arrive under it.
+[[licenses.exceptions]]
+name = "colored"
+allow = ["MPL-2.0"]
 
 [bans]
 multiple-versions = "warn"

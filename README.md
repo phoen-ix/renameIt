@@ -3,6 +3,8 @@
 A batch file renamer written in Rust. Modern UI, cross-platform core, Windows
 ships first. MIT licensed.
 
+<img src="docs/screenshots/main-preview.png" alt="The RenameIt window: a folder of holiday photos, a Find &amp; Replace card and a Set Casing card on the left, and the file list showing each old name beside its new one with the changed part highlighted" width="800">
+
 > **Status: 1.5.1.** Browse or drag in files, stack up as many operations as you
 > like, watch the composed result preview as you type, save the stack as a
 > preset and run it again later — or from the command line. One rename is one
@@ -48,6 +50,10 @@ sudo apt-get install -y pkg-config libx11-dev libxcursor-dev libxrandr-dev \
 cargo build --workspace
 cargo test  --workspace
 ```
+
+`cargo test` also renders the GUI's snapshot suite, which draws with Mesa's
+software Vulkan driver: `sudo apt-get install -y mesa-vulkan-drivers` (see
+[Screenshots](#screenshots)).
 
 ## Trying it
 
@@ -128,6 +134,10 @@ what is on screen is ever decoded, so a folder of ten thousand costs a
 screenful of work; and renaming them moves the pictures rather than reading
 them again.
 
+<img src="docs/screenshots/main-grid.png" alt="The grid view: a tile per file with its picture, its name and the new name the run will write; a long name is clipped and a file that is not a picture shows a placeholder" width="800">
+
+<img src="docs/screenshots/card-music-rename.png" alt="A Music Rename card naming four tracks Artist - Title from their own tags" width="800">
+
 Two operations change what is *inside* a file rather than its name — **Music
 Tagger** writes tags from the filename, **Remove Tags** strips ID3v1, ID3v2 and
 Lyrics3 blocks — and neither can be undone. The GUI asks before running one and
@@ -173,6 +183,8 @@ card set to *Process: Name* sees the stem without its extension. That is the
 whole point — a position measured against the wrong string is wrong by exactly
 the difference.
 
+<img src="docs/screenshots/visual-assist.png" alt="Visual Assist open on a Find &amp; Replace card: the name beach_at_sunset with _at_ selected" width="800">
+
 ## Presets
 
 A preset is this same file with a name and no `[source]` — it runs over whatever
@@ -191,6 +203,8 @@ the preset folder, ignoring case. The six default presets — *Add prefix to
 filename* is one — are written the first time the app starts; a machine that
 has only ever run `ren-cli` has none until you import one. `ren-cli presets
 list` shows what is there.
+
+<img src="docs/screenshots/presets-drawer.png" alt="The preset drawer beside the file list, listing the six default presets with Load, Append and Run" width="800">
 
 `--job` and `--preset` differ in exactly one way: a job file brings its own
 source, a preset borrows yours. So `--preset` takes a folder and honours
@@ -351,6 +365,8 @@ or a killed process leaves a record of exactly what was under way.
   those batches did; **Leave as is** hides the banner and keeps the journals. A
   journal another RenameIt window is still writing is named as running and is
   never offered for rollback.
+<img src="docs/screenshots/main-recovery-banner.png" alt="The banner at start-up naming a batch that did not finish, with Roll back and Leave as is" width="800">
+
 * **From the command line**, `ren-cli recover` lists the same, and
   `ren-cli recover --rollback` reverts them. An `apply` that exits 3 is the cue.
 * **Cancel** during a run is not an interruption: it stops between two files,
@@ -401,6 +417,7 @@ cargo clippy --workspace --lib --bins --target x86_64-pc-windows-msvc -- -D warn
 cargo test --workspace
 TZ=Asia/Kolkata cargo test --workspace   # P61: a UTC agent cannot tell Local from Utc
 cargo deny check
+for t in x86_64-unknown-linux-gnu x86_64-pc-windows-msvc; do for p in wgpu colored; do cargo tree -e no-dev -i $p --target $t; done; done   # prints nothing (D248)
 cargo run --release -p ren-core --example plan_budget   # a 10k-file preset plan, p95 under 50 ms
 cargo run --release -p ren-gui --example spike_preview_headless -- 10000 100        # frame budget (D165)
 cargo run --release -p ren-gui --example spike_preview_headless -- 10000 100 grid   # grid tile count (D165)
@@ -414,6 +431,23 @@ The Windows cross-check prints one build-script warning — the icon needs a
 Windows host to embed. That is expected off Windows and is not a failure; the
 release build runs on `windows-latest`, where it does not appear.
 
+## Screenshots
+
+Every image in [`docs/screenshots/`](docs/screenshots/README.md) — the gallery
+there walks through each screen — is a test as well as a picture.
+`crates/ren-gui/tests/snapshots.rs` drives the real window to each screen,
+renders it at 2× on Mesa's lavapipe, and fails when the result no longer matches
+the committed image (Linux only, D248). After a change that moves pixels:
+
+```sh
+sudo apt-get install -y mesa-vulkan-drivers                  # once: the software renderer
+UPDATE_SNAPSHOTS=1 cargo test -p ren-gui --test snapshots    # rewrite the images that changed
+scripts/docs-screenshots.sh [outdir]                         # or render all of them, then oxipng
+```
+
+Look at every changed PNG before committing it. The manual **Docs screenshots**
+workflow on GitHub renders the same set and returns it as an artifact.
+
 ## Documentation
 
 - [`CLAUDE.md`](CLAUDE.md) — how to work in this repo
@@ -423,6 +457,7 @@ release build runs on `windows-latest`, where it does not appear.
 - [`docs/MIGRATION-legacy-scripts.md`](docs/MIGRATION-legacy-scripts.md) — porting a legacy `.frs` script to Koto
 - [`docs/spikes/`](docs/spikes/) — written verdicts on the risky assumptions
 - [`docs/manual-checks.md`](docs/manual-checks.md) — the few things CI cannot prove, and how to check them
+- [`docs/screenshots/README.md`](docs/screenshots/README.md) — every screen, one picture each
 
 ## Releases
 

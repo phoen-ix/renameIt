@@ -29,14 +29,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # eframe/winit/glow need these headers. The toolchain itself comes from
-      # rust-toolchain.toml, which rustup honours automatically (D12).
+      # eframe/winit/glow need these headers; mesa-vulkan-drivers is lavapipe,
+      # the software renderer the snapshot suite draws with (D248). The
+      # toolchain itself comes from rust-toolchain.toml, which rustup honours
+      # automatically (D12).
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pkg-config libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
-            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libgl1-mesa-dev
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libgl1-mesa-dev \
+            mesa-vulkan-drivers
 
       - uses: Swatinem/rust-cache@v2
 
@@ -81,6 +84,20 @@ jobs:
             done
           done
 
+      # D248: wgpu renders the snapshot suite and is a dev-dependency only. D14
+      # keeps the shipped app on glow, and a feature that leaked from a test
+      # dependency into a normal one would pass every test, so the non-dev
+      # tree is checked on both targets — for `colored` too, whose MPL-2.0
+      # deny.toml allows only because it never ships.
+      - name: The shipped app stays glow-only (no wgpu)
+        run: |
+          for t in x86_64-unknown-linux-gnu x86_64-pc-windows-msvc; do
+            for p in wgpu colored; do
+              out=$(cargo tree --locked -e no-dev -i "$p" --target "$t")
+              [ -z "$out" ] || { echo "$out"; echo "::error::$p reached the shipped tree on $t (D14, D248)"; exit 1; }
+            done
+          done
+
       # Deliberately **not** UTC. GitHub's runners are, and so is the machine
       # this is usually developed on — which means a test written against
       # `chrono::Local` passes just as happily against a UTC-hardcoded
@@ -93,6 +110,19 @@ jobs:
         run: cargo test --locked --workspace
         env:
           TZ: Asia/Kolkata
+
+      # A snapshot that no longer matches leaves <name>.new.png and
+      # <name>.diff.png beside the committed image (D248).
+      - name: Keep the snapshot diffs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: snapshot-diffs
+          path: |
+            docs/screenshots/*.new.png
+            docs/screenshots/*.diff.png
+          if-no-files-found: ignore
+          retention-days: 7
 
       # The planning budget on the real engine: the bench's 10 000-row
       # `preset` listing through `ren_core::plan`, p95 against a budget. Spike

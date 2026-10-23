@@ -1,0 +1,45 @@
+name: Docs screenshots
+
+# Renders docs/screenshots/*.png with scripts/docs-screenshots.sh: the
+# snapshot suite (crates/ren-gui/tests/snapshots.rs, D248) with every image
+# rewritten on Mesa's lavapipe. The PNGs come back as the `docs-screenshots`
+# artifact - this workflow never commits. Unzip it into docs/screenshots/,
+# look at the diff, optimise (oxipng -o 4 --strip safe) and commit yourself.
+#
+# Manual only. CI's Linux job already compares every snapshot with the
+# committed image on each push; this is for regenerating them on purpose.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-screenshots
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  screenshots:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libgl1-mesa-dev \
+            mesa-vulkan-drivers
+
+      - name: Render the screenshots
+        run: scripts/docs-screenshots.sh "$RUNNER_TEMP/screenshots"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: docs-screenshots
+          path: ${{ runner.temp }}/screenshots/
+          retention-days: 14

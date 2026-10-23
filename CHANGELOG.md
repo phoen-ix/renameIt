@@ -8,6 +8,13 @@ and the reasoning behind each default lives beside the code it governs.
 
 ## [Unreleased]
 
+### Added
+
+- `docs/screenshots/`: a picture of every screen, with a gallery that walks
+  through them. Each picture is also a test — CI renders the window on Linux
+  and fails when a screen no longer matches its picture (**D248**). The
+  shipped app is unchanged: the renderer is a test-only dependency.
+
 ### Changed
 
 - eframe/egui 0.37 (egui_table 0.11), lru 0.19, and every other dependency on

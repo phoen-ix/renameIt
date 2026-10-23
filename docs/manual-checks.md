@@ -6,7 +6,12 @@ actually verified.
 
 Everything else in this project is checked automatically: `cargo test` covers
 the engine and, since M2, the GUI itself through `egui_kittest` (D24) — no
-display, no GPU, both CI runners.
+display, no GPU, both CI runners. Since D248 the Linux runner also renders
+each documented screen on Mesa's lavapipe and compares it with its image in
+`docs/screenshots/` (`crates/ren-gui/tests/snapshots.rs`), so a check that is
+only about *what a screen looks like* is a snapshot now, not a row here. The
+snapshots render at a fixed 2× scale in a 1280×800 window, so the Windows
+scaling rows below stay manual.
 
 **Recording a result.** Each section ends with a **Results** line. When you
 work through a section, replace *not yet recorded* with one line per run:
@@ -44,23 +49,23 @@ ones `docs/DESIGN.md` predicted would bite.
 ## M8 — non-Latin filenames (writing systems)
 
 `every_bundled_script_rasterises` proves a real face claims each character and
-that epaint got an outline out of it. What it cannot prove is whether the result
-*reads* — the harness never looks at pixels.
+that epaint got an outline out of it. Whether the result *reads* is the
+`main-writing-systems` snapshot now (D248): Japanese, Chinese, Korean, Thai,
+Devanagari, Arabic, Hebrew, Greek, Cyrillic and an emoji, drawn — no boxes, even
+rows, joined Arabic, each RTL name's words swapped (**P95**), a monochrome
+emoji. What is left is shaping detail too fine to judge at that size, and
+interaction.
 
 Make a folder with one file per row and open it:
 
 | # | Name | Expect |
 | --- | --- | --- |
-| 1 | `日本語のファイル.txt`, `中文文件.txt`, `한국어.txt` | Legible, no boxes, and the row height unchanged from a Latin-only listing |
-| 2 | `ไฟล์ภาษาไทย.txt` | Tone marks sit **above** their consonants, not beside them |
-| 3 | `हिन्दी फ़ाइल.txt` | The `ि` matra appears *before* the consonant it follows in memory — that is the shaper reordering correctly |
-| 4 | `مرحبا بالعالم.txt` | Letters **joined**, not isolated. The two words will be in the wrong order (**P95**) — that is the known bidi gap, not a font problem |
-| 5 | `שלום עולם.txt` | Same: each word right, the words swapped |
-| 6 | A name with an emoji | Monochrome, not colour (**P95**) |
-| 7 | Click into the middle of the Hebrew name in an F2 rename box | Known-bad: epaint emits phantom zero-width glyphs for RTL runs, so the caret lands wrong. Worth confirming it does not *crash* |
-| 8 | A file whose name is not valid UTF-8 — on Linux, `printf 'x' > $'caf\xe9.txt'` | Row shows an amber ⚠ and *name is not text*; the status line says one item was left alone; **F2 renames it** and Ctrl+Z puts the original bytes back |
+| 1 | `ไฟล์ภาษาไทย.txt` | Tone marks sit **above** their consonants, not beside them |
+| 2 | `हिन्दी फ़ाइल.txt` | The `ि` matra appears *before* the consonant it follows in memory — that is the shaper reordering correctly |
+| 3 | Click into the middle of the Hebrew name `שלום עולם.txt` in an F2 rename box | Known-bad: epaint emits phantom zero-width glyphs for RTL runs, so the caret lands wrong. Worth confirming it does not *crash* |
+| 4 | A file whose name is not valid UTF-8 — on Linux, `printf 'x' > $'caf\xe9.txt'` | Row shows an amber ⚠ and *name is not text*; the status line says one item was left alone; **F2 renames it** and Ctrl+Z puts the original bytes back |
 
-Row 8 is the one that used to take the whole window down, so it is the one to
+Row 4 is the one that used to take the whole window down, so it is the one to
 repeat after any change to the listing or the journal.
 
 **Results:** *not yet recorded.*
@@ -237,11 +242,11 @@ than an accessible name, so there is no node for the harness to aim at.
 **Why it is here.** Everything about a thumbnail that a headless harness can
 reach is already tested: which files are asked for, at which size, how many,
 whether a refusal is remembered, whether a rename moves a tile rather than
-re-decoding it. What it cannot reach is *the picture*. There is no GPU (D24),
-there is no snapshot testing, and the only thing about a texture that appears in
-the accessibility tree is its `alt_text`. So a tile that drew the wrong file's
-picture, drew it upside down, or drew nothing at all would pass every test in
-the suite.
+re-decoding it. The `main-grid` snapshot (D248) adds the pictures of its own
+fixture: tiles with their picture, name and new name, a long name clipped, and
+⊘ for a file that is not a picture. What no fixture shows is a real camera's
+output — Exif orientation, a huge file, a scaled screen — so a tile that drew a
+real photograph upside down would still pass every test in the suite.
 
 A tempdir of about thirty photographs is the fixture: some portrait, some
 landscape, at least one taken on a phone (for the Exif orientation), one very
@@ -249,21 +254,20 @@ large, and one text file renamed to `.jpg`.
 
 | # | Do this | Expect |
 |---|---|---|
-| 1 | Open the folder, press **Grid** on the source bar | Tiles, each with its picture, its name, and what the run will write |
-| 2 | Look at the phone photograph taken in portrait | Upright. If Exif orientation were dropped it would be on its side, and this is the single most visible thing this feature can get wrong |
-| 3 | Compare each tile's picture with its name | They match. Nothing here proves that automatically — the cache is keyed by path, length and mtime, and a wrong key would show a plausible picture under the wrong name |
-| 4 | Settings ▸ Display, drag the **Size** slider from end to end | Tiles resize smoothly. Between the three decode buckets the picture is scaled, never re-read — it must not flicker or blank while you drag |
-| 5 | Tick **Draw a border around thumbnails** | A one-pixel border, tight to the picture rather than to the tile |
-| 6 | Put a Find & Replace card on the stack | The second line under each tile is the new name, diffed, with the ⚠ if the extension changes |
-| 7 | Narrow the row filter to **Changed** | Unchanged tiles disappear entirely, and the ones left still show their own pictures |
-| 8 | Scroll fast to the bottom of a folder of several hundred | Tiles fill in behind you; the window stays responsive and the memory in Task Manager settles rather than climbing |
-| 9 | While that is happening, type in a Find box | Keystrokes keep up. This is what D134's private thread pool is for — on rayon the preview would be behind the decodes |
-| 10 | Look at the text file renamed `.jpg` | A ⊘ placeholder with "cannot be read" on hover, not a blank square and not a spinner |
-| 11 | Rename all thirty (F5), then Undo (F4) | The pictures stay put through both. No blanking, no re-decode — that is D139's rekey, and a flicker here means it missed |
-| 12 | Press **F9** | The folder is read again. Nothing visibly changes, which is the point; edit a photograph in another program first and it should be the edited one afterwards |
-| 13 | Switch to **List**, tick the **Thumb** column in Settings ▸ Display | Every row grows to the tile size — that is the cost, and it should be obvious rather than surprising |
-| 14 | Windows at 125% and 150% scaling | Tiles are sharp, not soft. The bucket above the drawn size is what makes this work, so a soft tile means the scale is not reaching `key_for` |
-| 15 | Drop a 64 000 × 64 000 PNG in the folder | "too large to preview" on that one tile, promptly. The app stays responsive and memory does not spike |
+| 1 | Open the folder, press **Grid** on the source bar, and look at the phone photograph taken in portrait | Upright. If Exif orientation were dropped it would be on its side, and this is the single most visible thing this feature can get wrong |
+| 2 | Compare each tile's picture with its name | They match. Nothing here proves that automatically — the cache is keyed by path, length and mtime, and a wrong key would show a plausible picture under the wrong name |
+| 3 | Settings ▸ Display, drag the **Size** slider from end to end | Tiles resize smoothly. Between the three decode buckets the picture is scaled, never re-read — it must not flicker or blank while you drag |
+| 4 | Tick **Draw a border around thumbnails** | A one-pixel border, tight to the picture rather than to the tile |
+| 5 | Put a Find & Replace card on the stack | The second line under each tile is the new name, diffed, with the ⚠ if the extension changes |
+| 6 | Narrow the row filter to **Changed** | Unchanged tiles disappear entirely, and the ones left still show their own pictures |
+| 7 | Scroll fast to the bottom of a folder of several hundred | Tiles fill in behind you; the window stays responsive and the memory in Task Manager settles rather than climbing |
+| 8 | While that is happening, type in a Find box | Keystrokes keep up. This is what D134's private thread pool is for — on rayon the preview would be behind the decodes |
+| 9 | Hover the text file renamed `.jpg` | "cannot be read" — the ⊘ itself is the snapshot's |
+| 10 | Rename all thirty (F5), then Undo (F4) | The pictures stay put through both. No blanking, no re-decode — that is D139's rekey, and a flicker here means it missed |
+| 11 | Press **F9** | The folder is read again. Nothing visibly changes, which is the point; edit a photograph in another program first and it should be the edited one afterwards |
+| 12 | Switch to **List**, tick the **Thumb** column in Settings ▸ Display | Every row grows to the tile size — that is the cost, and it should be obvious rather than surprising |
+| 13 | Windows at 125% and 150% scaling | Tiles are sharp, not soft. The bucket above the drawn size is what makes this work, so a soft tile means the scale is not reaching `key_for` |
+| 14 | Drop a 64 000 × 64 000 PNG in the folder | "too large to preview" on that one tile, promptly. The app stays responsive and memory does not spike |
 
 **Results:** *not yet recorded.*
 
@@ -375,7 +379,7 @@ real desktop and a real screen reader show.
 |---|---|---|
 | 1 | Light theme: select a few rows, with *Shade every other row* on | A navy bar at the left of each selected row and tile, clearly distinct from a stripe (P113) |
 | 2 | **Tab** onto a card header | A focus outline in the selection colour |
-| 3 | The grid over a folder of long Free Format names, scrolling | Columns stay even; a long name is clipped, not widening its tile |
+| 3 | The grid over a folder of long Free Format names, **scrolling** (a clipped name at rest is the `main-grid` snapshot) | Columns stay even while it scrolls |
 | 4 | The Filename Editor over a folder of CJK names | The glyphs, not ◻ (D161) |
 | 5 | Type a date into Set Date digit by digit, e.g. `2024-02-30` then correct it | What you type stays while you type; nothing snaps back or turns into another date |
 | 6 | Run a preset with `<Ask>` and type at once, then press Enter | The prompt had the keyboard, and Enter renames |

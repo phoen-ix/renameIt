@@ -39,6 +39,14 @@ ron.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 
+# D248: `tests/snapshots.rs` renders the real window through wgpu on Mesa's
+# lavapipe and compares it with the PNGs in docs/screenshots. Linux only — the
+# one platform CI renders on — and test builds only: `cargo tree -e no-dev -i
+# wgpu` must stay empty (ci.yml checks it). `image` writes the fixture pictures.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+egui_kittest = { workspace = true, features = ["snapshot", "wgpu"] }
+image.workspace = true
+
 # Stamps the Windows .exe with our icon and version metadata (build.rs).
 # MIT; it depends on `toml` and `version_check`, both MIT/Apache-2.0.
 # Audited under D2.

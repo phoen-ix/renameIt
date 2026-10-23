@@ -127,8 +127,10 @@ eframe = { version = "0.37.0", default-features = false, features = [
 # those draw as boxes. Same faces, same crate and licences as 0.36 (D247).
 egui = { version = "0.37.0", features = ["monochrome_emoji_fonts"] }
 egui_table = "0.11.0"
-# D24: drives the real App headlessly — no display, no GPU. Default features
-# only; `snapshot`/`wgpu` would pull in a renderer we do not want in CI.
+# D24: drives the real App headlessly — no display, no GPU. ren-gui adds
+# `snapshot` + `wgpu` on Linux for its snapshot suite (D248): a dev-dependency
+# only, so the shipped binary stays glow-only and CI checks wgpu never reaches
+# the non-dev tree.
 egui_kittest = "0.37.0"
 # Native file dialogs. Its defaults are xdg-portal + wayland, so the Linux
 # build needs no GTK.
