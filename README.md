@@ -175,7 +175,7 @@ WMA and TTA are **not** supported — lofty handles neither. See D55 in
 Operations that work by position — Add, Remove, Move Section — and Find &
 Replace's *Look For* box each carry a ⌖ button, and **F3** opens the same thing.
 It shows the text that operation is handed for one of your files; select part of
-it and the boxes fill in.
+it and press **Select** to fill the box.
 
 The text it shows is the operation's own input, which is not always the file
 name: a card further down the stack sees what the cards above it produced, and a
@@ -365,7 +365,8 @@ or a killed process leaves a record of exactly what was under way.
   those batches did; **Leave as is** hides the banner and keeps the journals. A
   journal another RenameIt window is still writing is named as running and is
   never offered for rollback.
-<img src="docs/screenshots/main-recovery-banner.png" alt="The banner at start-up naming a batch that did not finish, with Roll back and Leave as is" width="800">
+
+  <img src="docs/screenshots/main-recovery-banner.png" alt="The banner at start-up naming a batch that did not finish, with Roll back and Leave as is" width="800">
 
 * **From the command line**, `ren-cli recover` lists the same, and
   `ren-cli recover --rollback` reverts them. An `apply` that exits 3 is the cue.

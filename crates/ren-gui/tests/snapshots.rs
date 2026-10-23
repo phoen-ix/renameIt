@@ -257,8 +257,8 @@ fn main_preview_dark() {
 fn main_empty() {
     let demo = Demo::new("Empty folder");
     let mut harness = light(demo.app());
-    // The "Nothing here" message is painted, not a widget.
     assert!(harness.state().session().entries().is_empty());
+    harness.get_by_label("No files listed");
     shoot(&mut harness, "main-empty");
 }
 
@@ -274,16 +274,20 @@ fn main_conflict() {
     shoot(&mut harness, "main-conflict");
 }
 
+/// Three files, not the whole holiday folder: the run log opens at a
+/// scroll area's minimum height, which a fourth line would overflow.
 #[test]
 fn main_after_run() {
-    let demo = holiday();
+    let demo = Demo::new("Holiday 2026")
+        .pictures(&["beach_at_sunset.jpg", "harbour_boats.jpg"])
+        .files(&["train_tickets.pdf"]);
     let mut harness = light(demo.app());
     tidy_up(&mut harness);
     harness.state_mut().run_now();
     settle(&mut harness);
     assert!(demo.dir.join("Train Tickets.pdf").exists());
     let status = harness.state().status().unwrap_or_default().to_owned();
-    assert!(status.contains("Renamed 9 items"), "{status}");
+    assert!(status.contains("Renamed 3 items"), "{status}");
     shoot(&mut harness, "main-after-run");
 }
 
@@ -377,7 +381,13 @@ fn palette_add_operation() {
     let mut harness = light(demo.app());
     harness.state_mut().open_palette();
     settle(&mut harness);
-    harness.get_by_label("Music Rename");
+    // Narrowed, so the list ends on a whole entry: the full catalogue
+    // scrolls. The search box has the focus from the moment it opens.
+    harness.event(egui::Event::Text("tags".to_owned()));
+    settle(&mut harness);
+    harness.get_by_label("Free Format");
+    harness.get_by_label("Remove Tags");
+    assert!(harness.query_by_label("Set Casing").is_none());
     shoot(&mut harness, "palette-add-operation");
 }
 
@@ -467,6 +477,8 @@ fn dialog_ask() {
 fn visual_assist() {
     let demo = holiday();
     let mut harness = light(demo.app());
+    // Taller, so the strip fits on the card stack without scrolling.
+    harness.set_size(egui::vec2(1280.0, 1000.0));
     *harness.state_mut().operation_mut() = OpKind::Replace(Replace::new("", "-"));
     settle(&mut harness);
     harness.get_by_label_contains("⌖ find").click();
@@ -475,50 +487,65 @@ fn visual_assist() {
     harness.state_mut().visual_assist_select(5, 4);
     settle(&mut harness);
     harness.get_by_label_contains("Selection length: 4");
+    harness.get_by_label("Select");
     shoot(&mut harness, "visual-assist");
 }
 
-fn settings_page(page: &str, name: &str) {
+/// `expect` is a label only that page shows, so a missed rail click fails
+/// here rather than only in the pixel diff.
+fn settings_page(page: &str, expect: &str, name: &str) {
     let demo = holiday();
     let mut harness = light(demo.app());
     open_settings_page(&mut harness, page);
-    harness.get_by_label("Close");
+    harness.get_by_label_contains(expect);
     shoot(&mut harness, name);
 }
 
 #[test]
 fn settings_batch_replace() {
-    settings_page("Batch Replace", "settings-batch-replace");
+    settings_page(
+        "Batch Replace",
+        "a new Batch Replace operation starts from",
+        "settings-batch-replace",
+    );
 }
 
 #[test]
 fn settings_music_styles() {
-    settings_page("Music Styles", "settings-music-styles");
+    settings_page("Music Styles", "+ Add style", "settings-music-styles");
 }
 
 #[test]
 fn settings_casing_exceptions() {
-    settings_page("Casing Exceptions", "settings-casing-exceptions");
+    settings_page(
+        "Casing Exceptions",
+        "Exception words",
+        "settings-casing-exceptions",
+    );
 }
 
 #[test]
 fn settings_display() {
-    settings_page("Display", "settings-display");
+    settings_page("Display", "Shade every other row", "settings-display");
 }
 
 #[test]
 fn settings_file_system() {
-    settings_page("File System", "settings-file-system");
+    settings_page(
+        "File System",
+        "Hidden files and folders",
+        "settings-file-system",
+    );
 }
 
 #[test]
 fn settings_startup() {
-    settings_page("Startup", "settings-startup");
+    settings_page("Startup", "Uncheck Subfolders", "settings-startup");
 }
 
 #[test]
 fn settings_appearance() {
-    settings_page("Appearance", "settings-appearance");
+    settings_page("Appearance", "Interface size", "settings-appearance");
 }
 
 #[test]

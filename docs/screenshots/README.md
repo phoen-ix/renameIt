@@ -19,15 +19,15 @@ The same in the dark theme (Settings ▸ Appearance).
 
 ## An empty folder
 
-The list says why it is empty and how to fill it.
+A folder with nothing in it: the list reads *No files listed*.
 
-<img src="main-empty.png" alt="The main window over an empty folder, with the message Nothing here" width="800">
+<img src="main-empty.png" alt="The main window over an empty folder, with the message No files listed" width="800">
 
 ## A conflict
 
 Two files would end up with the same name, so the whole run is blocked: the
-Conflicts filter counts them and the Rename button is greyed out with the
-reason.
+status bar counts the conflicts and Rename is greyed out (hover it for the
+reason).
 
 <img src="main-conflict.png" alt="Two rows marked as conflicting and the Rename button disabled" width="800">
 
@@ -68,9 +68,10 @@ names the file that was mid-change and offers **Roll back** or **Leave as is**.
 
 ## Adding an operation
 
-**+ Add operation** or **Ctrl+K**: every operation, searchable.
+**+ Add operation** or **Ctrl+K**: every operation, in groups; typing narrows
+the list — here *tags* leaves the Music operations and Free Format.
 
-<img src="palette-add-operation.png" alt="The add-operation palette listing the operations" width="800">
+<img src="palette-add-operation.png" alt="The add-operation palette with tags typed in the search box, listing Music Rename, Music Tagger, Remove Tags and Free Format" width="800">
 
 ## Presets
 
@@ -101,7 +102,7 @@ A pipeline with `<Ask>` in it asks for the text when you press Rename.
 ## Visual Assist
 
 The ⌖ button beside a position or find box (or **F3**) shows the text that
-operation is handed; select part of it and the boxes fill in.
+operation is handed; select part of it and press **Select** to fill the box.
 
 <img src="visual-assist.png" alt="The Visual Assist strip on a Find &amp; Replace card: the name beach_at_sunset with _at_ selected" width="800">
 
@@ -160,5 +161,6 @@ put back before it does.
 
 Not pictured: **About** (it carries the version, so every release would change
 it), **Shell Integration** (a Linux render shows the page's "nothing to
-install" branch, not the Windows one) and **Problem Solver** (it prints the
-machine's own home folder).
+install" branch, not the Windows one), **Problem Solver** (it prints the
+machine's own home folder) and the **row menu** (while it is open the preview
+never settles in the test harness).
