@@ -14,7 +14,7 @@ ships first. MIT-licensed.
 3. Behaviour that is not obvious from the code is explained in the doc comment
    beside it. Read the module doc before changing a module.
 
-## Hard rules
+## Invariants
 
 - **Licensing (D2):** the project is MIT. Any new dependency must be
   MIT/Apache-2.0/BSD/Zlib/ISC-class — check before adding; `cargo-deny`
