@@ -17,13 +17,13 @@ pub fn ui(ui: &mut egui::Ui, rules: &mut Vec<Replace>) -> bool {
     // list would put a field on two structs so one text box could remember
     // what was typed into it. egui's own temp store is where transient UI
     // state goes.
-    let bulk_id = ui.id().with("rule_bulk_add");
+    let bulk_id = ui.scope_id().with("rule_bulk_add");
     let mut bulk: String = ui.data_mut(|d| d.get_temp(bulk_id).unwrap_or_default());
     let bulk = &mut bulk;
 
     // A key per row that travels with it, so a row that moves keeps its own
     // cursor and undo history (`widgets::row_keys`).
-    let keys_id = ui.id().with("rule_keys");
+    let keys_id = ui.scope_id().with("rule_keys");
     let mut keys = crate::widgets::row_keys::RowKeys::load(ui, keys_id, rules.len());
 
     ui.horizontal(|ui| {

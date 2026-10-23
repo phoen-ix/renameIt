@@ -153,7 +153,7 @@ pub fn write_label(writes: usize) -> String {
 pub fn ui(ctx: &egui::Context, state: &Confirm) -> Outcome {
     let mut outcome = Outcome::Open;
 
-    let modal = egui::Modal::new(egui::Id::new("confirm_modal")).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::unique("confirm_modal")).show(ctx, |ui| {
         ui.set_width(460.0);
         ui.heading(if state.irreversible > 0 {
             format!("This run {}", state.verdict)
@@ -256,7 +256,7 @@ pub fn ui(ctx: &egui::Context, state: &Confirm) -> Outcome {
 pub fn reset_ui(ctx: &egui::Context) -> Outcome {
     let mut outcome = Outcome::Open;
 
-    let modal = egui::Modal::new(egui::Id::new("reset_modal")).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::unique("reset_modal")).show(ctx, |ui| {
         ui.set_width(460.0);
         ui.heading("Restore every setting to its defaults?");
         ui.add_space(6.0);

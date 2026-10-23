@@ -223,8 +223,13 @@ impl FormUi<'_> {
                 // them. Not a literal, which is the whole point.
                 let field =
                     (ui.available_width() - after.width(ui) - width::GUTTER).max(width::FIELD_MIN);
-                let mut row = Row { ui, field };
-                inner = Some(content(&mut row));
+                // The row's label names every control in the cell that has no
+                // name of its own — a number box has neither text nor a hint,
+                // so without this a screen reader announces "spin button".
+                ui.label_inputs_by(label.id, |ui| {
+                    let mut row = Row { ui, field };
+                    inner = Some(content(&mut row));
+                });
             })
             .response;
         self.ui.end_row();

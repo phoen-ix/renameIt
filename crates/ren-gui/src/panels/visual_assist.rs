@@ -37,13 +37,15 @@
 //!
 //! `TextEditOutput::cursor_range` is `Some` only while the field has focus, and
 //! egui *collapses the stored selection to a bare caret* the first time the
-//! field is drawn without it (`builder.rs:538`). Reading it when Select is
-//! clicked returns a zero-length range — `delete = 0`, `find = ""`, both silent
-//! no-ops. It happens to work by the accident that `AtomLayout` measures before
-//! it interacts, which egui documents nowhere. So the range is read from
-//! `state.cursor.range(&galley)` on every frame it is live and kept here, and
-//! `range(&galley)` clamps — which is what saves us when the picker switches to
-//! a shorter name with a longer selection stored.
+//! field is drawn without it (`builder.rs:617` in 0.37). Pressing Select takes
+//! the focus, so by the frame the button reports its click the field holds a
+//! zero-length range — `delete = 0`, `find = ""`, both silent no-ops, or a
+//! Select greyed out under the pointer. So the range is read from
+//! `state.cursor.range(&galley)` on every frame the field has focus, and only
+//! then, and kept here; and `range(&galley)` clamps — which is what saves us
+//! when the picker switches to a shorter name with a longer selection stored.
+//! (Up to egui 0.36 the unguarded read happened to work, by the accident that
+//! `AtomLayout` measured before it interacted.)
 
 use std::path::{Path, PathBuf};
 
@@ -229,7 +231,7 @@ fn refusal(why: NoSubject) -> &'static str {
 /// F3 does not need it — it is handled above the guard that stands the other
 /// shortcuts down while a text field has focus.
 pub fn field_id() -> egui::Id {
-    egui::Id::new("renameit_visual_assist_subject")
+    egui::Id::unique("renameit_visual_assist_subject")
 }
 
 /// Draws the strip. Returns what the user asked for, if anything.
@@ -253,24 +255,26 @@ pub fn ui(ui: &mut egui::Ui, state: &VisualAssist, find_reads_wildcards: bool) -
         // least representative one to measure against.
         if state.choices.len() > 1 {
             ui.horizontal(|ui| {
-                ui.label("File:");
+                let label = ui.label("File:");
                 let showing = state
                     .choices
                     .iter()
                     .find(|c| c.path == state.file)
                     .map_or("—", |c| c.name.as_str())
                     .to_owned();
-                egui::ComboBox::from_id_salt("visual_assist_file")
-                    .selected_text(showing)
-                    .width(220.0)
-                    .show_ui(ui, |ui| {
-                        for choice in &state.choices {
-                            let picked = choice.path == state.file;
-                            if ui.selectable_label(picked, &choice.name).clicked() && !picked {
-                                outcome = Outcome::Show(choice.path.clone());
+                ui.label_inputs_by(label.id, |ui| {
+                    egui::ComboBox::from_id_salt("visual_assist_file")
+                        .selected_text(showing)
+                        .width(220.0)
+                        .show_ui(ui, |ui| {
+                            for choice in &state.choices {
+                                let picked = choice.path == state.file;
+                                if ui.selectable_label(picked, &choice.name).clicked() && !picked {
+                                    outcome = Outcome::Show(choice.path.clone());
+                                }
                             }
-                        }
-                    });
+                        })
+                });
             });
             if state.capped > 0 {
                 ui.label(
@@ -321,7 +325,9 @@ pub fn ui(ui: &mut egui::Ui, state: &VisualAssist, find_reads_wildcards: bool) -
                         .data_mut(|d| d.insert_temp(field_id().with("focused"), true));
                 }
                 // Only while it is live — see the module docs.
-                if let Some(range) = output.state.cursor.range(&output.galley) {
+                if output.response.has_focus()
+                    && let Some(range) = output.state.cursor.range(&output.galley)
+                {
                     let chars = range.as_sorted_char_range();
                     selection = Some((chars.start.0, chars.end.0 - chars.start.0));
                     remember_selection(ui.ctx(), selection);

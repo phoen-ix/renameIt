@@ -64,19 +64,20 @@ jobs:
       - name: Type-check the Windows target
         run: cargo clippy --locked --workspace --lib --bins --target x86_64-pc-windows-msvc -- -D warnings
 
-      # D218: the shipped app registers its accessibility tree with the OS
-      # (UIA on Windows, AT-SPI on Linux) and opens links. Both are eframe
-      # features that `default-features = false` silently dropped once, and
-      # losing them again would pass every test — the kittest harness builds
-      # the tree either way. (`grep` without `-q`, so it reads the whole tree:
-      # an early exit would SIGPIPE `cargo tree` and fail under pipefail.)
-      - name: The shipped app keeps its screen-reader adapter and links
+      # D218, D247: the shipped app registers its accessibility tree with the
+      # OS (UIA on Windows, AT-SPI on Linux), opens links and uses the OS
+      # clipboard. All three are eframe features that `default-features =
+      # false` silently dropped once, and losing one again would pass every
+      # test — the kittest harness builds the tree and fakes the clipboard
+      # either way. (`grep` without `-q`, so it reads the whole tree: an early
+      # exit would SIGPIPE `cargo tree` and fail under pipefail.)
+      - name: The shipped app keeps its screen-reader adapter, links and clipboard
         run: |
           for t in x86_64-unknown-linux-gnu x86_64-pc-windows-msvc; do
-            for f in accesskit links; do
+            for f in accesskit clipboard links; do
               cargo tree --locked -p ren-gui -e no-dev,features -i egui-winit --target "$t" \
                 | grep -F "egui-winit feature \"$f\"" > /dev/null \
-                || { echo "::error::eframe lost its $f feature on $t (D218)"; exit 1; }
+                || { echo "::error::eframe lost its $f feature on $t (D218, D247)"; exit 1; }
             done
           done
 

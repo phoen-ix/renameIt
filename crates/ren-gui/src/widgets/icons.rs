@@ -42,9 +42,7 @@
 //! the GUI through nothing else. [`icon_button`] takes the name as an argument
 //! and there is no way to call it without one.
 
-use egui::{
-    Color32, Painter, Pos2, Rect, Response, Sense, Ui, Vec2, Widget, WidgetInfo, WidgetType,
-};
+use egui::{Color32, Painter, Pos2, Rect, Response, Role, Sense, Ui, Vec2, Widget, WidgetInfo};
 
 /// The side of the mark itself, before button padding.
 pub(crate) const MARK: f32 = 14.0;
@@ -252,7 +250,7 @@ impl Widget for IconButton<'_> {
 
         let enabled = ui.is_enabled();
         let name = self.name;
-        response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, enabled, name.to_owned()));
+        response.widget_info(|| WidgetInfo::labeled(Role::Button, enabled, name.to_owned()));
         response
     }
 }

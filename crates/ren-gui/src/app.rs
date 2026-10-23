@@ -3465,7 +3465,7 @@ impl RenameItApp {
             }
         }
 
-        egui::Panel::top(egui::Id::new("source")).show(ui, |ui| {
+        egui::Panel::top("source").show(ui, |ui| {
             self.recovery_banner(ui);
             self.selection_banner(ui);
             let out = source_bar::ui(
@@ -3492,7 +3492,7 @@ impl RenameItApp {
             }
         });
 
-        egui::Panel::bottom(egui::Id::new("status")).show(ui, |ui| {
+        egui::Panel::bottom("status").show(ui, |ui| {
             let pipeline_empty = self.pipeline_is_empty();
             let out = status_bar::ui(
                 ui,
@@ -3534,7 +3534,7 @@ impl RenameItApp {
             }
         });
 
-        egui::Panel::left(egui::Id::new("operation"))
+        egui::Panel::left("operation")
             .resizable(true)
             .default_size(320.0)
             .show(ui, |ui| {
@@ -3656,7 +3656,7 @@ impl RenameItApp {
             let (entries, problems) = self.presets.list();
             let mut state = self.drawer.take().unwrap_or_default();
             let mut out = presets::DrawerOutput::default();
-            egui::Panel::right(egui::Id::new("presets"))
+            egui::Panel::right("presets")
                 .resizable(true)
                 .default_size(300.0)
                 .show(ui, |ui| {

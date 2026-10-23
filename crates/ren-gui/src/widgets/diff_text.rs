@@ -115,8 +115,7 @@ pub fn new_name(ui: &mut egui::Ui, old: &str, new: &str, style: DiffStyle) {
         .unwrap_or(egui::TextStyle::Body)
         .resolve(ui.style());
     let response = ui.label(job(old, new, style, &font));
-    response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), new));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, ui.is_enabled(), new));
 }
 
 /// The sections [`new_name`] draws, apart from any `Ui` so they are testable.

@@ -29,7 +29,7 @@ pub fn ui(ui: &mut egui::Ui, op: &mut MusicRename, cx: &EditorCx<'_>) -> bool {
     // style exactly, and nothing else. `insert_temp`, so it is not persisted —
     // reopening the app on a pattern that matches a style should light that
     // style, which is the truth about what the card will do.
-    let custom_id = ui.id().with("music_custom");
+    let custom_id = ui.scope_id().with("music_custom");
     let mut sticky_custom = ui.data(|d| d.get_temp::<bool>(custom_id).unwrap_or(false));
 
     let matched = cx

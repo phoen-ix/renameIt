@@ -175,7 +175,7 @@ pub enum Outcome {
 pub fn ui(ctx: &egui::Context, state: &mut PaletteState) -> Outcome {
     let mut outcome = Outcome::Open;
 
-    let modal = egui::Modal::new(egui::Id::new("op_palette")).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::unique("op_palette")).show(ctx, |ui| {
         ui.set_width(420.0);
         ui.heading("Add operation");
         ui.add_space(4.0);

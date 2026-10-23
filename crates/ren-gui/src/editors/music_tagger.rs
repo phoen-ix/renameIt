@@ -71,7 +71,7 @@ pub fn ui(ui: &mut egui::Ui, op: &mut MusicTagger, cx: &EditorCx<'_>) -> bool {
 
     // The row's own memory is keyed off the card's id, and read through the
     // context because the form holds the `Ui` while its rows are drawn.
-    let base = ui.id();
+    let base = ui.scope_id();
     let ctx = ui.ctx().clone();
     Form::new("music_tagger").show(ui, |form| {
         for (field, slot) in op.boxes() {

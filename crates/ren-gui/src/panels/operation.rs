@@ -148,15 +148,19 @@ fn card_ui(
                 // The handle alone is the drag source: `dnd_drag_source` senses
                 // dragging on everything inside it, which would swallow the
                 // checkbox and the menu.
-                ui.dnd_drag_source(egui::Id::new(("card_handle", id)), CardDrag(index), |ui| {
-                    let _ = ui.add(
-                        crate::widgets::icons::IconButton::new(
-                            crate::widgets::icons::Icon::Grip,
-                            "Drag to reorder",
-                        )
-                        .frameless(),
-                    );
-                })
+                ui.dnd_drag_source(
+                    egui::Id::unique(("card_handle", id)),
+                    CardDrag(index),
+                    |ui| {
+                        let _ = ui.add(
+                            crate::widgets::icons::IconButton::new(
+                                crate::widgets::icons::Icon::Grip,
+                                "Drag to reorder",
+                            )
+                            .frameless(),
+                        );
+                    },
+                )
                 .response
                 .on_hover_text("Drag to reorder");
 
@@ -346,7 +350,7 @@ fn summary_toggle(
     // Inside the closure: it runs only when the accessibility tree is being
     // built, and a copy made outside it was paid on every frame.
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Button, true, expanded, summary.to_owned())
+        egui::WidgetInfo::selected(egui::Role::Button, true, expanded, summary.to_owned())
     });
     response
 }

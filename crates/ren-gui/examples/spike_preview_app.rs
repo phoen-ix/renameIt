@@ -60,7 +60,7 @@ impl eframe::App for SpikeApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let started = std::time::Instant::now();
 
-        egui::Panel::top(egui::Id::new("controls")).show(ui, |ui| {
+        egui::Panel::top("controls").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Find (regex):");
                 let find = ui.add(egui::TextEdit::singleline(&mut self.find).desired_width(220.0));

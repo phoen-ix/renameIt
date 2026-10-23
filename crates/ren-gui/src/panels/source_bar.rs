@@ -13,7 +13,7 @@ use crate::widgets::filter_editor::FilterForm;
 ///
 /// A function rather than a constant because `Id::with` hashes at run time.
 pub fn address_box() -> egui::Id {
-    egui::Id::new("source_bar_address")
+    egui::Id::unique("source_bar_address")
 }
 
 /// What the source bar wants the app to do after this frame.

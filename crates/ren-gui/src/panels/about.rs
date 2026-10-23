@@ -43,7 +43,7 @@ impl SessionTally {
 pub fn ui(ctx: &egui::Context, batches: &[Batch]) -> bool {
     let mut close = false;
 
-    egui::Modal::new(egui::Id::new("about")).show(ctx, |ui| {
+    egui::Modal::new(egui::Id::unique("about")).show(ctx, |ui| {
         ui.set_width(460.0);
 
         ui.horizontal(|ui| {

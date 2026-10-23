@@ -68,7 +68,7 @@ pub fn ui(ui: &mut egui::Ui, op: &mut Casing) -> bool {
     // words themselves (D35 — Settings holds the copy a *new* card starts
     // from). A link to Settings would therefore edit a list this card has
     // already stopped reading, and visibly do nothing to the preview beside it.
-    let open_id = ui.id().with("casing_exceptions_open");
+    let open_id = ui.scope_id().with("casing_exceptions_open");
     let mut open: bool = ui.data_mut(|d| d.get_temp(open_id).unwrap_or(false));
     ui.horizontal(|ui| {
         changed |= ui

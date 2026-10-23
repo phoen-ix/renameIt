@@ -136,7 +136,7 @@ pub fn ui(ctx: &egui::Context, page: &mut Page, defaults: Defaults<'_>, theme: T
     let current_zoom = ctx.zoom_factor();
     let mut out = Output::default();
 
-    let modal = egui::Modal::new(egui::Id::new("settings")).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::unique("settings")).show(ctx, |ui| {
         ui.set_width(RAIL_WIDTH + BODY_WIDTH + 3.0 * crate::theme::space::SNUG);
         ui.heading("Settings");
         ui.add_space(crate::theme::space::SNUG);
@@ -864,7 +864,7 @@ fn shell_ui(
     // frame showed a failed registry write for one frame — after which the
     // box simply refused to stay ticked, with nothing saying why. Cleared by
     // the next write that succeeds.
-    let failure_id = ui.id().with("shell_menu_failure");
+    let failure_id = ui.scope_id().with("shell_menu_failure");
     let mut failure: Option<String> = ui.data(|d| d.get_temp(failure_id));
     let mut wrote = |result: ren_platform::Result<()>| {
         failure = result.err().map(|error| error.to_string());

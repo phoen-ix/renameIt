@@ -81,6 +81,14 @@ impl Fixture {
     }
 }
 
+/// How many passes `Harness::run` may take to settle.
+///
+/// egui 0.37 styles a widget from its response on the previous pass, so every
+/// widget drawn for the first time asks for one more pass, and a window that
+/// reveals a list, then its rows, then their controls takes a pass for each.
+/// kittest's default of 4 is below what opening the tile grid needs.
+const MAX_STEPS: u64 = 16;
+
 /// Builds a harness around the app and runs one settled frame.
 /// A taller window, for the few tests that open a card's Scope expander.
 ///
@@ -90,6 +98,7 @@ impl Fixture {
 /// past 800 pt with a card editor above them.
 fn tall_harness(app: RenameItApp) -> Harness<'static, RenameItApp> {
     let mut harness = Harness::builder()
+        .with_max_steps(MAX_STEPS)
         .with_size(egui::vec2(1280.0, 1800.0))
         .build_ui_state(|ui, app: &mut RenameItApp| app.show(ui), app);
     settle(&mut harness);
@@ -98,6 +107,7 @@ fn tall_harness(app: RenameItApp) -> Harness<'static, RenameItApp> {
 
 fn harness(app: RenameItApp) -> Harness<'static, RenameItApp> {
     let mut harness = Harness::builder()
+        .with_max_steps(MAX_STEPS)
         .with_size(egui::vec2(1280.0, 800.0))
         .build_ui_state(|ui, app: &mut RenameItApp| app.show(ui), app);
     settle(&mut harness);
@@ -1024,7 +1034,11 @@ fn the_tag_operations_are_offered_but_refused_until_they_are_confirmed() {
     harness.get_by_label_contains("cannot be undone");
 
     // Ticking Artist enables the field — empty, so still nothing to write.
-    harness.get_by_label("Artist").click();
+    // By role: the tick box names the field beside it, which answers to
+    // "Artist" as well.
+    harness
+        .get_by_role_and_label(egui::accesskit::Role::CheckBox, "Artist")
+        .click();
     settle(&mut harness);
     match &harness.state().stack().cards().last().unwrap().op {
         OpKind::MusicTagger(op) => assert!(op.artist.is_some()),
@@ -2145,8 +2159,10 @@ fn dragging_a_card_by_its_handle_reorders_the_stack() {
     settle(&mut harness);
     assert_eq!(harness.state().stack().get(0).unwrap().op.name(), "casing");
 
+    // By role as well: the drag source around each handle carries the same
+    // tooltip, and egui names a container after its tooltip too.
     let handles: Vec<egui::Rect> = harness
-        .get_all_by_label("Drag to reorder")
+        .get_all_by_role_and_label(egui::accesskit::Role::Button, "Drag to reorder")
         .map(|node| node.rect())
         .collect();
     assert_eq!(handles.len(), 2, "one drag handle per card");
@@ -2607,7 +2623,7 @@ fn a_pre_processor_that_came_from_a_file_is_shown_and_can_be_cleared() {
     use ren_core::{PreProcessor, StepConfig};
 
     let fixture = Fixture::new(&["Batch Renamer is fantastic!.txt"]);
-    let mut harness = harness(fixture.app());
+    let mut harness = tall_harness(fixture.app());
 
     harness.state_mut().delete_card(0);
     harness.state_mut().stack_mut().append_steps(vec![(
@@ -2707,7 +2723,9 @@ fn unticking_a_pre_processor_stage_and_ticking_it_again_brings_back_what_was_typ
     harness.get_by_label_contains("Scope").click();
     settle(&mut harness);
 
-    harness.get_by_label("Cut if string is found:").click();
+    harness
+        .get_by_role_and_label(egui::accesskit::Role::CheckBox, "Cut if string is found:")
+        .click();
     settle(&mut harness);
     assert_eq!(
         harness.state().stack().to_steps()[0]
@@ -2720,7 +2738,9 @@ fn unticking_a_pre_processor_stage_and_ticking_it_again_brings_back_what_was_typ
         "unticked"
     );
 
-    harness.get_by_label("Cut if string is found:").click();
+    harness
+        .get_by_role_and_label(egui::accesskit::Role::CheckBox, "Cut if string is found:")
+        .click();
     settle(&mut harness);
     assert_eq!(
         harness.state().stack().to_steps()[0]
@@ -3280,7 +3300,14 @@ fn a_name_that_is_not_text_says_so_and_can_still_be_renamed() {
     let odd = std::ffi::OsStr::from_bytes(b"caf\xE9.txt");
     std::fs::write(fixture.dir.path().join(odd), b"payload").unwrap();
 
-    let mut harness = harness(fixture.app());
+    // The row shows the undecodable byte as U+FFFD, which no bundled face has:
+    // it draws as a box, here as in the app, rather than failing the frame.
+    let mut harness = Harness::builder()
+        .with_max_steps(MAX_STEPS)
+        .with_size(egui::vec2(1280.0, 800.0))
+        .allow_missing_glyphs()
+        .build_ui_state(|ui, app: &mut RenameItApp| app.show(ui), fixture.app());
+    settle(&mut harness);
     // Within the stem, which is what the default scope covers.
     *harness.state_mut().operation_mut() = OpKind::Replace(Replace::new("ordinary", "renamed"));
     settle(&mut harness);
@@ -6247,7 +6274,9 @@ fn the_pre_processor_regex_switch_unticks_and_new_searches_follow_it() {
             .expect("still on")
     };
 
-    harness.get_by_label("Cut if string is found:").click();
+    harness
+        .get_by_role_and_label(egui::accesskit::Role::CheckBox, "Cut if string is found:")
+        .click();
     settle(&mut harness);
     assert_eq!(
         preproc(&harness).cut_at,

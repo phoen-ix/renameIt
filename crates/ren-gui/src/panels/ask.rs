@@ -58,7 +58,7 @@ pub enum AskOutcome {
 pub fn ui(ctx: &egui::Context, form: &mut AskForm) -> AskOutcome {
     let mut outcome = AskOutcome::Open;
 
-    let modal = egui::Modal::new(egui::Id::new("ask_modal")).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::unique("ask_modal")).show(ctx, |ui| {
         ui.set_width(360.0);
         ui.heading("Enter text");
         ui.add_space(6.0);
@@ -66,16 +66,18 @@ pub fn ui(ctx: &egui::Context, form: &mut AskForm) -> AskOutcome {
         let first_frame = !form.focused;
         form.focused = true;
         for (index, (slot, text)) in form.fields.iter_mut().enumerate() {
-            ui.label(if *slot == 0 {
+            let label = ui.label(if *slot == 0 {
                 "<Ask>".to_owned()
             } else {
                 format!("<Ask-{slot}>")
             });
-            let field = ui.add(
-                egui::TextEdit::singleline(text)
-                    .desired_width(f32::INFINITY)
-                    .id_salt(("ask_field", *slot)),
-            );
+            let field = ui
+                .add(
+                    egui::TextEdit::singleline(text)
+                        .desired_width(f32::INFINITY)
+                        .id_salt(("ask_field", *slot)),
+                )
+                .labelled_by(label.id);
             if first_frame && index == 0 {
                 field.request_focus();
             }

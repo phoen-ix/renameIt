@@ -322,7 +322,7 @@ impl InlineRename {
 /// one of these is ever on screen: `inline_rename` is an `Option`, and the list
 /// and the grid never draw at once.
 pub(crate) fn inline_rename_id() -> egui::Id {
-    egui::Id::new("inline_rename")
+    egui::Id::unique("inline_rename")
 }
 
 /// How many **characters** of a name the editor selects.
@@ -364,11 +364,13 @@ pub(crate) fn inline_rename_field(ui: &mut egui::Ui, edit: &mut InlineRename) ->
         egui::TextEdit::store_state(ui.ctx(), id, state);
     }
 
-    let response = ui.add(
-        egui::TextEdit::singleline(&mut edit.text)
-            .desired_width(f32::INFINITY)
-            .id(id),
-    );
+    let response = ui
+        .add(
+            egui::TextEdit::singleline(&mut edit.text)
+                .desired_width(f32::INFINITY)
+                .id(id),
+        )
+        .accessible_name("New name");
 
     // **Asked for once, not every frame — and that was a defect, not a tidy-up.**
     //

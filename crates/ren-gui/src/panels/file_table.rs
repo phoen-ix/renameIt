@@ -154,10 +154,10 @@ impl<'a> FileTable<'a> {
                     .resizable(true)
                     .range(c.kind.width_range())
                     // Keyed by *kind*, not by position. `egui_table` defaults
-                    // to `Id::new(col_idx)`, so turning a column off in
+                    // to `Id::unique(col_idx)`, so turning a column off in
                     // Settings > Display used to hand the next column along
                     // its predecessor's width.
-                    .id(egui::Id::new(("file_table_column", c.kind)))
+                    .id(egui::Id::unique(("file_table_column", c.kind)))
             })
             .collect();
 
@@ -389,7 +389,11 @@ impl egui_table::TableDelegate for FileTable<'_> {
         // Name label keeps its click, its double-click and its menu. That is
         // the opposite of the Full Row Select case below, which had to move
         // into the cells because a *click* must be topmost.
-        let drag = ui.interact(rect, ui.id().with(("row_drag", index)), egui::Sense::drag());
+        let drag = ui.interact(
+            rect,
+            ui.scope_id().with(("row_drag", index)),
+            egui::Sense::drag(),
+        );
         if drag.drag_started() {
             // Dragging one of several selected rows takes all of them, which is
             // the gesture every file manager has. Dragging an unselected row
@@ -440,7 +444,11 @@ impl egui_table::TableDelegate for FileTable<'_> {
         // cell is drawn after this and sits on top, so it still wins where the
         // two overlap — which is what keeps double-click-to-rename working.
         if self.style.full_row_select {
-            let response = ui.interact(rect, ui.id().with(("row", index)), egui::Sense::click());
+            let response = ui.interact(
+                rect,
+                ui.scope_id().with(("row", index)),
+                egui::Sense::click(),
+            );
             if response.clicked() {
                 let (ctrl, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
                 self.selection.click(index, ctrl, shift, &self.visible);
@@ -484,7 +492,7 @@ impl egui_table::TableDelegate for FileTable<'_> {
         if self.style.full_row_select && !matches!(kind, ColumnKind::Name | ColumnKind::Thumbnail) {
             let response = ui.interact(
                 ui.max_rect(),
-                ui.id().with(("row", index, cell.col_nr)),
+                ui.scope_id().with(("row", index, cell.col_nr)),
                 egui::Sense::click(),
             );
             if response.clicked() {

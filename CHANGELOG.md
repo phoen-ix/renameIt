@@ -6,6 +6,17 @@ Two things this file does **not** track. Engine and UI decisions live in
 `docs/DECISIONS.md`, which is the authority on why anything behaves as it does;
 and the reasoning behind each default lives beside the code it governs.
 
+## [Unreleased]
+
+### Changed
+
+- eframe/egui 0.37 (egui_table 0.11), lru 0.19, and every other dependency on
+  its newest release. Copy and paste in text fields keep using the system
+  clipboard, and the UI's symbols keep their font, both of which egui 0.37
+  made separate features (**D247**).
+- Number boxes, drop-downs and text fields that had no name for a screen
+  reader to announce now take the label beside them.
+
 ## [1.5.1] - 2026-10-17
 
 A maintenance release: a newer compiler and dependencies.

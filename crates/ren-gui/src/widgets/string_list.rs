@@ -63,7 +63,7 @@ impl<'a> StringList<'a> {
 
     pub fn show(self, ui: &mut egui::Ui, values: &mut Vec<String>) -> bool {
         let mut changed = false;
-        let keys_id = ui.id().with((self.id, "keys"));
+        let keys_id = ui.scope_id().with((self.id, "keys"));
         let mut keys = crate::widgets::row_keys::RowKeys::load(ui, keys_id, values.len());
 
         let mut remove = None;

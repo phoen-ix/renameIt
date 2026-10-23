@@ -61,23 +61,25 @@ fn counter_ui(ui: &mut egui::Ui, counter: &mut CounterSetup) -> bool {
         .num_columns(2)
         .spacing([8.0, 4.0])
         .show(ui, |ui| {
-            ui.label("Start value:");
+            let label = ui.label("Start value:");
             changed |= crate::widgets::number::add(
                 ui,
                 egui::DragValue::new(&mut counter.start).speed(0.2),
             )
+            .labelled_by(label.id)
             .on_hover_text("Negative values are allowed.")
             .changed();
             ui.end_row();
 
-            ui.label("Step:");
+            let label = ui.label("Step:");
             changed |=
                 crate::widgets::number::add(ui, egui::DragValue::new(&mut counter.step).speed(0.2))
+                    .labelled_by(label.id)
                     .on_hover_text("The counter will increase or decrease by this for each file.")
                     .changed();
             ui.end_row();
 
-            ui.label("Zero pad:");
+            let label = ui.label("Zero pad:");
             ui.horizontal(|ui| {
                 changed |= crate::widgets::number::add_enabled(
                     ui,
@@ -86,6 +88,7 @@ fn counter_ui(ui: &mut egui::Ui, counter: &mut CounterSetup) -> bool {
                         .range(0..=12)
                         .speed(0.2),
                 )
+                .labelled_by(label.id)
                 .changed();
                 changed |= ui
                     .checkbox(&mut counter.auto_pad, "Auto")

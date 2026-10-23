@@ -103,13 +103,13 @@ impl Accents {
 /// Add `Hack` to the `Proportional` fallback chain.
 ///
 /// epaint already bundles Hack — it is the whole `Monospace` family — but
-/// `Proportional` resolves Ubuntu-Light → NotoEmoji → emoji-icon-font, and
-/// none of those three has `▾ ▲ ▼ ⋯ ⊘ → ▸`. Every one of them shipped as `◻`:
-/// the file table's sort indicator, the `Presets ▾` button, the tag field's
-/// history menu, four controls on every Batch Replace row, and — worse,
-/// because it is prose rather than an icon — the `Settings ▸ File System`
-/// inside the blocked-Rename explanation and the `→` inside the confirmation
-/// dialog's summary.
+/// `Proportional` resolves Ubuntu-Light → egui-icons → NotoEmoji →
+/// emoji-icon-font, and none of those has `▾ ▲ ▼ ⋯ ⊘ → ▸`. Every one of them
+/// shipped as `◻`: the file table's sort indicator, the `Presets ▾` button,
+/// the tag field's history menu, four controls on every Batch Replace row,
+/// and — worse, because it is prose rather than an icon — the
+/// `Settings ▸ File System` inside the blocked-Rename explanation and the `→`
+/// inside the confirmation dialog's summary.
 ///
 /// Naming a font that is already linked in costs nothing: no new dependency to
 /// audit under D2, no growth in the binary D14 watches. The fallback only

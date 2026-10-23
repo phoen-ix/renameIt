@@ -23,7 +23,7 @@
 
 /// Where the spinner with the keyboard records itself.
 fn marker() -> egui::Id {
-    egui::Id::new("renameit_focused_number_box")
+    egui::Id::unique("renameit_focused_number_box")
 }
 
 /// Adds a numeric spinner, remembering it if it has the keyboard.
@@ -83,8 +83,8 @@ mod tests {
     #[test]
     fn a_remembered_box_stops_counting_once_something_else_has_the_keyboard() {
         let ctx = egui::Context::default();
-        let spinner = egui::Id::new("a number");
-        let field = egui::Id::new("a find box");
+        let spinner = egui::Id::unique("a number");
+        let field = egui::Id::unique("a find box");
 
         ctx.data_mut(|d| d.insert_temp(marker(), spinner));
         ctx.memory_mut(|m| m.request_focus(spinner));

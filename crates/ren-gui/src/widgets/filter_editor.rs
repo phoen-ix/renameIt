@@ -101,12 +101,18 @@ impl FilterForm {
         let mut changed = false;
         ui.set_min_width(280.0);
 
-        ui.label("Include only files matching:");
-        changed |= ui.text_edit_singleline(&mut self.include).changed();
+        let label = ui.label("Include only files matching:");
+        changed |= ui
+            .text_edit_singleline(&mut self.include)
+            .labelled_by(label.id)
+            .changed();
 
         ui.add_space(4.0);
-        ui.label("Exclude files matching:");
-        changed |= ui.text_edit_singleline(&mut self.exclude).changed();
+        let label = ui.label("Exclude files matching:");
+        changed |= ui
+            .text_edit_singleline(&mut self.exclude)
+            .labelled_by(label.id)
+            .changed();
 
         ui.add_space(6.0);
         ui.horizontal(|ui| {

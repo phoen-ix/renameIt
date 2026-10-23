@@ -10,15 +10,17 @@ pub fn ui(ui: &mut egui::Ui, op: &mut ReNumber) -> bool {
 
     ui.horizontal(|ui| {
         ui.label("With");
-        egui::ComboBox::from_id_salt("renumber_target")
-            .selected_text(op.target.label())
-            .show_ui(ui, |ui| {
-                for target in NumberTarget::all() {
-                    changed |= ui
-                        .selectable_value(&mut op.target, target, target.label())
-                        .changed();
-                }
-            });
+        ui.name_inputs("Which numbers", |ui| {
+            egui::ComboBox::from_id_salt("renumber_target")
+                .selected_text(op.target.label())
+                .show_ui(ui, |ui| {
+                    for target in NumberTarget::all() {
+                        changed |= ui
+                            .selectable_value(&mut op.target, target, target.label())
+                            .changed();
+                    }
+                })
+        });
         ui.label("in the filename");
     });
 
@@ -48,6 +50,7 @@ pub fn ui(ui: &mut egui::Ui, op: &mut ReNumber) -> bool {
                         }
                     })
                     .response
+                    .accessible_name("Action")
             },
             if needs_operand {
                 After::TagPicker

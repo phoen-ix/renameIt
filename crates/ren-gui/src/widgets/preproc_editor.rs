@@ -37,7 +37,7 @@ pub fn ui(ui: &mut egui::Ui, preproc: &mut Option<PreProcessor>) -> bool {
         )
         .changed()
     {
-        let id = ui.id().with("preproc_stash");
+        let id = ui.scope_id().with("preproc_stash");
         if on {
             *preproc = Some(
                 ui.data_mut(|d| d.get_temp::<PreProcessor>(id))
@@ -192,12 +192,14 @@ fn count(
 ) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
-        changed |= arm(ui, key, label, field, usize::default);
+        let (armed, check) = arm(ui, key, label, field, usize::default);
+        changed |= armed;
         if let Some(n) = field {
             changed |= crate::widgets::number::add(
                 ui,
                 egui::DragValue::new(n).range(0..=9_999).speed(0.2),
             )
+            .labelled_by(check)
             .changed();
             ui.label(suffix);
         }
@@ -220,7 +222,7 @@ fn search(
 ) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
-        let armed = arm(
+        let (armed, check) = arm(
             ui,
             key,
             label,
@@ -239,6 +241,7 @@ fn search(
                         .desired_width(160.0)
                         .id_salt(key),
                 )
+                .labelled_by(check)
                 .changed()
             {
                 *spec = retype(spec, text);
@@ -249,7 +252,8 @@ fn search(
     changed
 }
 
-/// The checkbox half of both, including the stash.
+/// The checkbox half of both, including the stash. Returns whether it
+/// changed, and the checkbox's id, which names the field beside it.
 ///
 /// **Unticking keeps what was typed.** egui's own temp store is where transient
 /// UI state goes — the same bargain `rule_table`'s bulk box strikes — and it is
@@ -262,15 +266,16 @@ fn arm<T>(
     label: &str,
     field: &mut Option<T>,
     fresh: impl FnOnce() -> T,
-) -> bool
+) -> (bool, egui::Id)
 where
     T: Clone + Send + Sync + 'static,
 {
     let mut on = field.is_some();
-    if !ui.checkbox(&mut on, label).changed() {
-        return false;
+    let check = ui.checkbox(&mut on, label);
+    if !check.changed() {
+        return (false, check.id);
     }
-    let id = ui.id().with(key);
+    let id = ui.scope_id().with(key);
     if on {
         // `MatchSpec` has no `Default` — and should not, since "an empty
         // substring" is a choice rather than an absence. The caller says what a
@@ -279,7 +284,7 @@ where
     } else if let Some(old) = field.take() {
         ui.data_mut(|d| d.insert_temp(id, old));
     }
-    true
+    (true, check.id)
 }
 
 /// Whether the searches read as regular expressions — `None` for a mix.

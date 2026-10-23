@@ -156,21 +156,24 @@ pub fn ui(ui: &mut egui::Ui, op: &mut SetDate, platform: &dyn Platform) -> bool 
                             ui,
                             egui::DragValue::new(&mut op.interval).range(0..=9_999),
                         )
+                        .accessible_name("Interval")
                         .changed();
-                        egui::ComboBox::from_id_salt("set_date_unit")
-                            .width(110.0)
-                            .selected_text(op.unit.label())
-                            .show_ui(ui, |ui| {
-                                for candidate in IntervalUnit::ALL {
-                                    changed |= ui
-                                        .selectable_value(
-                                            &mut op.unit,
-                                            candidate,
-                                            candidate.label(),
-                                        )
-                                        .changed();
-                                }
-                            });
+                        ui.name_inputs("Interval unit", |ui| {
+                            egui::ComboBox::from_id_salt("set_date_unit")
+                                .width(110.0)
+                                .selected_text(op.unit.label())
+                                .show_ui(ui, |ui| {
+                                    for candidate in IntervalUnit::ALL {
+                                        changed |= ui
+                                            .selectable_value(
+                                                &mut op.unit,
+                                                candidate,
+                                                candidate.label(),
+                                            )
+                                            .changed();
+                                    }
+                                })
+                        });
                         changed
                     })
                     .inner

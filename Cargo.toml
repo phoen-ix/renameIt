@@ -23,13 +23,13 @@ repository = "https://github.com/phoen-ix/renameIt"
 ron = "0.12.2"
 # Clipboard access for the <Clipboard> tag. Already in the tree under
 # egui-winit; named here so the version is ours to pin.
-arboard = { version = "3.6.1", default-features = false }
+arboard = { version = "3.7.0", default-features = false }
 ren-core = { path = "crates/ren-core", version = "1.5.1" }
 ren-platform = { path = "crates/ren-platform", version = "1.5.1" }
 
 chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
 clap = { version = "4.6.7", features = ["derive"] }
-crc32fast = "1.5.2"
+crc32fast = "1.5.3"
 criterion = "0.8.2"
 # M5: CSV List Rename. Unlicense OR MIT; audited in docs/DESIGN.md S6.
 csv = "1.4.0"
@@ -53,9 +53,9 @@ kamadak-exif = "0.6.1"
 #
 # Used as `LruCache::unbounded()`: its own capacity counts *entries*, and the
 # quantity a texture cache has to bound is bytes (D138). We take it for the
-# recency bookkeeping and do the accounting ourselves. Pinned to 0.18 because
+# recency bookkeeping and do the accounting ourselves. At least 0.18, because
 # 0.16 carries RUSTSEC-2026-0253.
-lru = "0.18.5"
+lru = "0.19.0"
 # M7: the scripting engine. MIT, and every crate in its tree was already inside
 # deny.toml's allowlist — which is the whole reason it is here and Rhai is not
 # (D92 reverses D5: rhai depends unconditionally on smartstring, MPL-2.0+).
@@ -85,11 +85,11 @@ regex = "1.13.1"
 filetime = "0.2.29"
 # `renameat2(RENAME_NOREPLACE)` for P13's no-clobber rename on Linux. MIT OR
 # Apache-2.0, and already in the graph under `filetime`.
-libc = "0.2.190"
+libc = "0.2.191"
 infer = "0.22.0"
 rayon = "1.12.0"
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.152"
+serde_json = "1.0.154"
 tempfile = "3.27.0"
 thiserror = "2.0.21"
 toml = "1.1.8"
@@ -97,7 +97,7 @@ walkdir = "2.5.0"
 
 # GUI (D4). D14: glow backend only — the wgpu tree never enters the graph.
 #
-# `default-features = false` is for `wgpu`, and it takes two defaults with it
+# `default-features = false` is for `wgpu`, and it takes three defaults with it
 # that are named back here, because nothing fails without them:
 # * `accesskit` — the OS accessibility adapter (UIA on Windows, AT-SPI on
 #   Linux). Without it the app builds its accessibility tree for the kittest
@@ -105,11 +105,16 @@ walkdir = "2.5.0"
 #   in the panels reached the tests and nobody else.
 # * `links` — `webbrowser`, which is how a hyperlink opens. Without it the
 #   About window's repository link logs a warning and does nothing.
-# Both trees are MIT/Apache-2.0 (`cargo deny` checks them). CI asserts both
-# features are still on for both targets, since losing them again would pass
-# every test (D218).
-eframe = { version = "0.36.2", default-features = false, features = [
+# * `clipboard` — the OS clipboard behind Ctrl+C/X/V in every text field
+#   (a feature of its own since eframe 0.37). Without it egui keeps a
+#   clipboard private to the process: copy and paste work inside the app and
+#   nothing crosses to or from any other program.
+# All three trees are MIT/Apache-2.0 (`cargo deny` checks them). CI asserts
+# the features are still on for both targets, since losing one again would
+# pass every test (D218, D247).
+eframe = { version = "0.37.0", default-features = false, features = [
     "accesskit",
+    "clipboard",
     "default_fonts",
     "glow",
     "links",
@@ -117,18 +122,21 @@ eframe = { version = "0.36.2", default-features = false, features = [
     "wayland",
     "x11",
 ] }
-egui = "0.36.2"
-egui_table = "0.10.0"
+# `monochrome_emoji_fonts`: since 0.37 the NotoEmoji and emoji-icon-font faces
+# the UI's marks (`✖ ⛔ 📁 ⟳` ...) are drawn from are opt-in, and without them
+# those draw as boxes. Same faces, same crate and licences as 0.36 (D247).
+egui = { version = "0.37.0", features = ["monochrome_emoji_fonts"] }
+egui_table = "0.11.0"
 # D24: drives the real App headlessly — no display, no GPU. Default features
 # only; `snapshot`/`wgpu` would pull in a renderer we do not want in CI.
-egui_kittest = "0.36.2"
+egui_kittest = "0.37.0"
 # Native file dialogs. Its defaults are xdg-portal + wayland, so the Linux
 # build needs no GTK.
 rfd = "0.17.2"
 # Stamps the Windows .exe with our icon and version metadata
 # (`ren-gui/build.rs`). MIT; it depends on `toml` and `version_check`, both
 # MIT/Apache-2.0. Audited under D2.
-winresource = "0.1.31"
+winresource = "0.1.34"
 
 [workspace.dependencies.windows-sys]
 version = "0.61.2"
