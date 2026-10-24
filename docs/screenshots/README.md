@@ -37,6 +37,14 @@ Every file renamed; Undo is live and the log underneath lists what changed.
 
 <img src="main-after-run.png" alt="The list after a run: the files carry their new names, Undo is enabled and the run log is open below" width="800">
 
+## The row menu
+
+Right-click a row: it becomes the selection, so the preview narrows to it, and
+the menu renames it in place, shows it in the file manager, copies names or
+paths, or moves the selection into Free Select.
+
+<img src="main-row-menu.png" alt="The right-click menu open over a selected row of the file list, with Rename, Show in file manager, Copy to clipboard and Add to Free Select" width="800">
+
 ## Free Select
 
 Files picked from two folders — what a drag from the file manager gives you.
@@ -161,6 +169,5 @@ put back before it does.
 
 Not pictured: **About** (it carries the version, so every release would change
 it), **Shell Integration** (a Linux render shows the page's "nothing to
-install" branch, not the Windows one), **Problem Solver** (it prints the
-machine's own home folder) and the **row menu** (while it is open the preview
-never settles in the test harness).
+install" branch, not the Windows one) and **Problem Solver** (it prints the
+machine's own home folder).

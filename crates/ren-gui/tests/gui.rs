@@ -3220,6 +3220,26 @@ fn right_clicking_an_unselected_row_selects_it() {
     );
 }
 
+/// A selection that stands still asks for no new preview. The view hands the
+/// selection back every frame, and it was compared with the slot it had been
+/// lent from — empty by then — so any selection re-planned on every frame:
+/// "updating…" for as long as the row menu was open, and a harness that could
+/// run out of passes on a busy machine.
+#[test]
+fn a_standing_selection_does_not_replan_every_frame() {
+    let fixture = Fixture::new(&["one.txt", "two.txt"]);
+    let mut harness = harness(fixture.app());
+
+    harness.get_by_label_contains("two.txt").click_secondary();
+    settle(&mut harness);
+    harness.get_by_label("Rename…");
+    harness.step();
+    assert!(
+        !harness.state().is_updating(),
+        "a frame that changed nothing asked for a new preview"
+    );
+}
+
 /// Copy to clipboard ▸ New names — how a listing gets out of the app and into
 /// a text editor.
 ///

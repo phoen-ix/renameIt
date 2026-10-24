@@ -291,6 +291,21 @@ fn main_after_run() {
     shoot(&mut harness, "main-after-run");
 }
 
+/// The right-click menu over a row, which selects that row first.
+#[test]
+fn main_row_menu() {
+    let demo = holiday();
+    let mut harness = light(demo.app());
+    tidy_up(&mut harness);
+    harness
+        .get_by_label_contains("harbour_boats.jpg")
+        .click_secondary();
+    settle(&mut harness);
+    harness.get_by_label("Rename…");
+    harness.get_by_label("Copy to clipboard");
+    shoot(&mut harness, "main-row-menu");
+}
+
 #[test]
 fn main_free_select() {
     let demo = holiday();

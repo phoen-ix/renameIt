@@ -1527,6 +1527,13 @@ impl RenameItApp {
         self.preview.plan()
     }
 
+    /// Whether a new preview is asked for or on its way — the status bar's
+    /// "updating…". Exposed so a test can catch a frame that re-plans for
+    /// nothing.
+    pub fn is_updating(&self) -> bool {
+        self.needs_preview || self.preview.is_stale()
+    }
+
     pub fn status(&self) -> Option<&str> {
         self.status.as_deref()
     }
@@ -3682,8 +3689,12 @@ impl RenameItApp {
             }
 
             // The view needs the listing and the selection at once, and both
-            // live in `session`. Lending the selection out for the frame is
-            // cheaper than cloning it, and it goes straight back.
+            // live in `session`, so the selection is lent out for the frame
+            // and goes straight back. Its rows are copied first, to tell
+            // whether the view changed them: comparing with the emptied
+            // `session.selection` called any selection a change — a re-plan
+            // on every frame while one stood.
+            let rows_before = self.session.selection.rows.clone();
             let mut selection = std::mem::take(&mut self.session.selection);
             // Drained here: it is a one-shot request from the last keypress,
             // and leaving it set would re-scroll on every frame after.
@@ -3750,7 +3761,7 @@ impl RenameItApp {
             // **`rows`, not the whole `Selection`.** Moving the lead with Ctrl
             // and an arrow key is not a change to what the run covers, and
             // re-planning on every keypress would make the list stutter.
-            let selection_changed = selection.rows != self.session.selection.rows;
+            let selection_changed = selection.rows != rows_before;
             self.session.selection = selection;
             if selection_changed {
                 self.needs_preview = true;

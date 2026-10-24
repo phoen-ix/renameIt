@@ -24,6 +24,12 @@ and the reasoning behind each default lives beside the code it governs.
 - Number boxes, drop-downs and text fields that had no name for a screen
   reader to announce now take the label beside them.
 
+### Fixed
+
+- With any row selected, the preview was worked out again on every frame, so
+  the status bar kept saying "updating…" — for as long as the row menu was
+  open, for one. It is now worked out only when the selection changes.
+
 ## [1.5.1] - 2026-10-17
 
 A maintenance release: a newer compiler and dependencies.
