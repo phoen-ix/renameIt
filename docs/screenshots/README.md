@@ -42,7 +42,7 @@ Every file renamed; Undo is live and the log underneath lists what changed.
 
 Right-click a row: it becomes the selection, so the preview narrows to it, and
 the menu renames it in place, shows it in the file manager, copies names or
-paths, or moves the selection into Free Select.
+paths, or adds the selection to Free Select and switches to it.
 
 <img src="main-row-menu.png" alt="The right-click menu open over a selected row of the file list, with Rename, Show in file manager, Copy to clipboard and Add to Free Select" width="800">
 
