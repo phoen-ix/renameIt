@@ -30,8 +30,10 @@ and the reasoning behind each default lives beside the code it governs.
   the status bar kept saying "updating…" — for as long as the row menu was
   open, for one. It is now worked out only when the selection changes.
 - An empty folder said only "No files listed". It now says *Nothing here* and
-  how to fill the list, in the grid as well as the list, and the grid says so
-  when a filter hides every tile. Screen readers hear both messages.
+  how to fill the list (in Free Select: with *Add files…*), in the grid as
+  well as the list, and the grid says so when a filter hides every tile. While
+  a folder is still being listed it says *Nothing listed yet* instead. Screen
+  readers hear every one of these messages.
 - The run log opened three lines tall; it now opens up to its full height.
 
 ## [1.5.1] - 2026-10-17

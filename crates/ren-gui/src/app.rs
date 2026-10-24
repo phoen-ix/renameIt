@@ -3705,6 +3705,7 @@ impl RenameItApp {
             };
             let free_select =
                 self.session.settings.mode == crate::viewmodel::SourceMode::FreeSelect;
+            let listing = self.session.relist_wanted || self.listing.is_listing();
 
             let mut sort_request = None;
             let mut reorder_request = false;
@@ -3729,6 +3730,7 @@ impl RenameItApp {
                     );
                     table.scroll_to = scroll_to;
                     table.free_select = free_select;
+                    table.listing = listing;
                     table.show(ui);
                     sort_request = table.sort_request;
                     reorder_request = table.reorder_request;
@@ -3752,6 +3754,7 @@ impl RenameItApp {
                     );
                     grid.scroll_to = scroll_to;
                     grid.free_select = free_select;
+                    grid.listing = listing;
                     grid.show(ui);
                     row_action = grid.row_action.take();
                     rename_confirmed = grid.rename_confirmed.take();
@@ -3912,6 +3915,38 @@ mod tests {
             .collect();
         assert_eq!(names, ["second.txt"]);
         assert!(!app.listing.is_listing());
+    }
+
+    /// An empty list while the walk is still out says the listing is not in
+    /// yet. It used to call the folder empty and send the user to choose
+    /// another one, while the source bar said "listing…".
+    #[test]
+    fn an_empty_list_says_nothing_listed_yet_while_the_walk_is_out() {
+        use egui_kittest::kittest::Queryable;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let journal = tempfile::TempDir::new().unwrap();
+        let mut app = RenameItApp::headless(dir.path().to_path_buf(), journal.path().to_path_buf());
+        // A walk that holds until the test lets it go.
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        app.listing = ListingWorker::spawn_walking(
+            Box::new(move |source, stop| {
+                let _ = held.recv();
+                source.list(stop)
+            }),
+            || {},
+        );
+        app.session.request_refresh();
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1280.0, 800.0))
+            .build_ui_state(|ui, app: &mut RenameItApp| app.show(ui), app);
+        harness.run();
+        harness.get_by_label_contains("Nothing listed yet");
+
+        release.send(()).unwrap();
+        harness.state_mut().settle();
+        harness.run();
+        harness.get_by_label_contains("Nothing here");
     }
 
     /// A platform that holds its first rename until the test lets it go, so

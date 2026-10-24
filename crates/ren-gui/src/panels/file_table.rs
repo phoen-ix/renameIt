@@ -85,8 +85,11 @@ pub struct FileTable<'a> {
     /// What the right-click menu asked for, read once the table is done.
     pub row_action: Option<RowAction>,
     /// Whether the listing is Free Select, which changes what the row menu
-    /// offers ([`rows::row_menu`]). Set by the caller, like `scroll_to`.
+    /// offers ([`rows::row_menu`]) and how an empty one is filled. Set by the
+    /// caller, like `scroll_to`.
     pub free_select: bool,
+    /// Whether a listing is still out, so an empty list is not yet empty.
+    pub listing: bool,
     /// Rows that pass `row_filter`, in display order.
     visible: Vec<usize>,
 }
@@ -130,6 +133,7 @@ impl<'a> FileTable<'a> {
             rename_confirmed: None,
             row_action: None,
             free_select: false,
+            listing: false,
             visible,
             thumbs,
             thumb,
@@ -200,7 +204,13 @@ impl<'a> FileTable<'a> {
         if self.visible.is_empty() {
             let mut area = ui.max_rect();
             area.min.y += self.header_height() + CELL_GUTTER; // below the header row
-            empty_state(ui, area, self.entries.is_empty());
+            empty_state(
+                ui,
+                area,
+                self.entries.is_empty(),
+                self.free_select,
+                self.listing,
+            );
         }
     }
 
@@ -565,13 +575,14 @@ impl FileTable<'_> {
 ///
 /// Painted, so the words would reach no screen reader; the `Label` node laid
 /// over the same area carries them into the accessibility tree.
-pub(super) fn empty_state(ui: &egui::Ui, area: egui::Rect, nothing_listed: bool) {
-    let (what, how) = if nothing_listed {
-        (
-            "Nothing here",
-            "Choose a folder above, or drag files in from your file manager.",
-        )
-    } else {
+pub(super) fn empty_state(
+    ui: &egui::Ui,
+    area: egui::Rect,
+    nothing_listed: bool,
+    free_select: bool,
+    listing: bool,
+) {
+    let (what, how) = if !nothing_listed {
         // There *are* files; a filter is hiding all of them, and saying so
         // is the difference between "empty folder" and "you cannot see your
         // files" (P63's principle: never let rows vanish quietly).
@@ -579,6 +590,24 @@ pub(super) fn empty_state(ui: &egui::Ui, area: egui::Rect, nothing_listed: bool)
             "Every row is filtered out",
             "The Files/Folders switches, the pattern box and the All/Changed/Conflicts \
              chips each hide rows.",
+        )
+    } else if listing {
+        // The walk is off the frame: an empty list now says nothing yet
+        // about the folder.
+        (
+            "Nothing listed yet",
+            "The files appear here as soon as the listing finishes.",
+        )
+    } else if free_select {
+        // Free Select has no folder chooser, only its Add files… button.
+        (
+            "Nothing here",
+            "Press Add files… above, or drag files in from your file manager.",
+        )
+    } else {
+        (
+            "Nothing here",
+            "Choose a folder above, or drag files in from your file manager.",
         )
     };
 
@@ -607,16 +636,19 @@ pub(super) fn empty_state(ui: &egui::Ui, area: egui::Rect, nothing_listed: bool)
     );
     let total = heading.size().y + CELL_GUTTER + body.size().y;
     let top = centre.y - total / 2.0;
-    painter.galley(
-        egui::pos2(centre.x - heading.size().x / 2.0, top),
-        heading,
-        egui::Color32::PLACEHOLDER,
+    let heading_at = egui::pos2(centre.x - heading.size().x / 2.0, top);
+    let body_at = egui::pos2(centre.x - body.size().x / 2.0, top + total - body.size().y);
+    // The table rules its columns the full height of the pane; without a
+    // backing they run straight through the words.
+    painter.rect_filled(
+        egui::Rect::from_min_size(heading_at, heading.size())
+            .union(egui::Rect::from_min_size(body_at, body.size()))
+            .expand(CELL_GUTTER),
+        0.0,
+        ui.visuals().panel_fill,
     );
-    painter.galley(
-        egui::pos2(centre.x - body.size().x / 2.0, top + total - body.size().y),
-        body,
-        egui::Color32::PLACEHOLDER,
-    );
+    painter.galley(heading_at, heading, egui::Color32::PLACEHOLDER);
+    painter.galley(body_at, body, egui::Color32::PLACEHOLDER);
 }
 
 fn human_size(bytes: u64) -> String {

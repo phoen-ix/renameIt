@@ -567,6 +567,22 @@ fn an_empty_folder_says_how_to_fill_it_in_both_views() {
     harness.get_by_label_contains("Nothing here");
 }
 
+/// Free Select has no folder chooser, so its empty state names its own way
+/// in. It used to send the user to "choose a folder above", which is not
+/// there in Free Select — and read the same to a screen reader.
+#[test]
+fn an_empty_free_select_says_how_to_fill_it_in_both_views() {
+    let fixture = Fixture::new(&[]);
+    let mut app = fixture.app();
+    app.session_mut().settings.mode = ren_gui::viewmodel::SourceMode::FreeSelect;
+    let mut harness = harness(app);
+    harness.get_by_label_contains("Press Add files… above");
+
+    use_the_grid(&mut harness);
+    settle(&mut harness);
+    harness.get_by_label_contains("Press Add files… above");
+}
+
 /// A filter that hides every tile says so, as the list does (P63).
 #[test]
 fn a_grid_with_every_tile_filtered_out_says_so() {

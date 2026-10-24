@@ -64,8 +64,11 @@ pub struct Grid<'a> {
     /// What the right-click menu, or a double-click, asked for.
     pub row_action: Option<RowAction>,
     /// Whether the listing is Free Select, which changes what the row menu
-    /// offers. Set by the caller, like `scroll_to`.
+    /// offers and how an empty one is filled. Set by the caller, like
+    /// `scroll_to`.
     pub free_select: bool,
+    /// Whether a listing is still out, so an empty grid is not yet empty.
+    pub listing: bool,
     /// Tiles actually laid out on the last frame, for the performance harness.
     pub laid_out: usize,
 }
@@ -99,6 +102,7 @@ impl<'a> Grid<'a> {
             rename_confirmed: None,
             row_action: None,
             free_select: false,
+            listing: false,
             laid_out: 0,
         }
     }
@@ -205,7 +209,13 @@ impl<'a> Grid<'a> {
 
         // The list's words, so an empty grid is not a blank pane.
         if count == 0 {
-            super::file_table::empty_state(ui, ui.max_rect(), self.entries.is_empty());
+            super::file_table::empty_state(
+                ui,
+                ui.max_rect(),
+                self.entries.is_empty(),
+                self.free_select,
+                self.listing,
+            );
         }
     }
 

@@ -135,7 +135,7 @@ impl ListingWorker {
         Self::spawn_walking(Box::new(Source::list), repaint)
     }
 
-    fn spawn_walking(walk: Box<Walk>, repaint: impl Fn() + Send + 'static) -> Self {
+    pub(crate) fn spawn_walking(walk: Box<Walk>, repaint: impl Fn() + Send + 'static) -> Self {
         let (request_tx, request_rx) = channel::<Request>();
         let (response_tx, response_rx) = channel::<Listed>();
         let generation = Arc::new(AtomicU64::new(0));
