@@ -258,7 +258,7 @@ fn main_empty() {
     let demo = Demo::new("Empty folder");
     let mut harness = light(demo.app());
     assert!(harness.state().session().entries().is_empty());
-    harness.get_by_label("No files listed");
+    harness.get_by_label_contains("Nothing here");
     shoot(&mut harness, "main-empty");
 }
 

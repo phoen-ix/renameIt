@@ -202,6 +202,11 @@ impl<'a> Grid<'a> {
                     );
                 }
             });
+
+        // The list's words, so an empty grid is not a blank pane.
+        if count == 0 {
+            super::file_table::empty_state(ui, ui.max_rect(), self.entries.is_empty());
+        }
     }
 
     fn tile(&mut self, ui: &mut egui::Ui, index: usize) {

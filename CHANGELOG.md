@@ -29,6 +29,9 @@ and the reasoning behind each default lives beside the code it governs.
 - With any row selected, the preview was worked out again on every frame, so
   the status bar kept saying "updating…" — for as long as the row menu was
   open, for one. It is now worked out only when the selection changes.
+- An empty folder said only "No files listed". It now says *Nothing here* and
+  how to fill the list, in the grid as well as the list, and the grid says so
+  when a filter hides every tile. Screen readers hear both messages.
 
 ## [1.5.1] - 2026-10-17
 

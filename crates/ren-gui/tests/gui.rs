@@ -553,6 +553,31 @@ fn use_the_grid(harness: &mut Harness<'_, RenameItApp>) {
     harness.state_mut().session_mut().settings.view = ren_gui::viewmodel::ViewMode::Grid;
 }
 
+/// An empty folder says so and names the way out, in both views. The window
+/// used to stop at a bare "No files listed" before either view was drawn, so
+/// the list's own empty state never showed, and the grid had none.
+#[test]
+fn an_empty_folder_says_how_to_fill_it_in_both_views() {
+    let fixture = Fixture::new(&[]);
+    let mut harness = harness(fixture.app());
+    harness.get_by_label_contains("Nothing here");
+
+    use_the_grid(&mut harness);
+    settle(&mut harness);
+    harness.get_by_label_contains("Nothing here");
+}
+
+/// A filter that hides every tile says so, as the list does (P63).
+#[test]
+fn a_grid_with_every_tile_filtered_out_says_so() {
+    let fixture = Fixture::new(&["a.txt"]);
+    let mut harness = harness(fixture.app());
+    use_the_grid(&mut harness);
+    harness.state_mut().set_row_filter(RowFilter::Conflicts);
+    settle(&mut harness);
+    harness.get_by_label_contains("Every row is filtered out");
+}
+
 /// The grid is the same listing, so it shows the same files.
 #[test]
 fn the_grid_shows_the_pictures_the_list_would() {

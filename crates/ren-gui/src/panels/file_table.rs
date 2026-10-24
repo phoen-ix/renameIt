@@ -198,59 +198,10 @@ impl<'a> FileTable<'a> {
         // area rather than replacing the table, so the headers stay put and
         // stay clickable.
         if self.visible.is_empty() {
-            self.empty_state(ui);
+            let mut area = ui.max_rect();
+            area.min.y += self.header_height() + CELL_GUTTER; // below the header row
+            empty_state(ui, area, self.entries.is_empty());
         }
-    }
-
-    /// Why the list is empty, in the words that name the way out of it.
-    fn empty_state(&self, ui: &mut egui::Ui) {
-        let (what, how) = if self.entries.is_empty() {
-            (
-                "Nothing here",
-                "Choose a folder above, or drag files in from your file manager.",
-            )
-        } else {
-            // There *are* files; a filter is hiding all of them, and saying so
-            // is the difference between "empty folder" and "you cannot see your
-            // files" (P63's principle: never let rows vanish quietly).
-            (
-                "Every row is filtered out",
-                "The Files/Folders switches, the pattern box and the All/Changed/Conflicts \
-                 chips each hide rows.",
-            )
-        };
-
-        let mut area = ui.max_rect();
-        area.min.y += self.header_height() + CELL_GUTTER; // below the header row
-        if area.height() < 48.0 {
-            return;
-        }
-        let painter = ui.painter_at(area);
-        let centre = area.center();
-        let heading = painter.layout(
-            what.to_owned(),
-            egui::TextStyle::Heading.resolve(ui.style()),
-            ui.visuals().weak_text_color(),
-            area.width() - 4.0 * CELL_GUTTER,
-        );
-        let body = painter.layout(
-            how.to_owned(),
-            egui::TextStyle::Body.resolve(ui.style()),
-            ui.visuals().weak_text_color(),
-            (area.width() - 4.0 * CELL_GUTTER).min(420.0),
-        );
-        let total = heading.size().y + CELL_GUTTER + body.size().y;
-        let top = centre.y - total / 2.0;
-        painter.galley(
-            egui::pos2(centre.x - heading.size().x / 2.0, top),
-            heading,
-            egui::Color32::PLACEHOLDER,
-        );
-        painter.galley(
-            egui::pos2(centre.x - body.size().x / 2.0, top + total - body.size().y),
-            body,
-            egui::Color32::PLACEHOLDER,
-        );
     }
 
     /// The header row, which carries a frameless `Button` and so needs its
@@ -607,6 +558,65 @@ impl FileTable<'_> {
             self.row_action = Some(RowAction::Rename(index));
         }
     }
+}
+
+/// Why the list is empty, in the words that name the way out of it, painted
+/// centred in `area`. The grid draws it too.
+///
+/// Painted, so the words would reach no screen reader; the `Label` node laid
+/// over the same area carries them into the accessibility tree.
+pub(super) fn empty_state(ui: &egui::Ui, area: egui::Rect, nothing_listed: bool) {
+    let (what, how) = if nothing_listed {
+        (
+            "Nothing here",
+            "Choose a folder above, or drag files in from your file manager.",
+        )
+    } else {
+        // There *are* files; a filter is hiding all of them, and saying so
+        // is the difference between "empty folder" and "you cannot see your
+        // files" (P63's principle: never let rows vanish quietly).
+        (
+            "Every row is filtered out",
+            "The Files/Folders switches, the pattern box and the All/Changed/Conflicts \
+             chips each hide rows.",
+        )
+    };
+
+    if area.height() < 48.0 {
+        return;
+    }
+    ui.interact(
+        area,
+        ui.scope_id().with("empty_state"),
+        egui::Sense::hover(),
+    )
+    .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, format!("{what}. {how}")));
+    let painter = ui.painter_at(area);
+    let centre = area.center();
+    let heading = painter.layout(
+        what.to_owned(),
+        egui::TextStyle::Heading.resolve(ui.style()),
+        ui.visuals().weak_text_color(),
+        area.width() - 4.0 * CELL_GUTTER,
+    );
+    let body = painter.layout(
+        how.to_owned(),
+        egui::TextStyle::Body.resolve(ui.style()),
+        ui.visuals().weak_text_color(),
+        (area.width() - 4.0 * CELL_GUTTER).min(420.0),
+    );
+    let total = heading.size().y + CELL_GUTTER + body.size().y;
+    let top = centre.y - total / 2.0;
+    painter.galley(
+        egui::pos2(centre.x - heading.size().x / 2.0, top),
+        heading,
+        egui::Color32::PLACEHOLDER,
+    );
+    painter.galley(
+        egui::pos2(centre.x - body.size().x / 2.0, top + total - body.size().y),
+        body,
+        egui::Color32::PLACEHOLDER,
+    );
 }
 
 fn human_size(bytes: u64) -> String {

@@ -3681,13 +3681,8 @@ impl RenameItApp {
         }
 
         egui::CentralPanel::default().show(ui, |ui| {
-            if self.session.is_empty() {
-                ui.centered_and_justified(|ui| {
-                    ui.label(egui::RichText::new("No files listed").weak());
-                });
-                return;
-            }
-
+            // No early return for an empty listing: both views say why they
+            // are empty and how to fill them (`file_table::empty_state`).
             // The view needs the listing and the selection at once, and both
             // live in `session`, so the selection is lent out for the frame
             // and goes straight back. Its rows are copied first, to tell

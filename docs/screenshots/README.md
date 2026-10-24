@@ -19,9 +19,10 @@ The same in the dark theme (Settings ▸ Appearance).
 
 ## An empty folder
 
-A folder with nothing in it: the list reads *No files listed*.
+A folder with nothing in it: the list says *Nothing here* and how to fill it
+— choose a folder above, or drag files in.
 
-<img src="main-empty.png" alt="The main window over an empty folder, with the message No files listed" width="800">
+<img src="main-empty.png" alt="The main window over an empty folder, with the message Nothing here and how to add files" width="800">
 
 ## A conflict
 
