@@ -174,6 +174,13 @@ fn window(app: RenameItApp, theme: egui::Theme) -> Harness<'static, RenameItApp>
         .with_render_cursor(false)
         .build_ui_state(|ui, app: &mut RenameItApp| app.show(ui), app);
     settle(&mut harness);
+    // A blinking caret is a clock whose time is the number of passes taken,
+    // and a worker landing late on a busy machine changes that number. Held
+    // steady — after the first frame, which installs the app's style — a
+    // focused field renders the same every run.
+    harness
+        .ctx
+        .all_styles_mut(|style| style.visuals.text_cursor.blink = false);
     harness
 }
 
