@@ -3079,8 +3079,12 @@ impl RenameItApp {
 
     fn log_panel(&mut self, ui: &mut egui::Ui) {
         use crate::viewmodel::LogLine;
+        // `min_scrolled_height` as well: the bottom panel is sized from the
+        // last frame, so the space left in it never reached 140 and the log
+        // sat at egui's 64 pt minimum — three lines.
         egui::ScrollArea::vertical()
             .max_height(140.0)
+            .min_scrolled_height(140.0)
             .auto_shrink([false, true])
             .show(ui, |ui| {
                 for line in &self.history.log {

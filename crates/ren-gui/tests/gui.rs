@@ -1413,6 +1413,26 @@ fn an_action_only_run_reports_what_it_did() {
     );
 }
 
+/// The run log opens as tall as it may (140 pt). The bottom panel is sized
+/// from the last frame, so the room left in it never grew and the log sat at
+/// a scroll area's 64 pt fallback: three lines.
+#[test]
+fn the_run_log_opens_at_its_full_height() {
+    let names: Vec<String> = (1..=9).map(|i| format!("f{i}.txt")).collect();
+    let fixture = Fixture::new(&names.iter().map(String::as_str).collect::<Vec<_>>());
+    let mut harness = harness(fixture.app());
+    *harness.state_mut().operation_mut() = OpKind::Replace(Replace::new("f", "g"));
+    settle(&mut harness);
+    harness.state_mut().run_now();
+    settle(&mut harness);
+
+    let on_screen = harness
+        .query_all_by_label_contains("  →  ")
+        .filter(|line| line.rect().bottom() <= 800.0)
+        .count();
+    assert!(on_screen >= 5, "{on_screen} log lines on screen");
+}
+
 /// A simulation of the same run said "Simulated 0 renames — nothing was
 /// written", which is wrong about the count as well as the noun.
 #[test]

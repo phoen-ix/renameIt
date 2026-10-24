@@ -274,8 +274,8 @@ fn main_conflict() {
     shoot(&mut harness, "main-conflict");
 }
 
-/// Three files, not the whole holiday folder: the run log opens at a
-/// scroll area's minimum height, which a fourth line would overflow.
+/// Three files, not the whole holiday folder, so the run log ends on a whole
+/// line instead of under a scrollbar.
 #[test]
 fn main_after_run() {
     let demo = Demo::new("Holiday 2026")

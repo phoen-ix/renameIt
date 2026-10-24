@@ -32,6 +32,7 @@ and the reasoning behind each default lives beside the code it governs.
 - An empty folder said only "No files listed". It now says *Nothing here* and
   how to fill the list, in the grid as well as the list, and the grid says so
   when a filter hides every tile. Screen readers hear both messages.
+- The run log opened three lines tall; it now opens up to its full height.
 
 ## [1.5.1] - 2026-10-17
 
