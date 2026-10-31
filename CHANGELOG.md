@@ -35,6 +35,10 @@ and the reasoning behind each default lives beside the code it governs.
   a folder is still being listed it says *Nothing listed yet* instead. Screen
   readers hear every one of these messages.
 - The run log opened three lines tall; it now opens up to its full height.
+- The Counter setup, Setup parts and Include filter popovers, and a Batch
+  Replace rule's ⋯ options, closed on any click inside them: ticking one box,
+  pressing ✨ or clicking into a text box shut them. They now stay open until
+  you click elsewhere.
 - A screen reader now hears a name for the pattern box, Counter setup's
   *Reset at:* number, a Batch Replace rule's *Skip:* and *Max:*, and the box
   that renames a preset.

@@ -6873,3 +6873,92 @@ fn the_preset_rename_box_has_a_name() {
     settle(&mut harness);
     harness.get_by_label("Cancel");
 }
+
+// --- Wave 2: popovers that closed on the first click inside them --------------
+//
+// egui closes a popup on any click by default, inside it or not. A menu wants
+// that; a popover of fields does not.
+
+#[test]
+fn the_counter_popover_stays_open_while_its_boxes_are_ticked() {
+    let fixture = Fixture::new(&["a.txt"]);
+    let mut harness = harness(fixture.app());
+    harness.get_by_label_contains("Counter setup").click();
+    settle(&mut harness);
+
+    for label in [
+        "Reset each folder",
+        "Reset on base name change",
+        "Running counter",
+    ] {
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::CheckBox, label)
+            .click();
+        settle(&mut harness);
+    }
+    let counter = &harness.state().settings().counter;
+    assert!(counter.reset_each_folder && counter.reset_on_base_name && counter.running);
+}
+
+/// The click that puts the caret in the include box used to close the popover
+/// before a key could reach it.
+#[test]
+fn the_include_filter_popover_takes_a_click_and_then_typing() {
+    let fixture = Fixture::new(&["x_1.txt", "y_1.mp3"]);
+    let mut harness = harness(fixture.app());
+    *harness.state_mut().operation_mut() = OpKind::Replace(Replace::new("_", " "));
+    settle(&mut harness);
+    harness.get_by_label("Include filter…").click();
+    settle(&mut harness);
+
+    harness
+        .get_by_role_and_label(
+            egui::accesskit::Role::TextInput,
+            "Include only files matching:",
+        )
+        .click();
+    settle(&mut harness);
+    focused_text_box(&harness).type_text("y*");
+    settle(&mut harness);
+    assert_eq!(new_names(&harness), ["x_1.txt", "y 1.mp3"]);
+}
+
+/// ✨ fills the parts pattern, and the popover stays to show what it found.
+#[test]
+fn the_parts_wand_keeps_its_popover_open() {
+    let fixture = Fixture::new(&["01 - Artist - Title.mp3"]);
+    let mut harness = harness(fixture.app());
+    harness.get_by_label_contains("Setup parts").click();
+    settle(&mut harness);
+
+    harness.get_by_label("✨").click();
+    settle(&mut harness);
+    assert!(!harness.state().settings().parts.is_empty());
+    harness.get_by_label_contains("<%1> 01");
+}
+
+#[test]
+fn a_batch_rules_options_stay_open_while_they_are_used() {
+    let fixture = Fixture::new(&["one.txt"]);
+    let mut harness = harness(fixture.app());
+    harness.key_press(egui::Key::F8);
+    settle(&mut harness);
+    let before = harness.state().batch_replace_rules()[0].case_sensitive;
+
+    harness.get_all_by_label("⋯").next().unwrap().click();
+    settle(&mut harness);
+    // The open card behind the window has a Case sensitive box of its own, at
+    // the left; the popover's is right of it.
+    harness
+        .get_all_by_role_and_label(egui::accesskit::Role::CheckBox, "Case sensitive")
+        .max_by(|a, b| a.rect().left().total_cmp(&b.rect().left()))
+        .unwrap()
+        .click();
+    settle(&mut harness);
+    assert_eq!(
+        harness.state().batch_replace_rules()[0].case_sensitive,
+        !before
+    );
+    // The card's own Swap mode, and the popover's, still open.
+    assert_eq!(harness.get_all_by_label("Swap mode").count(), 2);
+}

@@ -23,10 +23,15 @@ pub fn ui(ui: &mut egui::Ui, settings: &mut RunSettings, sample: Option<&FileEnt
                 format!("Counter setup: {}", counter_chip(&settings.counter)),
             )
             .on_hover_text("Start, step, padding and the resets");
-        egui::Popup::from_toggle_button_response(&chip).show(|ui| {
-            ui.set_min_width(300.0);
-            changed |= counter_ui(ui, &mut settings.counter);
-        });
+        // Both chips stay open until a click lands outside them; egui's default
+        // closes a popup on any click, a ticked box included (as the include
+        // filter's popover does in `source_bar`).
+        egui::Popup::from_toggle_button_response(&chip)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                ui.set_min_width(300.0);
+                changed |= counter_ui(ui, &mut settings.counter);
+            });
 
         let chip = ui
             .selectable_label(
@@ -34,10 +39,12 @@ pub fn ui(ui: &mut egui::Ui, settings: &mut RunSettings, sample: Option<&FileEnt
                 format!("Setup parts: {}", parts_chip(&settings.parts)),
             )
             .on_hover_text("How your filenames are put together, for <%1> … <%9>");
-        egui::Popup::from_toggle_button_response(&chip).show(|ui| {
-            ui.set_min_width(320.0);
-            changed |= parts_ui(ui, &mut settings.parts, sample);
-        });
+        egui::Popup::from_toggle_button_response(&chip)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                ui.set_min_width(320.0);
+                changed |= parts_ui(ui, &mut settings.parts, sample);
+            });
     });
 
     changed |= ui

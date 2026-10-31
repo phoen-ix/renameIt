@@ -113,11 +113,16 @@ pub fn ui(
             .on_hover_ui(|ui| {
                 ui.label(filter.summary());
             });
-        egui::Popup::from_toggle_button_response(&chip).show(|ui| {
-            if filter.ui(ui) {
-                out.refilter = true;
-            }
-        });
+        // Open until a click lands outside it: egui's default closes a popup on
+        // any click, so clicking into the include box shut the popover before
+        // a key could reach it.
+        egui::Popup::from_toggle_button_response(&chip)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                if filter.ui(ui) {
+                    out.refilter = true;
+                }
+            });
 
         if listing {
             // The walk is on its own thread and the rows on screen are the

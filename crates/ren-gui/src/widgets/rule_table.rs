@@ -152,37 +152,42 @@ pub fn ui(ui: &mut egui::Ui, rules: &mut Vec<Replace>) -> bool {
                                 },
                             )
                             .on_hover_text("Case, swap, skip and max for this rule");
-                        egui::Popup::from_toggle_button_response(&chip).show(|ui| {
-                            ui.set_min_width(220.0);
-                            changed |= ui
-                                .checkbox(&mut rule.case_sensitive, "Case sensitive")
-                                .on_hover_text(
-                                    "Otherwise \"Photo\" and \"photo\" are the same word",
-                                )
-                                .changed();
-                            changed |= ui
-                                .checkbox(&mut rule.swap, "Swap mode")
-                                .on_hover_text("Find becomes replace, and replace becomes find")
-                                .changed();
-                            // The same note the single-card editor draws, for
-                            // the same reason: swap is ignored with wildcards,
-                            // a regex, or tags in the replace box, and a ticked
-                            // box that does nothing is worse than no box.
-                            if rule.swap && !rule.swap_applies() {
-                                ui.label(
-                                    egui::RichText::new("swap ignored here")
-                                        .weak()
-                                        .italics()
-                                        .small(),
-                                );
-                            }
-                            ui.horizontal(|ui| {
-                                changed |= crate::editors::number(ui, "Skip:", &mut rule.skip);
+                        // Open until a click lands outside it, as the source
+                        // bar's include filter is: egui's default closes on any
+                        // click, the first ticked box included.
+                        egui::Popup::from_toggle_button_response(&chip)
+                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                            .show(|ui| {
+                                ui.set_min_width(220.0);
+                                changed |= ui
+                                    .checkbox(&mut rule.case_sensitive, "Case sensitive")
+                                    .on_hover_text(
+                                        "Otherwise \"Photo\" and \"photo\" are the same word",
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .checkbox(&mut rule.swap, "Swap mode")
+                                    .on_hover_text("Find becomes replace, and replace becomes find")
+                                    .changed();
+                                // The same note the single-card editor draws, for
+                                // the same reason: swap is ignored with wildcards,
+                                // a regex, or tags in the replace box, and a ticked
+                                // box that does nothing is worse than no box.
+                                if rule.swap && !rule.swap_applies() {
+                                    ui.label(
+                                        egui::RichText::new("swap ignored here")
+                                            .weak()
+                                            .italics()
+                                            .small(),
+                                    );
+                                }
+                                ui.horizontal(|ui| {
+                                    changed |= crate::editors::number(ui, "Skip:", &mut rule.skip);
+                                });
+                                ui.horizontal(|ui| {
+                                    changed |= crate::editors::number(ui, "Max:", &mut rule.max);
+                                });
                             });
-                            ui.horizontal(|ui| {
-                                changed |= crate::editors::number(ui, "Max:", &mut rule.max);
-                            });
-                        });
 
                         if ui
                             .add_enabled(
