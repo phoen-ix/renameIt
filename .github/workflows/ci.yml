@@ -146,6 +146,39 @@ jobs:
       - name: Thumbnail grid budget (Spike B, grid)
         run: cargo run --locked --release -p ren-gui --example spike_preview_headless -- 10000 100 grid
 
+  # The end-to-end suite on its own (docs/COVERAGE.md): every GUI feature
+  # driven through the accessibility tree, every CLI flag through the binary.
+  # The Linux job's `cargo test --workspace` runs these too; this job is the
+  # one whose name and log say which feature broke.
+  e2e:
+    name: E2E — GUI (kittest) and CLI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libgl1-mesa-dev
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: E2E suite
+        run: scripts/e2e.sh
+        env:
+          TZ: Asia/Kolkata
+          ARTIFACTS: ${{ runner.temp }}/e2e
+
+      - name: Keep the log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-log
+          path: ${{ runner.temp }}/e2e/e2e.log
+          retention-days: 7
+
   windows:
     name: Windows — tests, GUI build
     runs-on: windows-latest
