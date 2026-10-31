@@ -22,6 +22,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# The token every job gets can read the repository and nothing else: no job
+# here writes through the API. Artifacts and rust-cache go through the runner's
+# own service token, not this one; `release.yml` asks for what it needs itself.
+permissions:
+  contents: read
+
 jobs:
   linux:
     name: Linux — fmt, clippy, tests
