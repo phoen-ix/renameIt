@@ -6962,3 +6962,54 @@ fn a_batch_rules_options_stay_open_while_they_are_used() {
     // The card's own Swap mode, and the popover's, still open.
     assert_eq!(harness.get_all_by_label("Swap mode").count(), 2);
 }
+
+// --- Wave 2: the drawer's Import… --------------------------------------------
+
+/// Import… sat below the drawer's bottom edge, under a list that took the
+/// whole panel: in the accessibility tree, and nowhere a pointer could reach.
+#[test]
+fn the_drawers_import_button_is_on_screen_and_imports() {
+    #[derive(Debug)]
+    struct Opens(std::path::PathBuf);
+
+    impl ren_gui::dialogs::FileDialogs for Opens {
+        fn pick_folder(&self, _start: &std::path::Path) -> Option<std::path::PathBuf> {
+            None
+        }
+        fn pick_files(&self) -> Option<Vec<std::path::PathBuf>> {
+            None
+        }
+        fn open_preset(&self) -> Option<std::path::PathBuf> {
+            Some(self.0.clone())
+        }
+        fn save_preset(&self, _suggested: &str) -> Option<std::path::PathBuf> {
+            None
+        }
+        fn open_csv(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+
+    let fixture = Fixture::new(&["a_b.txt"]);
+    let shared = TempDir::new().unwrap();
+    let file = shared.path().join("tidy.toml");
+    std::fs::write(
+        &file,
+        "[preset]\nname = \"Tidy\"\n\n[[step]]\nop = \"replace\"\nfind = \"_\"\nreplace = \" \"\n",
+    )
+    .unwrap();
+    let app = RenameItApp::headless_with_dialogs(
+        fixture.dir.path().to_path_buf(),
+        fixture.journal.path().to_path_buf(),
+        Box::new(Opens(file)),
+    );
+    let mut harness = harness(app);
+    harness.state_mut().open_presets();
+    settle(&mut harness);
+
+    let import = harness.get_by_label("Import…").rect();
+    assert!(import.bottom() <= 800.0, "below the window: {import:?}");
+    harness.get_by_label("Import…").click();
+    settle(&mut harness);
+    assert_eq!(harness.state().preset_names(), ["Tidy"]);
+}

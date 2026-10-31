@@ -85,7 +85,8 @@ the list — here *tags* leaves the Music operations and Free Format.
 ## Presets
 
 **Presets ▾**: save the stack under a name, and load, append or run a saved
-one. The six shipped presets are listed.
+one. The six shipped presets are listed, and **Import…** at the foot of the
+drawer adds a preset from a file.
 
 <img src="presets-drawer.png" alt="The preset drawer beside the file list" width="800">
 

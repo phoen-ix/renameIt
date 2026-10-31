@@ -153,44 +153,50 @@ pub fn ui(
     ui.add_space(6.0);
     ui.separator();
 
-    egui::ScrollArea::vertical()
-        .id_salt("preset_list")
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            if entries.is_empty() && problems.is_empty() {
-                ui.label(
-                    egui::RichText::new("No presets saved yet.")
-                        .weak()
-                        .italics(),
-                );
-            }
-            for entry in entries {
-                row(ui, state, entry, &mut out, dialogs, busy);
-                ui.add_space(4.0);
-            }
-            // A file that will not load is named, not hidden: a preset that
-            // stopped working is exactly what the user needs told.
-            for problem in problems {
-                let name = problem
-                    .path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| problem.path.display().to_string());
-                ui.label(
-                    egui::RichText::new(format!("⚠ {name}: {}", problem.error))
-                        .color(ui.visuals().warn_fg_color)
-                        .small(),
-                );
+    // Import… is the footer, laid out from the bottom up before the list takes
+    // the rest. Drawn after a list that fills the panel, it landed below the
+    // panel's edge: in the tree, and nowhere on screen.
+    ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+        ui.horizontal(|ui| {
+            if ui.button("Import…").clicked()
+                && let Some(path) = dialogs.open_preset()
+            {
+                out.import = Some(path);
             }
         });
-
-    ui.separator();
-    ui.horizontal(|ui| {
-        if ui.button("Import…").clicked()
-            && let Some(path) = dialogs.open_preset()
-        {
-            out.import = Some(path);
-        }
+        ui.separator();
+        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("preset_list")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    if entries.is_empty() && problems.is_empty() {
+                        ui.label(
+                            egui::RichText::new("No presets saved yet.")
+                                .weak()
+                                .italics(),
+                        );
+                    }
+                    for entry in entries {
+                        row(ui, state, entry, &mut out, dialogs, busy);
+                        ui.add_space(4.0);
+                    }
+                    // A file that will not load is named, not hidden: a preset that
+                    // stopped working is exactly what the user needs told.
+                    for problem in problems {
+                        let name = problem
+                            .path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| problem.path.display().to_string());
+                        ui.label(
+                            egui::RichText::new(format!("⚠ {name}: {}", problem.error))
+                                .color(ui.visuals().warn_fg_color)
+                                .small(),
+                        );
+                    }
+                });
+        });
     });
 
     out

@@ -39,6 +39,8 @@ and the reasoning behind each default lives beside the code it governs.
   Replace rule's ⋯ options, closed on any click inside them: ticking one box,
   pressing ✨ or clicking into a text box shut them. They now stay open until
   you click elsewhere.
+- The presets drawer's **Import…** button sat below the bottom edge of the
+  drawer, out of sight; it is now pinned to the drawer's foot.
 - A screen reader now hears a name for the pattern box, Counter setup's
   *Reset at:* number, a Batch Replace rule's *Skip:* and *Max:*, and the box
   that renames a preset.
