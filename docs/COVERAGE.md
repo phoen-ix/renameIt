@@ -26,8 +26,8 @@ grep -oE "'[a-z?]' =>" crates/ren-cli/src/compat.rs                             
 
 The rows also cover the dialogs, banners and error states those modules draw.
 
-**Totals:** 244 numbered rows plus the 3 sweep rows. 239 rows are ✅ and 5 are ❌.
-Of the ❌ rows, 4 are (c) covered at another layer and 1 is (d) cannot be driven.
+**Totals:** 244 numbered rows plus the 3 sweep rows. 242 rows are ✅ and 2 are ❌,
+both (c) covered at another layer.
 
 Roles: none. This is a single-user desktop app and a CLI, with no accounts.
 
@@ -166,7 +166,7 @@ Roles: none. This is a single-user desktop app and a CLI, with no accounts.
 | 97 | Setup parts pattern feeds `<%n>` | ✅ gui › the_parts_pattern_feeds_the_part_tags |
 | 98 | Setup parts ✨ detect | ✅ gui › the_parts_wand_keeps_its_popover_open |
 | 99 | Chips summarise and open | ✅ gui › the_counter_and_parts_chips_summarise_and_open |
-| 100 | Only rename if all tags are available | ❌ (c) engine: `crates/ren-core/src/ops/music_tagger.rs` › only_if_all_tags_are_available_leaves_the_whole_file_alone; the checkbox is drawn: gui › the_counter_setup_panel_drives_the_counter |
+| 100 | Only rename if all tags are available | ✅ e2e › only_if_all_tags_are_available_leaves_an_untagged_file_alone |
 
 ## File list and grid (`panels/file_table.rs`, `rows.rs`, `grid.rs`, `tile.rs`)
 
@@ -222,7 +222,7 @@ Roles: none. This is a single-user desktop app and a CLI, with no accounts.
 | 143 | Undo of a mixed batch says what stayed | ✅ gui › undoing_a_mixed_batch_says_what_could_not_be_taken_back |
 | 144 | Tag-only run does not arm Undo | ✅ gui › a_run_that_only_wrote_tags_does_not_arm_undo |
 | 145 | Error state: system folder blocks the run | ✅ gui › a_guarded_folder_blocks_the_run_with_a_reason |
-| 146 | Cancel a running batch | ❌ (c) `crates/ren-gui/src/app.rs` › a_cancelled_run_stops_after_the_op_under_way_and_is_undoable; a headless run finishes before a frame can show Cancel |
+| 146 | Cancel a running batch | ✅ e2e › cancel_stops_a_running_batch_after_the_file_under_way (Undo after a cancel: `crates/ren-gui/src/app.rs` › a_cancelled_run_stops_after_the_op_under_way_and_is_undoable) |
 | 147 | "preview failed" (engine panic) | ❌ (c) `crates/ren-gui/src/viewmodel/preview.rs` › a_panic_in_the_engine_is_reported_and_the_worker_survives; no input makes the engine panic, so the GUI cannot be driven to it |
 | 148 | Batch undone in another window | ✅ gui › a_batch_undone_elsewhere_leaves_the_undo_stack |
 | 149 | Free Select run keeps its rows | ✅ gui › a_free_select_run_keeps_its_rows |
@@ -271,7 +271,7 @@ Roles: none. This is a single-user desktop app and a CLI, with no accounts.
 | 177 | Display: Restore defaults (columns); Music Styles: Restore defaults | ✅ e2e › the_display_page_stores_its_switches; gui › a_restored_string_list_row_does_not_inherit_the_old_rows_undo |
 | 178 | Display: stripes, thumbnail border | ✅ e2e › the_display_page_stores_its_switches |
 | 179 | File System: hidden, write-protected, pattern scope | ✅ e2e › the_file_system_page_changes_what_is_listed |
-| 180 | File System: System files switch | ❌ (d) a system file is a Windows attribute and Linux has none (`crates/ren-platform/src/visibility.rs` › nothing_is_a_system_file_here); the switch feeds the same `ren-core/src/listing.rs` predicate as the two above |
+| 180 | File System: System files switch | ✅ e2e › the_file_system_page_changes_what_is_listed (the switch; what it hides is a Windows attribute, so Linux lists nothing differently: `crates/ren-platform/src/visibility.rs` › nothing_is_a_system_file_here) |
 | 181 | File System: system-folder guard | ✅ gui › a_guarded_folder_blocks_the_run_with_a_reason |
 | 182 | Startup page | ✅ gui › the_startup_page_stores_a_switch_that_a_later_start_obeys |
 | 183 | Shell Integration page | ✅ gui › the_shell_page_says_what_this_platform_can_do |

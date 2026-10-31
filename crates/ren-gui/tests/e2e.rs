@@ -8,7 +8,7 @@
 //! found by its label is also a control a screen reader can name.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 use egui::accesskit::Role;
 use egui_kittest::Harness;
@@ -711,6 +711,24 @@ fn the_counter_setup_popover_drives_the_counter() {
     assert_eq!(new_names(&harness), ["10-a.txt", "15-b.txt", "10-c.txt"]);
 }
 
+/// "Only rename if all tags are available", ticked: a file whose tags cannot
+/// all be filled in keeps its name rather than one with a gap in it.
+#[test]
+fn only_if_all_tags_are_available_leaves_an_untagged_file_alone() {
+    let fixture = Fixture::new(&["a.txt"]);
+    let mut harness = sized(fixture.app(), 1000.0);
+    add_from_palette(&mut harness, "Free Format", false);
+    type_into(&mut harness, "Pattern:", "<Name> by <Artist>.txt");
+    assert_eq!(new_names(&harness), ["a by .txt"]);
+
+    harness
+        .get_by_role_and_label(Role::CheckBox, "Only rename if all tags are available")
+        .click();
+    settle(&mut harness);
+    assert!(harness.state().settings().require_all_tags);
+    assert_eq!(new_names(&harness), ["a.txt"]);
+}
+
 // --- The presets drawer, through its own buttons ------------------------------
 
 #[test]
@@ -844,14 +862,29 @@ fn the_recovery_banner_can_be_left_as_it_is() {
     assert_eq!(fixture.names(), ["b.txt"]);
 }
 
-/// The host platform, recording what it was asked to show.
+/// `(open, reached)`: the first rename sets `reached` and waits for `open`.
+type Gate = Arc<(Mutex<(bool, bool)>, Condvar)>;
+
+/// The host platform, recording what it was asked to show and, given a gate,
+/// holding its first rename there.
 #[derive(Debug)]
-struct RevealSpy {
+struct Spy {
     inner: Arc<dyn ren_platform::Platform>,
     revealed: Mutex<Vec<PathBuf>>,
+    gate: Option<Gate>,
 }
 
-impl ren_platform::Platform for RevealSpy {
+impl Spy {
+    fn new(gate: Option<Gate>) -> Arc<Self> {
+        Arc::new(Self {
+            inner: ren_platform::host(),
+            revealed: Mutex::default(),
+            gate,
+        })
+    }
+}
+
+impl ren_platform::Platform for Spy {
     fn name(&self) -> &'static str {
         self.inner.name()
     }
@@ -859,6 +892,15 @@ impl ren_platform::Platform for RevealSpy {
         self.inner.capabilities()
     }
     fn rename(&self, from: &Path, to: &Path) -> ren_platform::Result<()> {
+        if let Some(gate) = &self.gate {
+            let (state, signal) = &**gate;
+            let mut state = state.lock().unwrap();
+            if !state.1 {
+                state.1 = true;
+                signal.notify_all();
+                drop(signal.wait_while(state, |s| !s.0).unwrap());
+            }
+        }
         self.inner.rename(from, to)
     }
     fn replace_file(&self, temp: &Path, target: &Path) -> ren_platform::Result<()> {
@@ -903,10 +945,7 @@ impl ren_platform::Platform for RevealSpy {
 #[test]
 fn show_in_file_manager_reveals_the_row_and_the_problem_solver_its_folders() {
     let fixture = Fixture::new(&["one.txt"]);
-    let spy = Arc::new(RevealSpy {
-        inner: ren_platform::host(),
-        revealed: Mutex::new(Vec::new()),
-    });
+    let spy = Spy::new(None);
     let app = RenameItApp::headless_with_platform(
         fixture.path().to_path_buf(),
         fixture.journal.path().to_path_buf(),
@@ -938,7 +977,60 @@ fn show_in_file_manager_reveals_the_row_and_the_problem_solver_its_folders() {
     );
 }
 
-/// Settings ▸ File System: the hidden-files switch and the pattern scope.
+/// The status bar's Cancel, clicked while the first rename is held: that file
+/// is renamed, the rest are not, and the status says the run stopped.
+#[test]
+fn cancel_stops_a_running_batch_after_the_file_under_way() {
+    let fixture = Fixture::new(&["a_1.txt", "a_2.txt", "a_3.txt"]);
+    let gate = Gate::default();
+    let app = RenameItApp::headless_with_platform(
+        fixture.path().to_path_buf(),
+        fixture.journal.path().to_path_buf(),
+        Spy::new(Some(gate.clone())),
+    );
+    let mut harness = harness(app);
+    type_into(&mut harness, "text or * : ?", "_");
+    type_into(&mut harness, "leave empty to delete", "-");
+
+    // Frames only while the gate is shut: `settle` waits for the run to end.
+    harness
+        .get_by_role_and_label(Role::Button, "Rename")
+        .click();
+    harness.step();
+    let (state, signal) = &*gate;
+    let (guard, wait) = signal
+        .wait_timeout_while(
+            state.lock().unwrap(),
+            std::time::Duration::from_secs(10),
+            |s| !s.1,
+        )
+        .unwrap();
+    assert!(!wait.timed_out(), "the run reached its first rename");
+    drop(guard);
+    harness.step();
+    harness
+        .get_by_role_and_label(Role::Button, "Cancel")
+        .click();
+    // One frame takes the click, the next draws what it did.
+    harness.step();
+    harness.step();
+    assert!(present(&harness, "stopping…"));
+
+    state.lock().unwrap().0 = true;
+    signal.notify_all();
+    settle(&mut harness);
+    assert!(
+        harness
+            .state()
+            .status()
+            .is_some_and(|s| s.starts_with("Stopped")),
+        "{:?}",
+        harness.state().status()
+    );
+    assert_eq!(fixture.names(), ["a-1.txt", "a_2.txt", "a_3.txt"]);
+}
+
+/// Settings ▸ File System: the visibility switches and the pattern scope.
 #[test]
 fn the_file_system_page_changes_what_is_listed() {
     let fixture = Fixture::new(&["seen.txt", ".hidden.dat", "locked.txt", "folder/inner.txt"]);
@@ -969,6 +1061,14 @@ fn the_file_system_page_changes_what_is_listed() {
         // A leading dot is what hidden means on Unix; on Windows an attribute.
         assert_eq!(listed(&harness), ["seen.txt"]);
     }
+    // No file carries the system attribute on Linux (`ren-platform`'s
+    // visibility.rs), so only the switch itself can be checked here.
+    let system = harness.state().session().settings.show_system;
+    harness
+        .get_by_role_and_label(Role::CheckBox, "System files and folders")
+        .click();
+    settle(&mut harness);
+    assert_eq!(harness.state().session().settings.show_system, !system);
 
     // The pattern applies to Files only, so a folder that does not match it
     // stays listed beside the files that do. Two chips say "Files": the
@@ -1010,8 +1110,9 @@ fn the_display_page_stores_its_switches() {
     assert_eq!(harness.state().session().settings.thumb_border, !border);
 
     // A column turned on, then Restore defaults: the table is back to four.
-    harness.get_all_by_label("Ext").next().unwrap().click();
+    harness.get_by_role_and_label(Role::CheckBox, "Ext").click();
     settle(&mut harness);
+    assert_eq!(harness.get_all_by_label("Ext").count(), 2, "box and header");
     click(&mut harness, "Restore defaults");
     click(&mut harness, "Close");
     assert!(harness.query_by_label("Ext").is_none(), "Ext is off again");
