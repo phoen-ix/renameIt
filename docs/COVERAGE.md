@@ -27,7 +27,7 @@ grep -oE "'[a-z?]' =>" crates/ren-cli/src/compat.rs                             
 The rows also cover the dialogs, banners and error states those modules draw.
 
 **Totals:** 244 numbered rows plus the 3 sweep rows. 239 rows are ✅ and 5 are ❌.
-Of the ❌ rows, 3 are (c) covered at another layer and 2 are (d) cannot be driven.
+Of the ❌ rows, 4 are (c) covered at another layer and 1 is (d) cannot be driven.
 
 Roles: none. This is a single-user desktop app and a CLI, with no accounts.
 
@@ -223,7 +223,7 @@ Roles: none. This is a single-user desktop app and a CLI, with no accounts.
 | 144 | Tag-only run does not arm Undo | ✅ gui › a_run_that_only_wrote_tags_does_not_arm_undo |
 | 145 | Error state: system folder blocks the run | ✅ gui › a_guarded_folder_blocks_the_run_with_a_reason |
 | 146 | Cancel a running batch | ❌ (c) `crates/ren-gui/src/app.rs` › a_cancelled_run_stops_after_the_op_under_way_and_is_undoable; a headless run finishes before a frame can show Cancel |
-| 147 | "preview failed" (engine panic) | ❌ (d) needs an engine panic, which no input reaches; the worker side is `crates/ren-gui/src/viewmodel/apply.rs` › its `Panics` platform test |
+| 147 | "preview failed" (engine panic) | ❌ (c) `crates/ren-gui/src/viewmodel/preview.rs` › a_panic_in_the_engine_is_reported_and_the_worker_survives; no input makes the engine panic, so the GUI cannot be driven to it |
 | 148 | Batch undone in another window | ✅ gui › a_batch_undone_elsewhere_leaves_the_undo_stack |
 | 149 | Free Select run keeps its rows | ✅ gui › a_free_select_run_keeps_its_rows |
 | 150 | Free Select file gone costs one row | ✅ gui › a_free_select_file_that_is_gone_costs_only_its_own_row |
