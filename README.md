@@ -5,7 +5,7 @@ ships first. MIT licensed.
 
 <img src="docs/screenshots/main-preview.png" alt="The RenameIt window: a folder of holiday photos, a Find &amp; Replace card and a Set Casing card on the left, and the file list showing each old name beside its new one with the changed part highlighted" width="800">
 
-> **Status: 1.5.1.** Browse or drag in files, stack up as many operations as you
+> **Status: 1.6.0.** Browse or drag in files, stack up as many operations as you
 > like, watch the composed result preview as you type, save the stack as a
 > preset and run it again later — or from the command line. One rename is one
 > undo, however many operations produced it.
@@ -471,7 +471,7 @@ feature and every CLI flag to its test. CI runs the suite as its `e2e` job.
 ## Releases
 
 Push `main` first and **let CI go green**, then tag:
-`git tag -a v1.5.1 -m "1.5.1" && git push origin v1.5.1` runs
+`git tag -a v1.6.0 -m "1.6.0" && git push origin v1.6.0` runs
 [`.github/workflows/release.yml`](.github/workflows/release.yml), which builds, packages
 `RenameIt-windows-x64.zip` **and** `RenameIt-linux-x64.tar.gz`, and drafts a
 GitHub release whose notes are the newest section of [`CHANGELOG.md`](CHANGELOG.md). Draft, not

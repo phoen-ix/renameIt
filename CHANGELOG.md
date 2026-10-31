@@ -6,7 +6,11 @@ Two things this file does **not** track. Engine and UI decisions live in
 `docs/DECISIONS.md`, which is the authority on why anything behaves as it does;
 and the reasoning behind each default lives beside the code it governs.
 
-## [Unreleased]
+## [1.6.0] - 2026-10-31
+
+egui 0.37, and a round of interface fixes: popovers that stay open while you
+use them, empty lists that say how to fill them, and a name for every box a
+screen reader reaches.
 
 ### Added
 
