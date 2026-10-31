@@ -250,8 +250,9 @@ pub fn ui(ui: &mut egui::Ui, op: &mut OpKind, cx: &EditorCx<'_>) -> bool {
 /// A labelled integer box, for a row laid out by hand — the Batch Replace
 /// table's *Skip:* and *Max:*.
 pub(crate) fn number(ui: &mut egui::Ui, label: &str, value: &mut usize) -> bool {
-    ui.label(label);
-    number_box(ui, value).changed()
+    // Labelled, or a screen reader announces a bare "spin button".
+    let label = ui.label(label);
+    number_box(ui, value).labelled_by(label.id).changed()
 }
 
 /// The integer box alone, for a [`Form`](crate::widgets::form::Form) row that

@@ -6800,3 +6800,76 @@ fn a_selection_holding_a_wildcard_character_says_what_it_will_mean() {
 
     harness.get_by_label_contains("tick Regular expression");
 }
+
+// --- Wave 2: names a screen reader was not given ------------------------------
+
+/// The pattern box is named by its label. "Pattern:" was drawn beside it and
+/// attached to nothing, so a screen reader read out the hint, "*.*".
+#[test]
+fn the_pattern_box_is_named_by_its_label() {
+    let fixture = Fixture::new(&["a.txt", "b.mp3", "c.mp3"]);
+    let mut harness = harness(fixture.app());
+
+    harness
+        .get_by_role_and_label(egui::accesskit::Role::TextInput, "Pattern:")
+        .focus();
+    harness.run();
+    focused_text_box(&harness).type_text("*.mp3");
+    settle(&mut harness);
+    assert_eq!(harness.state().session().entries().len(), 2);
+}
+
+/// Counter setup's *Reset at:* number is named by the box that switches it on.
+#[test]
+fn the_reset_at_number_is_named_by_its_checkbox() {
+    let fixture = Fixture::new(&["a.txt"]);
+    let mut harness = harness(fixture.app());
+    harness.get_by_label_contains("Counter setup").click();
+    settle(&mut harness);
+
+    harness
+        .get_by_role_and_label(egui::accesskit::Role::CheckBox, "Reset at:")
+        .click_accesskit();
+    settle(&mut harness);
+    harness.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Reset at:");
+}
+
+/// A Batch Replace rule's *Skip:* and *Max:* are named: opening the rule's ⋯
+/// was enough for the harness's accessibility check to fail on both.
+#[test]
+fn a_batch_rules_skip_and_max_are_named() {
+    let fixture = Fixture::new(&["a.txt"]);
+    let mut harness = harness(fixture.app());
+    harness.key_press(egui::Key::F8);
+    settle(&mut harness);
+    let skips = |harness: &Harness<'_, RenameItApp>| {
+        harness
+            .query_all_by_role_and_label(egui::accesskit::Role::SpinButton, "Skip:")
+            .count()
+    };
+    let before = skips(&harness);
+
+    harness.get_all_by_label("⋯").next().unwrap().click();
+    settle(&mut harness);
+    assert_eq!(skips(&harness), before + 1);
+}
+
+/// The box that renames a preset has a name: without one the harness's
+/// accessibility check failed the moment Rename… opened it.
+#[test]
+fn the_preset_rename_box_has_a_name() {
+    let fixture = Fixture::new(&["a_b.txt"]);
+    let mut harness = harness(fixture.app());
+    *harness.state_mut().operation_mut() = OpKind::Replace(Replace::new("_", " "));
+    harness.state_mut().save_preset("Tidy");
+    harness.state_mut().open_presets();
+    settle(&mut harness);
+
+    harness
+        .get_by_label("Rename, duplicate, export or delete this preset")
+        .click();
+    settle(&mut harness);
+    harness.get_by_label("Rename…").click();
+    settle(&mut harness);
+    harness.get_by_label("Cancel");
+}

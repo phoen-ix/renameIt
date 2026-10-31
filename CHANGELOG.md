@@ -35,6 +35,9 @@ and the reasoning behind each default lives beside the code it governs.
   a folder is still being listed it says *Nothing listed yet* instead. Screen
   readers hear every one of these messages.
 - The run log opened three lines tall; it now opens up to its full height.
+- A screen reader now hears a name for the pattern box, Counter setup's
+  *Reset at:* number, a Batch Replace rule's *Skip:* and *Max:*, and the box
+  that renames a preset.
 
 ## [1.5.1] - 2026-10-17
 

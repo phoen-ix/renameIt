@@ -115,12 +115,14 @@ fn counter_ui(ui: &mut egui::Ui, counter: &mut CounterSetup) -> bool {
 
     ui.horizontal(|ui| {
         let mut on = counter.reset_at.is_some();
-        if ui.checkbox(&mut on, "Reset at:").changed() {
+        let check = ui.checkbox(&mut on, "Reset at:");
+        if check.changed() {
             counter.reset_at = on.then_some(10);
             changed = true;
         }
         if let Some(limit) = counter.reset_at.as_mut() {
             changed |= crate::widgets::number::add(ui, egui::DragValue::new(limit).speed(0.2))
+                .labelled_by(check.id)
                 .on_hover_text("That value will be the last number in the sequence.")
                 .changed();
         }

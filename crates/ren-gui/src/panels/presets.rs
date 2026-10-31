@@ -214,9 +214,12 @@ fn row(
                 let mut cancel = false;
                 ui.horizontal(|ui| {
                     let (_, name) = state.renaming.as_mut().expect("just checked");
+                    // The hint is its name for a screen reader; without one
+                    // the box is announced as nothing but "edit text".
                     ui.add(
                         egui::TextEdit::singleline(name)
                             .desired_width(140.0)
+                            .hint_text("New name")
                             .id_salt("rename"),
                     );
                     let typed = name.clone();

@@ -210,12 +210,15 @@ fn browser_controls(
         out.relist = true;
     }
 
-    ui.label("Pattern:");
-    let pattern = ui.add(
-        egui::TextEdit::singleline(&mut session.settings.pattern)
-            .desired_width(90.0)
-            .hint_text("*.*"),
-    );
+    // Named by its label, or a screen reader announces a bare "edit text".
+    let label = ui.label("Pattern:");
+    let pattern = ui
+        .add(
+            egui::TextEdit::singleline(&mut session.settings.pattern)
+                .desired_width(90.0)
+                .hint_text("*.*"),
+        )
+        .labelled_by(label.id);
     if pattern.changed() {
         out.relist = true;
     }
