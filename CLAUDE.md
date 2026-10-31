@@ -47,6 +47,8 @@ ships first. MIT-licensed.
 - `docs/tags.md` — the `<tag>` reference
 - `docs/MIGRATION-legacy-scripts.md` — porting a legacy `.frs` script to Koto
 - `docs/manual-checks.md` — the few things CI cannot prove, and how to check them
+- `docs/COVERAGE.md` — every GUI feature and CLI flag mapped to its e2e test;
+  add a row with every new feature
 - `docs/spikes/` — written verdicts on the risky assumptions
 - `docs/screenshots/` — the snapshot images and their gallery (`README.md`);
   `scripts/docs-screenshots.sh [outdir]` renders them all
@@ -63,6 +65,9 @@ ships first. MIT-licensed.
 - Screens: `UPDATE_SNAPSHOTS=1 cargo test -p ren-gui --test snapshots` rewrites
   the images that changed; `scripts/docs-screenshots.sh` renders every one and
   runs oxipng (`OXIPNG=` names the binary).
+- E2E: `scripts/e2e.sh` runs the kittest GUI suites (`gui.rs`, `e2e.rs`) and
+  the CLI suites. `e2e.rs` clicks the controls that `gui.rs` drives through
+  app methods.
 - Run the GUI: `cargo run -p ren-gui`. Headless: `cargo run -p ren-cli -- preview|apply|undo`
   on a tempdir.
 - Windows behaviour (attributes, created-date, case-insensitive renames) is

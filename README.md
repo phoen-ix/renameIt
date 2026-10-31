@@ -449,6 +449,14 @@ scripts/docs-screenshots.sh [outdir]                         # or render all of 
 Look at every changed PNG before committing it. The manual **Docs screenshots**
 workflow on GitHub renders the same set and returns it as an artifact.
 
+## E2E
+
+`scripts/e2e.sh` runs the end-to-end suites. These drive the GUI through its
+accessibility tree (`crates/ren-gui/tests/gui.rs` and `e2e.rs`) and run
+`ren-cli` as a process (`crates/ren-cli/tests/`). There is no stack to start
+and no port to free. [`docs/COVERAGE.md`](docs/COVERAGE.md) maps every GUI
+feature and every CLI flag to its test. CI runs the suite as its `e2e` job.
+
 ## Documentation
 
 - [`CLAUDE.md`](CLAUDE.md) — how to work in this repo

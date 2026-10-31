@@ -502,7 +502,7 @@ The thumbnail pool is `(available_parallelism / 2).clamp(1, 4)` threads and deli
 | `main.rs` | clap commands (`preview`, `apply`, `undo`, `recover`, `presets`), sources made absolute (D207), the guard (D200), `<Ask>` handling (D209), escaped output (D214). |
 | `compat.rs` | The legacy slash switches, translated before clap sees them (D102, D210). |
 | `exit.rs` | The exit codes, which are the interface (D103, D206). |
-| `tests/` | `roundtrip.rs`, `preset.rs`, `legacy_cli.rs` — the binary run as a process. |
+| `tests/` | `roundtrip.rs`, `preset.rs`, `legacy_cli.rs`, `flags.rs` — the binary run as a process. |
 
 ### `ren-gui` — the app
 
@@ -517,4 +517,4 @@ The thumbnail pool is `(available_parallelism / 2).clamp(1, 4)` threads and deli
 | `widgets/` | `diff_text`, `filter_editor`, `form`, `icons`, `number`, `preproc_editor`, `row_keys`, `rule_table`, `string_list`, `tag_field`, `tri_checkbox`. |
 | `thumbs/` | The decode pool (`worker.rs`) and the byte-bounded texture cache (`cache.rs`, D138). |
 | `examples/spike*` | Spike B's harness: the frame budget and the grid's tile count (D165). |
-| `tests/gui.rs` | The app driven headlessly through its accessibility tree (D24). |
+| `tests/gui.rs`, `tests/e2e.rs` | The app driven headlessly through its accessibility tree (D24); `e2e.rs` is the sweep and the controls `gui.rs` sets through app methods (`docs/COVERAGE.md`). |
