@@ -297,15 +297,16 @@ pub fn ui(ui: &mut egui::Ui, op: &mut SetDate, platform: &dyn Platform) -> bool 
 /// store, keyed by the box, from the frame it takes focus to the frame it
 /// loses it, and the caller writes the value only when the text parses.
 /// Out of focus the box shows the stored value again, which is also how a
-/// preset load or *Now* reaches it.
+/// preset load or *Now* reaches it. `id_salt` is egui's: what the box's widget
+/// id is derived from.
 fn typed_box(
     ui: &mut egui::Ui,
-    salt: &str,
+    id_salt: &str,
     stored: impl FnOnce() -> String,
     width: f32,
     hint: &str,
 ) -> (egui::Response, String) {
-    let key = typed_key(ui, salt);
+    let key = typed_key(ui, id_salt);
     let mut text = ui
         .data(|d| d.get_temp::<String>(key))
         .unwrap_or_else(stored);
@@ -313,7 +314,7 @@ fn typed_box(
         egui::TextEdit::singleline(&mut text)
             .desired_width(width)
             .hint_text(hint)
-            .id_salt(salt),
+            .id_salt(id_salt),
     );
     if response.has_focus() {
         ui.data_mut(|d| d.insert_temp(key, text.clone()));
@@ -324,13 +325,13 @@ fn typed_box(
 }
 
 /// Drops what [`typed_box`] was keeping, so the box shows the stored value.
-fn forget_typed(ui: &mut egui::Ui, salt: &str) {
-    let key = typed_key(ui, salt);
+fn forget_typed(ui: &mut egui::Ui, id_salt: &str) {
+    let key = typed_key(ui, id_salt);
     ui.data_mut(|d| d.remove::<String>(key));
 }
 
-fn typed_key(ui: &egui::Ui, salt: &str) -> egui::Id {
-    ui.make_persistent_id(salt).with("typed")
+fn typed_key(ui: &egui::Ui, id_salt: &str) -> egui::Id {
+    ui.make_persistent_id(id_salt).with("typed")
 }
 
 fn parse_date(text: &str) -> Option<(i32, u32, u32)> {
