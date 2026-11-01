@@ -433,6 +433,9 @@ fn every_capability_the_platform_claims_it_can_do_it_actually_does() {
             // HKCU. Doing it here as well would leave this fixture's throwaway
             // executable path in the registry if the assertion below failed.
             Capability::ShellContextMenu => continue,
+            // Needs the network and an installed copy; `update::tests` and
+            // ren-gui's updater tests cover what can run here.
+            Capability::Updates => continue,
         };
 
         let refused = matches!(attempt, Err(PlatformError::CapabilityUnsupported { .. }));

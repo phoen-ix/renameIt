@@ -20,9 +20,10 @@ use crate::panels::{
     settings, source_bar, status_bar, visual_assist,
 };
 use crate::thumbs::Thumbs;
+use crate::viewmodel::update::unix_now;
 use crate::viewmodel::{
     ApplyWorker, CardId, CardStack, History, ListingWorker, Outcome, PreviewWorker, Session,
-    SessionSettings, ViewMode,
+    SessionSettings, UpdateMode, UpdateStatus, Updates, ViewMode,
 };
 use crate::widgets::filter_editor::FilterForm;
 use crate::widgets::string_list::tidy;
@@ -73,6 +74,13 @@ struct Persisted {
     field_history: std::collections::BTreeMap<String, Vec<String>>,
     theme: Theme,
     simulate: bool,
+    /// Settings ▸ Updates (D250). Manual unless the user chose otherwise.
+    update_mode: UpdateMode,
+    /// The updater's own bookkeeping, kept so a restart neither checks again
+    /// at once nor retries an install that did not take: when a check last
+    /// went out, and which version the Automatic mode last tried and when.
+    last_update_check: Option<i64>,
+    update_attempt: Option<(String, i64)>,
 
     // --- Read from older blobs, never written again. ---
     //
@@ -112,6 +120,9 @@ impl Default for Persisted {
             field_history: std::collections::BTreeMap::new(),
             theme: Theme::System,
             simulate: false,
+            update_mode: UpdateMode::default(),
+            last_update_check: None,
+            update_attempt: None,
             operation: OpKind::default(),
             step: StepConfig::default(),
         }
@@ -252,6 +263,8 @@ pub struct RenameItApp {
     /// once it lands. Killing an undo part-way leaves a batch half reverted
     /// with its `Commit` still in place, which no recovery path can see.
     close_when_idle: bool,
+    /// The update check, the download and the handover to the installer.
+    updates: Updates,
     /// The decode threads and the texture cache. Owned here rather than by the
     /// table or the grid because both views draw from the one cache, and
     /// because a run, an undo and F9 all have to reach it.
@@ -451,6 +464,7 @@ impl RenameItApp {
             Box::new(HostDialogs),
             ren_core::PresetStore::user(),
             ren_platform::host(),
+            std::env::temp_dir(),
             move || repaint_ctx.request_repaint(),
         );
         app.expand_first();
@@ -527,6 +541,8 @@ impl RenameItApp {
             // Beside the journal, so every headless test gets its own.
             ren_core::PresetStore::new(journal_dir.join("presets")),
             platform,
+            // Downloads too, so a test that fetches one cleans up with it.
+            journal_dir.clone(),
             || {},
         );
         app.expand_first();
@@ -556,6 +572,7 @@ impl RenameItApp {
         dialogs: Box<dyn FileDialogs>,
         preset_store: ren_core::PresetStore,
         platform: Arc<dyn Platform>,
+        update_temp: PathBuf,
         repaint: impl Fn() + Send + Sync + 'static,
     ) -> Self {
         // Before anything is built from it, because these decide what it is
@@ -587,6 +604,16 @@ impl RenameItApp {
             }),
             running: None,
             close_when_idle: false,
+            updates: {
+                let mut updates = Updates::spawn(platform.clone(), update_temp, {
+                    let repaint = repaint.clone();
+                    move || repaint()
+                });
+                updates.mode = persisted.update_mode;
+                updates.last_check = persisted.last_update_check;
+                updates.auto_attempt = persisted.update_attempt.clone();
+                updates
+            },
             thumbs: Thumbs::new(move || repaint()),
             stack: Self::restore(&persisted),
             session: Session::with_platform(persisted.session, platform.clone()),
@@ -652,6 +679,7 @@ impl RenameItApp {
     /// are only ever requested by a frame that has already been drawn, so
     /// waiting for them first would wait for a set nothing asked for yet.
     pub fn settle(&mut self) {
+        self.updates.settle(unix_now());
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         // A run or an undo first: it is what asks for the listing.
         while self.jobs.is_busy() && std::time::Instant::now() < deadline {
@@ -1245,6 +1273,9 @@ impl RenameItApp {
             field_history: self.field_history.clone(),
             theme: self.theme,
             simulate: self.simulate,
+            update_mode: self.updates.mode,
+            last_update_check: self.updates.last_check,
+            update_attempt: self.updates.auto_attempt.clone(),
             operation: OpKind::default(),
             step: StepConfig::default(),
         }
@@ -1279,6 +1310,7 @@ impl RenameItApp {
         self.field_history = fresh.field_history.clone();
         self.theme = fresh.theme;
         self.simulate = fresh.simulate;
+        self.updates.mode = fresh.update_mode;
         self.settings = fresh.settings.clone();
         // `RunSettings::seed` documents zero as "nobody has chosen one", and
         // only `new` ever replaced it. Adopting the default verbatim would leave
@@ -3247,6 +3279,12 @@ impl eframe::App for RenameItApp {
         eframe::set_value(storage, STORAGE_KEY, &self.persisted());
     }
 
+    /// After the last `save`: the Automatic mode's install, if one is
+    /// downloaded and waiting (D250).
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.updates.on_exit();
+    }
+
     /// Called before every ui pass, and on its own while the window is
     /// minimised or hidden — when eframe runs no ui pass at all.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -3280,6 +3318,40 @@ impl RenameItApp {
         // paths).
         self.poll_jobs();
         self.close_if_idle(Some(ctx));
+        self.poll_updates(ctx);
+    }
+
+    /// What the updater answered, said on the status line once; and the
+    /// window closed once an installer has been started, so it can replace
+    /// the program.
+    fn poll_updates(&mut self, ctx: &egui::Context) {
+        let before = self.updates.status().clone();
+        self.updates.poll(unix_now());
+        let after = self.updates.status();
+        if *after != before {
+            match after {
+                UpdateStatus::Available(version) => {
+                    self.status = Some(format!(
+                        "RenameIt {version} is available. Settings ▸ Updates installs it."
+                    ));
+                }
+                UpdateStatus::Ready(version) => {
+                    self.status = Some(format!(
+                        "RenameIt {version} is downloaded, and will be installed when you close \
+                         RenameIt."
+                    ));
+                }
+                _ => {}
+            }
+        }
+        if self.updates.take_close() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        // A window left open for days still checks once a day: egui only
+        // draws when something happens, and nothing else would wake it.
+        if self.updates.mode != UpdateMode::Manual {
+            ctx.request_repaint_after(std::time::Duration::from_secs(60 * 60));
+        }
     }
 
     /// The whole window, independent of eframe so tests can drive it.
@@ -3366,6 +3438,8 @@ impl RenameItApp {
                 journal_dir: &self.history.journal_dir,
                 preset_dir: self.presets.dir(),
                 presets: &preset_entries,
+                updates: &mut self.updates,
+                busy: self.jobs.is_busy(),
             };
             let out = settings::ui(&ctx, &mut page, defaults, self.theme);
             if let Some(theme) = out.theme {
@@ -3414,7 +3488,11 @@ impl RenameItApp {
             }
         }
 
-        if self.about_open && about::ui(&ctx, &self.history.batches) {
+        let newer = match self.updates.status() {
+            UpdateStatus::Available(version) | UpdateStatus::Ready(version) => Some(*version),
+            _ => None,
+        };
+        if self.about_open && about::ui(&ctx, &self.history.batches, newer) {
             self.about_open = false;
         }
 
@@ -4217,6 +4295,9 @@ mod tests {
             },
             theme: Theme::Dark,
             simulate: true,
+            update_mode: UpdateMode::Automatic,
+            last_update_check: Some(1_800_000_000),
+            update_attempt: Some(("1.7.0".to_owned(), 1_800_000_000)),
             operation: OpKind::default(),
             step: StepConfig::default(),
         };
@@ -4239,6 +4320,9 @@ mod tests {
         assert_eq!(back.startup, original.startup);
         assert_eq!(back.theme, original.theme);
         assert_eq!(back.simulate, original.simulate);
+        assert_eq!(back.update_mode, original.update_mode);
+        assert_eq!(back.last_update_check, original.last_update_check);
+        assert_eq!(back.update_attempt, original.update_attempt);
     }
 
     /// The column list is reconciled *when the app is built*, not only when
@@ -4261,6 +4345,7 @@ mod tests {
             Box::new(NoDialogs),
             ren_core::PresetStore::new(journal.path().join("presets")),
             ren_platform::host(),
+            journal.path().to_path_buf(),
             || {},
         );
         assert_eq!(app.columns.all().len(), 8, "and complete once loaded");
@@ -4334,6 +4419,7 @@ mod tests {
             Box::new(NoDialogs),
             ren_core::PresetStore::new(journal.path().join("presets")),
             ren_platform::host(),
+            journal.path().to_path_buf(),
             || {},
         );
         assert!(!app.session.settings.subfolders);
@@ -4386,9 +4472,11 @@ mod tests {
         app.session.settings.thumb_size = 200;
         app.session.settings.pattern = "*.mp3".to_owned();
         app.stack.name = "mine".to_owned();
+        app.updates.mode = UpdateMode::Automatic;
 
         app.reset_settings(&ctx);
 
+        assert_eq!(app.updates.mode, UpdateMode::Manual, "nothing goes online");
         assert!(!app.music_styles.is_empty());
         assert!(!app.batch_replace.is_empty());
         assert!(!app.casing.exceptions.words.is_empty());

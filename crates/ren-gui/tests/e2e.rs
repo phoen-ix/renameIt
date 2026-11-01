@@ -15,6 +15,8 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use ren_core::ops::{OpKind, Replace};
 use ren_gui::RenameItApp;
+use ren_gui::viewmodel::update::{self, Version};
+use ren_platform::update::{HttpHead, InstallRecord};
 use tempfile::TempDir;
 
 const MAX_STEPS: u64 = 16;
@@ -290,6 +292,7 @@ fn sweep_every_settings_page_is_reachable_from_the_rail() {
             },
         ),
         ("Appearance", "Interface size"),
+        ("Updates", "ask GitHub whether there is a newer release"),
         ("Problem Solver", "Where things are kept"),
         ("Batch Replace", "rules, run top to bottom"),
     ];
@@ -872,6 +875,12 @@ struct Spy {
     inner: Arc<dyn ren_platform::Platform>,
     revealed: Mutex<Vec<PathBuf>>,
     gate: Option<Gate>,
+    /// Serves a release one patch newer than this build, as GitHub would:
+    /// the `releases/latest` redirect, the checksum list and the installer.
+    /// `Some(None)` is a copy that was not installed.
+    release: Option<Option<InstallRecord>>,
+    /// Every installer started, with its arguments.
+    launched: Mutex<Vec<Vec<String>>>,
 }
 
 impl Spy {
@@ -880,7 +889,21 @@ impl Spy {
             inner: ren_platform::host(),
             revealed: Mutex::default(),
             gate,
+            release: None,
+            launched: Mutex::default(),
         })
+    }
+
+    fn with_release(install: Option<InstallRecord>) -> Arc<Self> {
+        Arc::new(Self {
+            release: Some(install),
+            ..Arc::into_inner(Self::new(None)).unwrap()
+        })
+    }
+
+    fn newer() -> Version {
+        let Version(major, minor, patch) = Version::current();
+        Version(major, minor, patch + 1)
     }
 }
 
@@ -889,7 +912,50 @@ impl ren_platform::Platform for Spy {
         self.inner.name()
     }
     fn capabilities(&self) -> &'static [ren_platform::Capability] {
-        self.inner.capabilities()
+        if self.release.is_some() {
+            &ren_platform::Capability::ALL
+        } else {
+            self.inner.capabilities()
+        }
+    }
+    fn http_get(
+        &self,
+        url: &str,
+        _follow_redirects: bool,
+        body: &mut dyn std::io::Write,
+    ) -> ren_platform::Result<HttpHead> {
+        let newer = Self::newer();
+        let (status, location) = if url == update::latest_url() {
+            (302, Some(update::release_page(newer)))
+        } else if url == update::asset_url(newer, update::SUMS) {
+            let line = format!("{}  {}\n", "0".repeat(64), update::installer_asset(newer));
+            body.write_all(line.as_bytes()).unwrap();
+            (200, None)
+        } else if url == update::asset_url(newer, &update::installer_asset(newer)) {
+            body.write_all(b"MZ").unwrap();
+            (200, None)
+        } else {
+            (404, None)
+        };
+        Ok(HttpHead { status, location })
+    }
+    /// The digest the checksum list above claims; whether a mismatch is
+    /// refused is `viewmodel::update`'s own test.
+    fn sha256_file(&self, _path: &Path) -> ren_platform::Result<[u8; 32]> {
+        Ok([0; 32])
+    }
+    fn install_record(&self) -> Option<InstallRecord> {
+        self.release.flatten()
+    }
+    fn launch_installer(
+        &self,
+        _installer: &Path,
+        args: &[&str],
+        _elevate: bool,
+    ) -> ren_platform::Result<()> {
+        let args = args.iter().map(|a| (*a).to_owned()).collect();
+        self.launched.lock().unwrap().push(args);
+        Ok(())
     }
     fn rename(&self, from: &Path, to: &Path) -> ren_platform::Result<()> {
         if let Some(gate) = &self.gate {
@@ -975,6 +1041,66 @@ fn show_in_file_manager_reveals_the_row_and_the_problem_solver_its_folders() {
         spy.revealed.lock().unwrap().last(),
         Some(&fixture.journal.path().to_path_buf())
     );
+}
+
+/// Settings ▸ Updates on an installed copy: Check now finds the newer release,
+/// and Update to X downloads it, checks it, and starts the installer silently
+/// in the installed scope with /RESTART — after which the window closes.
+#[test]
+fn update_to_a_newer_release_hands_over_to_the_installer() {
+    let fixture = Fixture::new(&["one.txt"]);
+    let spy = Spy::with_release(Some(InstallRecord { per_machine: false }));
+    let app = RenameItApp::headless_with_platform(
+        fixture.path().to_path_buf(),
+        fixture.journal.path().to_path_buf(),
+        spy.clone(),
+    );
+    let mut harness = harness(app);
+    harness.key_press(egui::Key::F8);
+    settle(&mut harness);
+    click(&mut harness, "Updates");
+    assert!(present(&harness, "Only when I ask"));
+    assert!(spy.launched.lock().unwrap().is_empty(), "nothing by itself");
+
+    click(&mut harness, "Check now");
+    let newer = Spy::newer();
+    assert!(present(&harness, &format!("RenameIt {newer} is available")));
+    click(&mut harness, &format!("Update to {newer}"));
+    assert_eq!(
+        spy.launched.lock().unwrap().as_slice(),
+        [vec!["/S", "/CurrentUser", "/RESTART"]]
+    );
+}
+
+/// A copy the installer did not put there is told about the release and
+/// pointed at its page, and offered no Update button and no Automatic mode.
+#[test]
+fn a_portable_copy_is_pointed_at_the_download_page() {
+    let fixture = Fixture::new(&["one.txt"]);
+    let spy = Spy::with_release(None);
+    let app = RenameItApp::headless_with_platform(
+        fixture.path().to_path_buf(),
+        fixture.journal.path().to_path_buf(),
+        spy.clone(),
+    );
+    let mut harness = harness(app);
+    harness.key_press(egui::Key::F8);
+    settle(&mut harness);
+    click(&mut harness, "Updates");
+    click(&mut harness, "Check now");
+    assert!(present(&harness, "Open download page"));
+    assert!(!present(&harness, "Update to"));
+    assert!(
+        harness
+            .get_by_role_and_label(
+                Role::RadioButton,
+                "Once a day — install it when I close RenameIt"
+            )
+            .accesskit_node()
+            .is_disabled(),
+        "Automatic needs an installed copy"
+    );
+    assert!(spy.launched.lock().unwrap().is_empty());
 }
 
 /// The status bar's Cancel, clicked while the first rename is held: that file

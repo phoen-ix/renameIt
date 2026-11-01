@@ -18,6 +18,7 @@ pub mod guarded;
 pub mod list_file;
 pub mod naming;
 pub mod shell;
+pub mod update;
 pub mod visibility;
 
 pub use naming::{NameProblem, NamingRules, POSIX, WINDOWS};
@@ -49,12 +50,14 @@ pub enum Capability {
     /// only on a row that is a link and only for *setting* read-only, so the
     /// refusal shows in the preview rather than part-way through a run.
     LinkReadOnly,
+    /// Checking for a newer release and installing it (D250).
+    Updates,
 }
 
 impl Capability {
     /// Every capability, so a caller can ask about all of them without
     /// hand-listing the set and silently missing the next one added.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::CreatedTime,
         Self::AccessedTime,
         Self::ModifiedTime,
@@ -65,6 +68,7 @@ impl Capability {
         Self::RevealInFileManager,
         Self::ShellContextMenu,
         Self::LinkReadOnly,
+        Self::Updates,
     ];
 }
 
@@ -81,6 +85,7 @@ impl fmt::Display for Capability {
             Self::RevealInFileManager => "revealing a file in the file manager",
             Self::ShellContextMenu => "a file manager context-menu entry",
             Self::LinkReadOnly => "making a symbolic link read-only",
+            Self::Updates => "checking for updates",
         };
         f.write_str(s)
     }
@@ -408,7 +413,8 @@ pub trait Platform: Send + Sync + fmt::Debug {
     }
 
     /// Installs or removes it, with one item per preset. `HKCU` only, so no
-    /// administrator and nothing an installer has to own.
+    /// administrator to add it or to take it away again; the uninstaller
+    /// removes it through [`Self::release_context_menu`].
     ///
     /// **The presets are a parameter because the menu is static.** Nothing in
     /// the registry can enumerate a folder at right-click time, so the item
@@ -420,6 +426,55 @@ pub trait Platform: Send + Sync + fmt::Debug {
             capability: Capability::ShellContextMenu,
             platform: self.name(),
         })
+    }
+
+    /// Removes the menu if it launches this executable, and leaves it alone
+    /// otherwise. What `renameit --uninstall-cleanup` does (D249).
+    fn release_context_menu(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// One HTTPS `GET`, the body written to `body` (D250).
+    ///
+    /// With `follow_redirects` off, a redirect is the answer rather than a
+    /// step: its status and `Location` come back and the target is not
+    /// fetched. That is how the update check reads the latest release's tag.
+    fn http_get(
+        &self,
+        _url: &str,
+        _follow_redirects: bool,
+        _body: &mut dyn std::io::Write,
+    ) -> Result<update::HttpHead> {
+        Err(no_updates(self.name()))
+    }
+
+    /// The SHA-256 digest of a file's contents.
+    fn sha256_file(&self, _path: &Path) -> Result<[u8; 32]> {
+        Err(no_updates(self.name()))
+    }
+
+    /// How this copy was installed, or `None` if it was not: a portable copy,
+    /// a build run from `target`, or a platform with no installer.
+    fn install_record(&self) -> Option<update::InstallRecord> {
+        None
+    }
+
+    /// An administrator turned update checks off for this machine.
+    fn updates_disabled_by_policy(&self) -> bool {
+        false
+    }
+
+    /// Starts the installer and returns without waiting for it, through the
+    /// administrator prompt if `elevate`.
+    fn launch_installer(&self, _installer: &Path, _args: &[&str], _elevate: bool) -> Result<()> {
+        Err(no_updates(self.name()))
+    }
+}
+
+fn no_updates(platform: &'static str) -> PlatformError {
+    PlatformError::CapabilityUnsupported {
+        capability: Capability::Updates,
+        platform,
     }
 }
 
@@ -488,9 +543,9 @@ pub fn is_portable() -> bool {
 
 /// The file that marks an installation portable, beside the executable.
 ///
-/// Its **presence** is the switch, so making an install portable is copying a
-/// folder and touching a file — no registry, no installer, nothing to
-/// uninstall. Its contents are ignored.
+/// Its **presence** is the switch, so making a copy portable is copying a
+/// folder and touching a file — no registry, nothing to uninstall. The
+/// installer leaves it out (D249). Its contents are ignored.
 pub const PORTABLE_MARKER: &str = "renameit-portable.txt";
 
 /// Decides whether this is a portable install, and where its files go.

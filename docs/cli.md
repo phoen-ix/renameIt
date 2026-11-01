@@ -83,6 +83,12 @@ ren-cli /p "C:\Photos\*.jpg" /r "Photo cleanup"
 | Settings and window layout | `%APPDATA%\RenameIt\data\app.ron` | `~/Library/Application Support/RenameIt/app.ron` | `~/.local/share/renameit/app.ron` (lower case) | `RenameIt-data\app-state.ron` |
 | Settings a newer version wrote, kept aside | `%APPDATA%\RenameIt\app-state.unreadable-<seconds>.ron` | `…/RenameIt/app-state.unreadable-<seconds>.ron` | `…/RenameIt/app-state.unreadable-<seconds>.ron` | `RenameIt-data\app-state.unreadable-<seconds>.ron` |
 
+An installed copy uses the per-user folders. The program itself is in
+`%LOCALAPPDATA%\Programs\RenameIt`, or `%ProgramFiles%\RenameIt` when installed
+for everyone, and the installer leaves the portable marker out (D249). The
+updater downloads into `%TEMP%\RenameIt-update-*`; folders older than a day are
+swept on the next download, and the uninstaller removes the rest.
+
 Settings ▸ Problem Solver shows which of these this copy uses, with buttons to
 open them. `ren-cli` uses the same folders, so `ren-cli undo` can undo a batch
 the app ran.

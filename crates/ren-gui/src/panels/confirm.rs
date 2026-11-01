@@ -264,8 +264,8 @@ pub fn reset_ui(ctx: &egui::Context) -> Outcome {
             egui::RichText::new(
                 "⚠ This cannot be undone. The settings in this window go back to what the app \
                  ships with — your Batch Replace rules, music styles, casing exception words, \
-                 columns, thumbnails, theme, interface size, and the switches on the Display, \
-                 File System and Startup pages.",
+                 columns, thumbnails, theme, interface size, the switches on the Display, \
+                 File System and Startup pages, and when to look for updates.",
             )
             .color(ui.visuals().warn_fg_color),
         );

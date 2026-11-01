@@ -86,6 +86,15 @@ pub const VERB: &str = "RenameIt";
 pub const VERSION_VALUE: &str = "RenameItMenuVersion";
 pub const MENU_VERSION: u32 = 1;
 
+/// The executable a verb root's `Icon` value names, the inverse of the
+/// `"<exe>",0` that [`ShellPlan::build`] writes.
+///
+/// How the uninstaller tells whose menu this is (D249): only the copy being
+/// uninstalled may remove it.
+pub fn exe_from_icon(icon: &str) -> Option<&str> {
+    icon.strip_prefix('"')?.strip_suffix("\",0")
+}
+
 /// The submenu's own label.
 pub(crate) const MENU_LABEL: &str = "RenameIt";
 
@@ -878,6 +887,20 @@ mod tests {
     }
 
     /// A cascade of forty is already past useful.
+    #[test]
+    fn the_icon_value_names_the_executable_it_was_built_for() {
+        let plan = menu(&[]);
+        let icon = sets(&plan)
+            .into_iter()
+            .find_map(|(_, name, value)| match (name, value) {
+                ("Icon", Value::Sz(icon)) => Some(icon.clone()),
+                _ => None,
+            })
+            .expect("an icon");
+        assert_eq!(exe_from_icon(&icon), Some(exe().to_str().unwrap()));
+        assert_eq!(exe_from_icon("shell32.dll,4"), None, "somebody else's icon");
+    }
+
     #[test]
     fn the_menu_is_capped() {
         let names: Vec<String> = (0..200).map(|i| format!("P{i}")).collect();

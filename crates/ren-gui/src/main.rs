@@ -62,6 +62,14 @@ fn main() -> eframe::Result {
     }
     let mut launch = ren_gui::launch::parse(argv);
 
+    // The uninstaller's call (D249). The Explorer menu records this copy's
+    // path, so it goes when this copy does — unless another copy wrote it
+    // last, which keeps it.
+    if launch.uninstall_cleanup {
+        let _ = ren_platform::host().release_context_menu();
+        return Ok(());
+    }
+
     // "Copy filenames to clipboard" — before `run_native`, so nothing is drawn
     // at all. See `launch::copy_names` for why the text survives the process.
     if launch.copy_names {

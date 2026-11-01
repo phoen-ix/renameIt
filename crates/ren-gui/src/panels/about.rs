@@ -40,7 +40,15 @@ impl SessionTally {
 }
 
 /// Draws the window. Returns true when the user closed it.
-pub fn ui(ctx: &egui::Context, batches: &[Batch]) -> bool {
+///
+/// `newer` is a release the updater found, said beside the version so the
+/// window that answers "which version is this" also answers "is it the
+/// latest" when that is known.
+pub fn ui(
+    ctx: &egui::Context,
+    batches: &[Batch],
+    newer: Option<crate::viewmodel::Version>,
+) -> bool {
     let mut close = false;
 
     egui::Modal::new(egui::Id::unique("about")).show(ctx, |ui| {
@@ -53,6 +61,12 @@ pub fn ui(ctx: &egui::Context, batches: &[Batch]) -> bool {
                     .weak()
                     .monospace(),
             );
+            if let Some(version) = newer {
+                ui.label(
+                    egui::RichText::new(format!("{version} is available — Settings ▸ Updates"))
+                        .small(),
+                );
+            }
         });
         ui.label("A batch file renamer.");
         ui.add_space(8.0);

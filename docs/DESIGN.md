@@ -437,6 +437,7 @@ The GUI is one UI thread and a handful of workers. Every worker has the same sha
 | `renameit-listing` (`viewmodel/listing.rs`) | The folder walk or the Free Select stat | `(generation, Browser{dir, options} \| FreeSelect{paths})` → `(generation, entries + problems, or an error)` | Drains the queue to the newest request | A shared atomic generation is polled between entries; a superseded walk abandons itself and sends nothing. Only the answer to the newest request is installed | `catch_unwind`: an ordinary failed listing | D167, D246, P63 |
 | `renameit-apply` (`viewmodel/apply.rs`) | `exec::apply`, `exec::undo_transaction`, `exec::rollback` | `Job::{Run, Undo, Rollback}` → `Outcome::{Run, Undo, Rollback, Panicked}` | None: **one job at a time**, and a second is refused while one is out | A run polls a cancel flag between ops (a cancelled run is a shorter, committed run); undo and rollback cannot be cancelled, because they must finish to be exact. Progress is an atomic counter the status line reads | `catch_unwind`: `Outcome::Panicked` naming the job kind; the app relists and re-scans the journals so the banner offers Roll back | D168, D169, D222, D223 |
 | `renameit-thumbs-0` … `-3` (`thumbs/worker.rs`) | Thumbnail decodes | One job per visible key → `(generation, key, pixels or a named refusal)` | None — a *set*: the view sends everything visible and not held | A job older than the newest generation is discarded unread, for the price of an atomic load | `catch_unwind` around each decode (`meta::thumb`); a panic is a cached refusal | D134, D136, P74, P75 |
+| `renameit-update` (`viewmodel/update.rs`) | The update check and the download | `Check` → the newest version if newer; `Download(v)` → a verified installer's path | None: one request at a time, and nothing is sent while one is out | None; a check is one small request and a download has a per-read timeout | `catch_unwind`: an ordinary failed check, shown on the Updates page | D250 |
 | `renameit-mounts` (`ren-platform/src/unix.rs`, Linux only) | Re-reads `/proc/self/mounts` every two seconds | — (lookups are one atomic load of the current table) | — | Never stops; started on the first lookup, only where the file exists | A failed read keeps the last table | D162, D204 |
 | rayon's global pool | The parallel passes inside `plan()`: evaluating every row, building plan rows | Called from `renameit-preview` (and from `ren-cli`'s main thread) | — | — | Inside the preview worker's `catch_unwind` | D94, D165 |
 | `script compile` (`script/engine.rs`) | Compiling one Koto script on a stack sized to it, then joined | — | — | — | A compiler panic is a compile error | D189 |
@@ -450,6 +451,7 @@ The thumbnail pool is `(available_parallelism / 2).clamp(1, 4)` threads and deli
 - **The order within a frame** (`RenameItApp::ui`, after eframe's `logic`): the close request and the job outcome (`logic_pass`), then the relist request, then the listing, then the preview, then drops and keys — so F2 and F5 act on the rows and the plan the frame draws — then thumbnails, then drawing.
 - **The guard sits where a run starts.** `run()` asks `ren_platform::guarded::first_guarded` before anything else, with the same `Platform` the run will use (**D200**).
 - **Closing waits.** A close request while a job is out is cancelled and retried when the job lands (**D222**). It is handled in eframe's `App::logic`, which also runs while the window is minimised and no ui pass is run (**D245**).
+- **An update closes the window through the same door.** Once an installer is started, `logic_pass` sends the close that the rule above holds while a job is out; *Update* is disabled while one is, too. The Automatic mode's installer starts from `App::on_exit`, after the last save (**D250**).
 - **`ren-cli` has none of this**: it lists, plans and applies on its main thread, with rayon inside `plan()` as above.
 
 ## 4.2 Module map
@@ -486,8 +488,9 @@ The thumbnail pool is `(available_parallelism / 2).clamp(1, 4)` threads and deli
 
 | Module | What it is |
 |---|---|
-| `lib.rs` | `trait Platform` (rename, `replace_file`, times, attributes, naming rules, case probing, reveal, shell notify), `host()`, `app_data_dir` and portable mode (D16, D131), the raw command line and `split_verbatim` (D211). |
+| `lib.rs` | `trait Platform` (rename, `replace_file`, times, attributes, naming rules, case probing, reveal, shell notify, and the updater's HTTPS GET, SHA-256, install record and installer launch), `host()`, `app_data_dir` and portable mode (D16, D131), the raw command line and `split_verbatim` (D211). |
 | `windows.rs` | `MoveFileExW`, `ReplaceFileW`, `SetFileTime`, attributes (D215), long paths. |
+| `update.rs` | What the updater needs from Windows: WinHTTP, CNG's SHA-256, the uninstall entry and the policy switch in the registry, `ShellExecuteExW`, and removing the Explorer menu for the uninstaller (D249, D250). |
 | `unix.rs` | `renameat2` with its fallbacks (D201), the case-only temp step (D202), `lutimes` (D205), the mount table and its watcher (D162, D204). |
 | `naming.rs` | The naming rules as data: the Windows and POSIX tables. |
 | `guarded.rs` | The system folders and `first_guarded`, the one guard both front ends call (D127, D200). |
@@ -511,10 +514,20 @@ The thumbnail pool is `(available_parallelism / 2).clamp(1, 4)` threads and deli
 | `main.rs` | The portable decision before eframe starts (D131), the argument line (`launch`, D152, D211), `run_native`. |
 | `app.rs` | `RenameItApp`: the frame (§4.1), hotkeys (D220), persistence (D226), wiring the workers to the panels. |
 | `launch.rs`, `dialogs.rs`, `theme.rs` | The command-line grammar; native file dialogs behind a trait so tests never open one; the `Style`, contrast-tested (P93, P113). |
-| `viewmodel/` | No egui in it: `session.rs` (source, selection, sort, Free Select, the guard), `preview.rs`, `listing.rs`, `apply.rs` (the three workers above), `history.rs` (runs, undo, the recovery banner's data), `stack.rs` (the card stack), `columns.rs` (the column model). |
-| `panels/` | The zones and windows: `source_bar`, `operation` (the card stack), `file_table` and `grid` with `rows` and `tile` shared between them, `status_bar`, `visual_assist`, `palette`, `presets`, `settings` (nine pages), `confirm`, `ask`, `about`, `run_settings`. |
+| `viewmodel/` | No egui in it: `session.rs` (source, selection, sort, Free Select, the guard), `preview.rs`, `listing.rs`, `apply.rs`, `update.rs` (the four workers above; `update.rs` also holds the release-naming and checksum rules, D250), `history.rs` (runs, undo, the recovery banner's data), `stack.rs` (the card stack), `columns.rs` (the column model). |
+| `panels/` | The zones and windows: `source_bar`, `operation` (the card stack), `file_table` and `grid` with `rows` and `tile` shared between them, `status_bar`, `visual_assist`, `palette`, `presets`, `settings` (ten pages), `confirm`, `ask`, `about`, `run_settings`. |
 | `editors/` | One editor per operation, named for it, a dispatcher in `mod.rs`, and `assist.rs` — Visual Assist's widget-free half (D147). |
 | `widgets/` | `diff_text`, `filter_editor`, `form`, `icons`, `number`, `preproc_editor`, `row_keys`, `rule_table`, `string_list`, `tag_field`, `tri_checkbox`. |
 | `thumbs/` | The decode pool (`worker.rs`) and the byte-bounded texture cache (`cache.rs`, D138). |
 | `examples/spike*` | Spike B's harness: the frame budget and the grid's tile count (D165). |
 | `tests/gui.rs`, `tests/e2e.rs` | The app driven headlessly through its accessibility tree (D24); `e2e.rs` is the sweep and the controls `gui.rs` sets through app methods (`docs/COVERAGE.md`). |
+| `tests/installer_contract.rs` | The app, `packaging/renameit.nsi` and `release.yml` held to the same names and switches (D249, D250). |
+
+### `packaging/` — the Windows installer (D249)
+
+| File | What it is |
+|---|---|
+| `renameit.nsi` | The NSIS installer and uninstaller: per-user or all-users, silent switches, upgrade in place. |
+| `stage-windows.ps1` | The release folder from an explicit list: the zip, and what the installer installs. |
+| `installer-smoke.ps1` | CI's real install, upgrade and uninstall on `windows-latest`. |
+| `README.md` | The switches, the exit codes, and why it is built this way. |

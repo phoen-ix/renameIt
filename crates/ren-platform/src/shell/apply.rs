@@ -3,8 +3,8 @@
 //! Right-clicking files in Windows Explorer offers a RenameIt menu.
 //!
 //! Everything under `HKEY_CURRENT_USER\Software\Classes`, which is the whole
-//! design: **no administrator**, nothing an installer has to own, and
-//! uninstalling is deleting the keys we wrote. A per-machine entry under
+//! design: **no administrator**, and removing it is deleting the keys we
+//! wrote — which the uninstaller asks the app to do (D249). A per-machine entry under
 //! `HKLM` needs elevation to add *and* to remove, and strands itself on an
 //! account that can no longer clean it up.
 //!

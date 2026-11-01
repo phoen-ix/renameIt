@@ -386,3 +386,22 @@ real desktop and a real screen reader show.
 | 7 | In Free Select, select two rows and press **Delete**; then right-click a row | They leave the list, the files stay on disk, and the menu offers *Remove from Free Select* (P111) |
 
 **Results:** *not yet recorded.*
+
+## Installer and updates (D249, D250) — Windows
+
+CI installs, upgrades and uninstalls the installer for real (`packaging/installer-smoke.ps1`),
+and drives the Updates page against a fake GitHub. These rows need the real GitHub, a real
+release and a person at the screen.
+
+| # | Do this | Expect |
+|---|---|---|
+| 1 | Run `RenameIt-Setup-<v>.exe` as a standard user and keep *Only for me* | No administrator prompt; installed under `%LOCALAPPDATA%\Programs\RenameIt`, in *Installed apps*, with a Start Menu entry |
+| 2 | Run it again, choose *Anyone who uses this computer* | One administrator prompt, then an install under `Program Files` |
+| 3 | Run the installer with RenameIt open | It asks you to close RenameIt, and Retry continues once you have |
+| 4 | Install the previous release, then Settings ▸ Updates ▸ *Check now* once a newer one is published | "RenameIt X is available"; *Update to X* closes the window, and the new version opens on its own (About shows it) |
+| 5 | The same on an all-users install | Windows asks for an administrator first |
+| 6 | *Once a day — install it when I close RenameIt*, with a newer release published: start, wait for "will be installed when you close RenameIt", close | The next start is the new version, and the window did not reopen by itself |
+| 7 | Settings ▸ Shell Integration on, then uninstall | The Explorer menu is gone; *Keep* your data and `%APPDATA%\RenameIt` is still there |
+| 8 | Set `HKLM\SOFTWARE\Policies\RenameIt\DisableUpdateCheck` = 1 (DWORD), open Settings ▸ Updates | "Your administrator has turned update checks off" |
+
+**Results:** *not yet recorded.*

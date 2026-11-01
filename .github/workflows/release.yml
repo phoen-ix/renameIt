@@ -106,64 +106,31 @@ jobs:
           name: third-party-licenses
           path: dist/notices
 
-      # The archive is built from an explicit list rather than by sweeping a
-      # directory, so nothing reaches a release artifact by accident — the
-      # examples and docs included.
+      # From an explicit list (packaging/stage-windows.ps1), so nothing
+      # reaches a release by accident. The zip is this folder; the installer
+      # installs it, minus the portable marker.
       - name: Stage the artifact
         shell: pwsh
+        run: ./packaging/stage-windows.ps1 -Notices dist/notices/THIRD-PARTY-LICENSES.html
+
+      # D249. The version is the workspace's, and a tag that disagrees with it
+      # is refused: the updater builds the installer's name from the tag, so
+      # the two must be the same number.
+      - name: Installer
+        shell: pwsh
         run: |
-          $stage = "dist/RenameIt"
-          foreach ($dir in @($stage, "$stage/docs", "$stage/examples", "$stage/font-licences")) {
-            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $version = ((cargo pkgid -p ren-gui) -split '[#@]')[-1]
+          if ($env:GITHUB_REF -like 'refs/tags/v*' -and $env:GITHUB_REF_NAME -ne "v$version") {
+            throw "the tag $env:GITHUB_REF_NAME is not v$version, the workspace version"
           }
-          Copy-Item target/release/renameit.exe $stage
-          Copy-Item target/release/ren-cli.exe  $stage
-          Copy-Item LICENSE                     $stage
-          Copy-Item README.md                   $stage
-          Copy-Item CHANGELOG.md                $stage
-          # D237: every crate the binaries link, with its licence text.
-          Copy-Item dist/notices/THIRD-PARTY-LICENSES.html $stage
-          # The font licences require their notice to travel with the fonts,
-          # and the fonts are compiled into the executable. cargo-deny cannot
-          # see an asset that is not a crate, so this is the only thing
-          # carrying the obligation for the five Noto faces (OFL.txt) and
-          # egui's own four (font-licences/).
-          Copy-Item THIRD-PARTY-FONTS.md        $stage
-          Copy-Item crates/ren-gui/assets/fonts/OFL.txt "$stage/OFL.txt"
-          Copy-Item crates/ren-gui/assets/fonts/egui/*.txt "$stage/font-licences"
-          # The README and the Script card point at these.
-          Copy-Item docs/tags.md                     "$stage/docs"
-          Copy-Item docs/MIGRATION-legacy-scripts.md "$stage/docs"
-          Copy-Item docs/cli.md                      "$stage/docs"
-          foreach ($example in @("camera-import", "cleanup", "music-rename", "numbered", "photo-cleanup")) {
-            Copy-Item "examples/$example.toml" "$stage/examples"
-          }
-          # A downloaded, extracted folder is exactly the portable case, so the
-          # marker ships. Deleting it makes the copy behave like an install and
-          # keep its files in the per-user folder instead (D131). If the folder
-          # turns out not to be writable — Program Files, a read-only share —
-          # the app declines the portable path on its own.
-          Set-Content -Path "$stage/renameit-portable.txt" -Value @(
-            "The presence of this file makes this a portable copy of RenameIt:",
-            "presets, scripts, the undo journal and the window layout are kept in",
-            "the RenameIt-data folder beside the program, so copying this folder",
-            "takes them with it.",
-            "",
-            "Delete this file to keep them in your user profile instead."
-          )
-          # Checked rather than trusted: a licence obligation that depends on
-          # somebody remembering a copy step is one that will eventually be
-          # forgotten.
-          $needed = @(
-            "OFL.txt", "THIRD-PARTY-FONTS.md", "THIRD-PARTY-LICENSES.html",
-            "font-licences/UFL.txt", "font-licences/Hack-Regular.txt",
-            "font-licences/emoji-icon-font-mit-license.txt",
-            "docs/tags.md", "docs/MIGRATION-legacy-scripts.md", "docs/cli.md"
-          )
-          foreach ($file in $needed) {
-            if (-not (Test-Path "$stage/$file")) { throw "missing from the archive: $file" }
-          }
-          Get-ChildItem $stage -Recurse -File | Select-Object FullName, Length
+          choco install nsis -y --no-progress
+          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /WX /V2 "/DVERSION=$version" "/DSTAGE=$PWD\dist\RenameIt" "/DOUTDIR=$PWD\dist" packaging\renameit.nsi
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: RenameIt-windows-installer
+          path: dist/RenameIt-Setup-*.exe
 
       - name: Zip
         shell: pwsh
@@ -173,19 +140,6 @@ jobs:
         with:
           name: RenameIt-windows-x64
           path: dist/RenameIt-windows-x64.zip
-
-      # The draft's body is the newest CHANGELOG section, not the whole file.
-      - name: Release notes
-        shell: bash
-        run: awk '/^## \[/{n++} n==1' CHANGELOG.md > dist/notes.md
-
-      - name: Publish
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v3
-        with:
-          files: dist/RenameIt-windows-x64.zip
-          body_path: dist/notes.md
-          draft: true
 
   linux:
     name: Linux — build and package
@@ -267,15 +221,44 @@ jobs:
           name: RenameIt-linux-x64
           path: dist/RenameIt-linux-x64.tar.gz
 
+  # One job publishes everything, so one SHA256SUMS.txt covers every asset.
+  # The updater fetches it before the installer and refuses an installer it
+  # does not list (D250); it names files, so the names here are the ones
+  # `viewmodel/update.rs` builds, which tests/installer_contract.rs checks.
+  #
+  # A draft, as before. Publishing it by hand is what makes it `latest`, and
+  # so what offers it to every installed copy: the last look before that.
+  publish:
+    name: Draft the release
+    needs: [windows, linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: RenameIt-*
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum RenameIt-Setup-*.exe RenameIt-windows-x64.zip RenameIt-linux-x64.tar.gz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
       # The draft's body is the newest CHANGELOG section, not the whole file.
       - name: Release notes
-        shell: bash
         run: awk '/^## \[/{n++} n==1' CHANGELOG.md > dist/notes.md
 
       - name: Publish
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v3
         with:
-          files: dist/RenameIt-linux-x64.tar.gz
+          files: |
+            dist/RenameIt-Setup-*.exe
+            dist/RenameIt-windows-x64.zip
+            dist/RenameIt-linux-x64.tar.gz
+            dist/SHA256SUMS.txt
           body_path: dist/notes.md
           draft: true

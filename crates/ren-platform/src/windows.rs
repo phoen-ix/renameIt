@@ -260,9 +260,9 @@ impl Platform for WindowsPlatform {
         PLATFORM
     }
 
-    /// Windows does all nine: `SetFileTime` writes all three stamps,
-    /// `SetFileAttributesW` all four bits, and the file manager and its menu
-    /// are there to reveal in and register with.
+    /// Windows does all of them: `SetFileTime` writes all three stamps,
+    /// `SetFileAttributesW` all four bits, the file manager and its menu are
+    /// there to reveal in and register with, and WinHTTP fetches updates.
     fn capabilities(&self) -> &'static [Capability] {
         &Capability::ALL
     }
@@ -285,6 +285,35 @@ impl Platform for WindowsPlatform {
         // worse than no verb.
         let exe = std::env::current_exe().map_err(|e| PlatformError::io(Path::new("."), e))?;
         crate::shell::register(&exe, presets)
+    }
+
+    fn release_context_menu(&self) -> Result<()> {
+        crate::update::imp::release_context_menu()
+    }
+
+    fn http_get(
+        &self,
+        url: &str,
+        follow_redirects: bool,
+        body: &mut dyn std::io::Write,
+    ) -> Result<crate::update::HttpHead> {
+        crate::update::imp::http_get(url, follow_redirects, body)
+    }
+
+    fn sha256_file(&self, path: &Path) -> Result<[u8; 32]> {
+        crate::update::imp::sha256_file(path)
+    }
+
+    fn install_record(&self) -> Option<crate::update::InstallRecord> {
+        crate::update::imp::install_record()
+    }
+
+    fn updates_disabled_by_policy(&self) -> bool {
+        crate::update::imp::updates_disabled_by_policy()
+    }
+
+    fn launch_installer(&self, installer: &Path, args: &[&str], elevate: bool) -> Result<()> {
+        crate::update::imp::launch_installer(installer, args, elevate)
     }
 
     fn rename(&self, from: &Path, to: &Path) -> Result<()> {

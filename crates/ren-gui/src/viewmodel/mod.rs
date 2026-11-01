@@ -11,6 +11,7 @@ pub mod listing;
 pub mod preview;
 pub mod session;
 pub mod stack;
+pub mod update;
 
 pub use apply::{ApplyWorker, InFlight, JobKind, Outcome};
 pub use columns::{Column, ColumnKind, Columns, TableStyle};
@@ -22,3 +23,4 @@ pub use session::{
     THUMB_MAX, THUMB_MIN, ViewMode,
 };
 pub use stack::{Card, CardId, CardStack};
+pub use update::{Install, Status as UpdateStatus, UpdateMode, Updates, Version};

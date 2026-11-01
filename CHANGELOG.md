@@ -6,6 +6,21 @@ Two things this file does **not** track. Engine and UI decisions live in
 `docs/DECISIONS.md`, which is the authority on why anything behaves as it does;
 and the reasoning behind each default lives beside the code it governs.
 
+## [Unreleased]
+
+### Added
+
+- A Windows installer, `RenameIt-Setup-<version>.exe`, beside the portable
+  zip. It installs for you alone with no administrator prompt, or for everyone
+  on the computer. It upgrades in place, and its uninstaller keeps your presets,
+  scripts and undo history unless you say otherwise (**D249**).
+- Settings ▸ Updates (Windows). RenameIt can check GitHub for a newer release
+  when you ask, or once a day. It can then tell you, or install the release when
+  you close the window. *Update to X* downloads the installer, checks it against
+  the release's `SHA256SUMS.txt`, and reopens RenameIt once it is installed.
+  Nothing goes online unless you choose to (**D250**).
+- Every release carries `SHA256SUMS.txt`.
+
 ## [1.6.0] - 2026-10-31
 
 egui 0.37, and a round of interface fixes: popovers that stay open while you

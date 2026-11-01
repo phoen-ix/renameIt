@@ -55,6 +55,8 @@ ships first. MIT-licensed.
   `scripts/docs-screenshots.sh [outdir]` renders them all
 - `deny.toml` / `about.toml` — which licences are allowed (D2, D238) / the
   notices a release ships (D237)
+- `packaging/` — the Windows installer (`renameit.nsi`), the staging script the
+  zip and installer share, and CI's installer smoke test (D249)
 - `crates/` — Cargo workspace: `ren-core` (engine), `ren-platform` (OS traits),
   `ren-cli`, `ren-gui` (egui/eframe)
 

@@ -9,7 +9,7 @@ ships first. MIT licensed.
 
 Every screen, with a sentence each: [screenshot gallery](docs/screenshots/README.md).
 
-**Contents:** [What it does](#what-it-does) · [Building](#building) · [Trying it](#trying-it) · [Music and images](#music-and-images) · [Picking positions by eye](#picking-positions-by-eye) · [Presets](#presets) · [Tags](#tags) · [The app](#the-app) · [Command line](#command-line) · [If a run was interrupted](#if-a-run-was-interrupted) · [Files](#where-renameit-keeps-its-files) · [Portable mode](#portable-mode) · [Workspace](#workspace) · [Quality gate](#the-quality-gate) · [Screenshots](#screenshots) · [E2E](#e2e) · [Documentation](#documentation) · [Releases](#releases) · [Licence](#licence)
+**Contents:** [What it does](#what-it-does) · [Installing](#installing) · [Updates](#updates) · [Building](#building) · [Trying it](#trying-it) · [Music and images](#music-and-images) · [Picking positions by eye](#picking-positions-by-eye) · [Presets](#presets) · [Tags](#tags) · [The app](#the-app) · [Command line](#command-line) · [If a run was interrupted](#if-a-run-was-interrupted) · [Files](#where-renameit-keeps-its-files) · [Portable mode](#portable-mode) · [Workspace](#workspace) · [Quality gate](#the-quality-gate) · [Screenshots](#screenshots) · [E2E](#e2e) · [Documentation](#documentation) · [Releases](#releases) · [Licence](#licence)
 
 ## What it does
 
@@ -28,11 +28,52 @@ operations produced it.
 - **Thumbnails** as both a grid and a column.
 - **Visual Assist** on the four pattern fields.
 - **Screen-reader support.**
-- **Nine Settings pages**, the file-list menu and portable mode.
+- **Ten Settings pages**, the file-list menu and portable mode.
 - **Explorer preset menu:** a RenameIt submenu on files, folders, drives and
   folder backgrounds, with one item per preset.
 - **The Windows build** carries its own icon and version metadata and links the
   C runtime statically; a tag cuts a release.
+- **Installer and updates on Windows:** install for yourself or for everyone,
+  and let RenameIt tell you about a new version, or install it when you close
+  the window.
+
+## Installing
+
+From the [latest release](https://github.com/phoen-ix/renameIt/releases/latest):
+
+- **Windows installer**, `RenameIt-Setup-<version>.exe`. It installs for you
+  alone by default, into `%LOCALAPPDATA%\Programs\RenameIt`, with no
+  administrator prompt. *Anyone who uses this computer* installs into
+  `Program Files` and asks for an administrator. Uninstalling keeps your
+  presets, scripts and undo history unless you say otherwise. For scripted
+  installs, `/S` is silent and `/CurrentUser` or `/AllUsers` picks the scope:
+  [packaging/README.md](packaging/README.md).
+- **Windows zip**, `RenameIt-windows-x64.zip`: a [portable](#portable-mode)
+  copy. Unzip it anywhere and run `renameit.exe`.
+- **Linux**, `RenameIt-linux-x64.tar.gz`.
+
+`SHA256SUMS.txt` in each release lists the checksum of every file.
+
+## Updates
+
+Settings ▸ Updates, on Windows:
+
+- **Only when I ask**, the default. Nothing goes online until you press
+  *Check now*.
+- **Once a day — tell me**. The status line says when there is a new
+  version.
+- **Once a day — install it when I close RenameIt**. Only for a copy installed
+  for you alone; one installed for everyone needs an administrator, so it is
+  told instead.
+
+*Update to X* downloads the installer, checks it against the release's
+`SHA256SUMS.txt`, closes RenameIt, installs it and opens it again. A portable
+copy is pointed at the download page.
+
+**Privacy:** a check asks `github.com` which release is the latest. Nothing is
+sent but that request, the User-Agent `RenameIt/<version>`, and your IP address,
+which any connection carries. An administrator can turn checks off with the
+DWORD `HKLM\SOFTWARE\Policies\RenameIt\DisableUpdateCheck` = 1.
 
 ## Building
 
@@ -361,7 +402,8 @@ A copy that keeps everything beside itself. Put a file called
 `renameit-portable.txt` next to the executable and presets, scripts, the undo
 journal and the window layout all move into `RenameIt-data/` in that folder —
 so copying the folder to a stick takes them with it. The release zip ships the
-marker already; delete it to get the ordinary per-user behaviour.
+marker already; delete it to get the ordinary per-user behaviour. The installer
+leaves it out.
 
 Two conditions, both required: the marker has to be there, and its folder has to
 be **writable**. A copy in `Program Files` or on a read-only share declines the
@@ -430,10 +472,14 @@ feature and every CLI flag to its test. CI runs the suite as its `e2e` job.
 - **Push `main` first and let CI go green**, then tag:
   `git tag -a v1.6.0 -m "1.6.0" && git push origin v1.6.0`.
 - **The tag runs** [`.github/workflows/release.yml`](.github/workflows/release.yml), which builds, packages
-  `RenameIt-windows-x64.zip` **and** `RenameIt-linux-x64.tar.gz`, and drafts a
+  `RenameIt-Setup-<version>.exe`, `RenameIt-windows-x64.zip` **and**
+  `RenameIt-linux-x64.tar.gz`, writes `SHA256SUMS.txt` over all three, and drafts a
   GitHub release whose notes are the newest section of [`CHANGELOG.md`](CHANGELOG.md).
+  The tag must be `v` plus the workspace version, because the updater builds the
+  installer's name from it.
 - **Draft, not published:** the tag is the act of building, and deciding it is
-  fit to hand out is a separate one.
+  fit to hand out is a separate one. **Publishing is what offers the version
+  to every installed copy** that checks for updates (D250).
 - **Each archive is built from an explicit list** rather than by sweeping a
   directory. It carries the licence notices of everything the programs link
   (`THIRD-PARTY-LICENSES.html`, generated by [`cargo-about`](about.toml)), the font

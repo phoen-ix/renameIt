@@ -45,7 +45,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             pkg-config libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
             libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libgl1-mesa-dev \
-            mesa-vulkan-drivers
+            mesa-vulkan-drivers nsis
 
       - uses: Swatinem/rust-cache@v2
 
@@ -72,6 +72,16 @@ jobs:
       # runs the tests for real.
       - name: Type-check the Windows target
         run: cargo clippy --locked --workspace --lib --bins --target x86_64-pc-windows-msvc -- -D warnings
+
+      # D249: the installer script compiles, warnings as errors, against a stub
+      # of the staged folder — so a broken .nsi shows up here in seconds. The
+      # windows job builds the real one and installs it.
+      - name: The installer script compiles
+        run: |
+          stage="$RUNNER_TEMP/stage"
+          mkdir -p "$stage"
+          touch "$stage/renameit.exe" "$stage/ren-cli.exe"
+          makensis -WX -V2 -DVERSION=0.0.0 "-DSTAGE=$stage" "-DOUTDIR=$RUNNER_TEMP" packaging/renameit.nsi
 
       # D218, D247: the shipped app registers its accessibility tree with the
       # OS (UIA on Windows, AT-SPI on Linux), opens links and uses the OS
@@ -204,6 +214,22 @@ jobs:
 
       - name: Build the GUI
         run: cargo build --locked --release --bin renameit --bin ren-cli
+
+      # D249: the installer, built from the folder a release stages and
+      # installed for real — per user and per machine, upgraded while the
+      # program is "running", and uninstalled down to the last file. The
+      # licence notices are cargo-about's output in a release; a stand-in
+      # here, since the smoke test is about the files, not their contents.
+      - name: Installer smoke test
+        shell: pwsh
+        run: |
+          choco install nsis -y --no-progress
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Set-Content dist/notices.html "stand-in for cargo-about's THIRD-PARTY-LICENSES.html"
+          ./packaging/stage-windows.ps1 -Notices dist/notices.html
+          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /WX /V2 /DVERSION=0.0.0 "/DSTAGE=$PWD\dist\RenameIt" "/DOUTDIR=$PWD\dist" packaging\renameit.nsi
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
+          ./packaging/installer-smoke.ps1 -Installer dist/RenameIt-Setup-0.0.0.exe
 
       # So a binary does not require cutting a tag.
       #

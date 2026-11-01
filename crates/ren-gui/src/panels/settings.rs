@@ -1,7 +1,7 @@
 //! The Settings window.
 //!
-//! Nine pages: Batch Replace, Music Styles, Casing Exceptions, Display, File
-//! System, Startup, Shell Integration, Appearance and Problem Solver
+//! Ten pages: Batch Replace, Music Styles, Casing Exceptions, Display, File
+//! System, Startup, Shell Integration, Appearance, Updates and Problem Solver
 //! (`docs/DESIGN.md` §S9 as amended; there is no Renaming, Scripting or
 //! Advanced page, P71 and P88). Appearance is where the theme control lives,
 //! so the left panel can be purely the pipeline.
@@ -16,6 +16,7 @@ use ren_core::listing::PatternScope;
 use ren_core::ops::CasingRules;
 
 use crate::app::Startup;
+use crate::viewmodel::update::{Install, Status, UpdateMode, Updates, Version, release_page};
 use crate::viewmodel::{ColumnKind, Columns, SessionSettings};
 use crate::widgets::rule_table;
 use crate::widgets::string_list::StringList;
@@ -37,13 +38,15 @@ pub enum Page {
     /// The three visibility switches and the system-folder guard.
     FileSystem,
     Appearance,
+    /// Whether and how RenameIt looks for a newer release (D250).
+    Updates,
     /// Answers to the questions a confused user actually has, plus the
     /// shortcuts to where the app keeps its files and the reset.
     ProblemSolver,
 }
 
 impl Page {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::BatchReplace,
         Self::MusicStyles,
         Self::CasingExceptions,
@@ -52,6 +55,7 @@ impl Page {
         Self::Startup,
         Self::ShellIntegration,
         Self::Appearance,
+        Self::Updates,
         Self::ProblemSolver,
     ];
 
@@ -66,6 +70,7 @@ impl Page {
             Self::ProblemSolver => "Problem Solver",
             Self::FileSystem => "File System",
             Self::Appearance => "Appearance",
+            Self::Updates => "Updates",
         }
     }
 }
@@ -100,6 +105,11 @@ pub struct Defaults<'a> {
     pub presets: &'a [ren_core::PresetEntry],
     /// The source settings the File System page owns.
     pub session: &'a mut SessionSettings,
+    /// The Updates page's.
+    pub updates: &'a mut Updates,
+    /// A run or an undo is out, so *Update* must wait: the installer cannot
+    /// replace a program that is still renaming.
+    pub busy: bool,
 }
 
 #[derive(Debug, Default)]
@@ -280,6 +290,169 @@ fn page_ui(
             let (picked, zoom) = appearance_ui(ui, theme, current_zoom);
             out.theme = picked;
             out.zoom = zoom;
+        }
+        Page::Updates => updates_ui(ui, defaults.updates, defaults.platform, defaults.busy),
+    }
+}
+
+/// Settings ▸ Updates (D250).
+///
+/// The mode is stored as it is chosen, and *Update* starts the installer and
+/// closes the window — through `Updates`, which the app polls.
+fn updates_ui(
+    ui: &mut egui::Ui,
+    updates: &mut Updates,
+    platform: &dyn ren_platform::Platform,
+    busy: bool,
+) {
+    let note = |ui: &mut egui::Ui, text: String| {
+        ui.label(egui::RichText::new(text).weak().small());
+    };
+    note(
+        ui,
+        "RenameIt can ask GitHub whether there is a newer release. The question is all that \
+         is sent — nothing about your files or settings."
+            .to_owned(),
+    );
+    ui.add_space(8.0);
+
+    if updates.install() == Install::Unsupported {
+        ui.label(format!(
+            "There is no update check on {}. New versions are listed on the releases page.",
+            platform.name()
+        ));
+        ui.hyperlink_to(
+            "Releases",
+            format!("{}/releases", env!("CARGO_PKG_REPOSITORY")),
+        );
+        return;
+    }
+    if updates.policy_off() {
+        ui.label("Your administrator has turned update checks off on this computer.");
+        return;
+    }
+
+    let automatic = updates.automatic_possible();
+    ui.radio_value(&mut updates.mode, UpdateMode::Manual, "Only when I ask");
+    ui.radio_value(
+        &mut updates.mode,
+        UpdateMode::Notify,
+        "Once a day — tell me when there is a new version",
+    );
+    ui.add_enabled_ui(automatic || updates.mode == UpdateMode::Automatic, |ui| {
+        ui.radio_value(
+            &mut updates.mode,
+            UpdateMode::Automatic,
+            "Once a day — install it when I close RenameIt",
+        );
+    });
+    match updates.install() {
+        Install::Portable => note(
+            ui,
+            "This copy was not installed, so it cannot replace itself: RenameIt says when there \
+             is a new version and where to download it."
+                .to_owned(),
+        ),
+        Install::PerMachine => note(
+            ui,
+            "Installed for all users, so updating needs an administrator: RenameIt says when \
+             there is a new version rather than installing it by itself."
+                .to_owned(),
+        ),
+        Install::PerUser | Install::Unsupported => {}
+    }
+
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        let failed = matches!(updates.status(), Status::Failed(_));
+        let label = if failed { "Try again" } else { "Check now" };
+        if ui
+            .add_enabled(updates.can_check(), egui::Button::new(label))
+            .clicked()
+        {
+            updates.check_now(crate::viewmodel::update::unix_now());
+        }
+        let checked = updates
+            .last_check
+            .and_then(|stamp| chrono::DateTime::from_timestamp(stamp, 0))
+            .map_or("Never checked".to_owned(), |when| {
+                format!(
+                    "Last checked {}",
+                    when.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M")
+                )
+            });
+        note(ui, checked);
+    });
+    ui.add_space(6.0);
+
+    let current = Version::current();
+    match updates.status().clone() {
+        Status::Idle => {}
+        Status::Checking => {
+            ui.label("Checking…");
+        }
+        Status::UpToDate => {
+            ui.label(format!("RenameIt {current} is the latest version."));
+        }
+        Status::Downloading(version) => {
+            ui.label(format!("Downloading RenameIt {version}…"));
+        }
+        Status::Failed(error) => {
+            ui.label(
+                egui::RichText::new(error)
+                    .color(ui.visuals().error_fg_color)
+                    .small(),
+            );
+        }
+        Status::Available(version) | Status::Ready(version) => {
+            let ready = matches!(updates.status(), Status::Ready(_));
+            ui.label(
+                egui::RichText::new(format!(
+                    "RenameIt {version} is available. You have {current}."
+                ))
+                .strong(),
+            );
+            ui.horizontal(|ui| {
+                if updates.install() == Install::Portable {
+                    if ui.button("Open download page").clicked() {
+                        ui.ctx()
+                            .open_url(egui::OpenUrl::new_tab(release_page(version)));
+                    }
+                } else {
+                    let label = if ready {
+                        format!("Install {version} now")
+                    } else {
+                        format!("Update to {version}")
+                    };
+                    if ui
+                        .add_enabled(!busy, egui::Button::new(label))
+                        .on_disabled_hover_text("Wait for the rename to finish.")
+                        .clicked()
+                    {
+                        updates.install_now();
+                    }
+                }
+                ui.hyperlink_to("What's new", release_page(version));
+            });
+            if ready {
+                note(
+                    ui,
+                    "Downloaded and checked. It will be installed when you close RenameIt."
+                        .to_owned(),
+                );
+            } else if updates.install() == Install::PerMachine {
+                note(
+                    ui,
+                    "Windows will ask for an administrator, then RenameIt closes and the new \
+                     version opens."
+                        .to_owned(),
+                );
+            } else if updates.install() == Install::PerUser {
+                note(
+                    ui,
+                    "RenameIt closes while the new version installs, then opens again.".to_owned(),
+                );
+            }
         }
     }
 }

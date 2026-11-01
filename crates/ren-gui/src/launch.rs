@@ -54,6 +54,11 @@ struct Cli {
     /// Written by the Explorer menu. Nobody needs to type it.
     #[arg(long)]
     from_shell: bool,
+
+    /// Run by the uninstaller: remove the Explorer menu if it launches this
+    /// copy, and exit with no window (D249).
+    #[arg(long, hide = true, conflicts_with_all = ["paths", "preset", "start_in", "copy_names"])]
+    uninstall_cleanup: bool,
 }
 
 /// What the app should do with the command line it was given.
@@ -64,6 +69,8 @@ pub struct Launch {
     pub start_in: bool,
     pub preset: Option<PathBuf>,
     pub copy_names: bool,
+    /// The uninstaller's call: no window, just the menu's removal.
+    pub uninstall_cleanup: bool,
     /// Set by the Explorer menu, and the only thing that unlocks the selection
     /// caveat — a drag of two hundred files must not be told about a limit that
     /// did not apply to it.
@@ -97,6 +104,7 @@ pub fn parse(argv: impl IntoIterator<Item = OsString>) -> Launch {
             start_in: cli.start_in,
             preset: cli.preset,
             copy_names: cli.copy_names,
+            uninstall_cleanup: cli.uninstall_cleanup,
             from_shell: cli.from_shell,
             complaint: None,
             command_line_chars: chars,
@@ -238,6 +246,16 @@ mod tests {
             Some(std::path::Path::new("/tmp/presets/Tidy up.toml"))
         );
         assert_eq!(preset.paths, [PathBuf::from("/tmp/a.txt")]);
+    }
+
+    /// The uninstaller passes this and nothing else. A path beside it is not
+    /// the uninstaller, and must not quietly take the menu away.
+    #[test]
+    fn the_uninstallers_flag_is_understood_only_on_its_own() {
+        assert!(parse(argv(&["--uninstall-cleanup"])).uninstall_cleanup);
+        let mixed = parse(argv(&["--uninstall-cleanup", "/tmp/a.txt"]));
+        assert!(!mixed.uninstall_cleanup);
+        assert!(mixed.complaint.is_some());
     }
 
     /// The one that matters: a release build has no stderr, so a parser that

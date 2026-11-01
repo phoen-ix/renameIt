@@ -147,11 +147,17 @@ features = [
     # `MultiByteToWideChar`: a `--list` file in the ANSI code page, which is
     # what Windows PowerShell's `Set-Content` writes.
     "Win32_Globalization",
+    # The update check and download (D250): WinHTTP, so the machine's proxy
+    # and certificate store apply, and nothing new enters the tree.
+    "Win32_Networking_WinHttp",
     # CreateFileW takes a *const SECURITY_ATTRIBUTES, which lives here.
     "Win32_Security",
+    # SHA-256 of a downloaded installer through CNG (D250).
+    "Win32_Security_Cryptography",
     "Win32_Storage_FileSystem",
     # M8: the HKCU context-menu entry (D132). Registry only — no admin, and
-    # nothing that needs uninstalling beyond deleting the keys.
+    # nothing that needs uninstalling beyond deleting the keys. Also how the
+    # updater finds the installer's uninstall entry and the policy switch.
     "Win32_System_Registry",
     # M8: `GetCommandLineW`, for how much of a selection Windows actually
     # handed us. `std::env::args` cannot answer that — it has already split

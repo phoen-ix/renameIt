@@ -10,13 +10,13 @@ accessibility tree (egui_kittest, D24). The CLI tests run the built binary as a
 process. The screenshot suite `snapshots.rs` (D248) is the docs tour, not part
 of this map.
 
-**Inventory**, 2026-10-31. Re-run these commands from the repo root to check
+**Inventory**, 2026-11-01. Re-run these commands from the repo root to check
 the list below:
 
 ```sh
 ls crates/ren-gui/src/panels/*.rs crates/ren-gui/src/editors/*.rs | grep -vE '/(mod|assist)\.rs'   # 32 zones, windows and editors
 grep -oE 'label: "[^"]+"' crates/ren-gui/src/panels/palette.rs                                     # 18 operations
-grep -oE 'Self::[A-Za-z]+ => "[^"]+"' crates/ren-gui/src/panels/settings.rs                       # 9 Settings pages
+grep -oE 'Self::[A-Za-z]+ => "[^"]+"' crates/ren-gui/src/panels/settings.rs                       # 10 Settings pages
 grep -oE 'Key::[A-Za-z0-9]+' crates/ren-gui/src/app.rs | sort -u                                   # 18 keys
 grep -A17 'pub enum RowAction' crates/ren-gui/src/panels/rows.rs                                   # row menu
 awk '/^enum Command|^enum PresetAction|^struct JobArgs|^struct Cli/,/^}/' crates/ren-cli/src/main.rs \
@@ -26,8 +26,8 @@ grep -oE "'[a-z?]' =>" crates/ren-cli/src/compat.rs                             
 
 The rows also cover the dialogs, banners and error states those modules draw.
 
-**Totals:** 244 numbered rows plus the 3 sweep rows. 242 rows are ✅ and 2 are ❌,
-both (c) covered at another layer.
+**Totals:** 248 numbered rows plus the 3 sweep rows. 244 rows are ✅ and 4 are ❌,
+all (c) covered at another layer.
 
 Roles: none. This is a single-user desktop app and a CLI, with no accounts.
 
@@ -40,7 +40,7 @@ Roles: none. This is a single-user desktop app and a CLI, with no accounts.
 | Screen kind | Test |
 |---|---|
 | All 18 operation editors, added from the palette by button and by Ctrl+K | ✅ e2e › sweep_every_operation_in_the_palette_opens_its_editor |
-| All 9 Settings pages, from the rail | ✅ e2e › sweep_every_settings_page_is_reachable_from_the_rail |
+| All 10 Settings pages, from the rail | ✅ e2e › sweep_every_settings_page_is_reachable_from_the_rail |
 | About, presets drawer, palette (Esc), Counter setup, Setup parts, Include filter, row menu, Grid/List | ✅ e2e › sweep_every_window_and_popover_opens_and_closes |
 
 ## Source bar (`panels/source_bar.rs`)
@@ -259,7 +259,7 @@ Roles: none. This is a single-user desktop app and a CLI, with no accounts.
 | 170 | Presets survive a restart | ✅ gui › a_preset_survives_a_restart |
 | 171 | Error state: unreadable preset listed | ✅ gui › an_unreadable_preset_is_listed_with_its_error |
 
-## Settings (`panels/settings.rs`, 9 pages)
+## Settings (`panels/settings.rs`, 10 pages)
 
 | # | Feature | Test |
 |---|---|---|
@@ -354,3 +354,12 @@ the rows in the sections above. F1 is deliberately unbound (P64).
 | 242 | Error state: missing folder | ✅ cli/roundtrip › a_missing_folder_is_named |
 | 243 | Error state: unknown preset | ✅ cli/preset › an_unknown_preset_name_lists_the_ones_that_exist |
 | 244 | Non-Unicode argument | ✅ cli/roundtrip › an_argument_that_is_not_unicode_is_a_path_like_any_other |
+
+## Updates and the installer (D249, D250)
+
+| # | Feature | Test |
+|---|---|---|
+| 245 | Updates page: Check now, then Update to X starts the installer silently in the installed scope | ✅ e2e › update_to_a_newer_release_hands_over_to_the_installer |
+| 246 | Updates: a portable copy is pointed at the download page; Automatic needs an installed copy | ✅ e2e › a_portable_copy_is_pointed_at_the_download_page |
+| 247 | Updates: the daily check, install at exit, a checksum mismatch, the administrator prompt for an all-users install | ❌ (c) `crates/ren-gui/src/viewmodel/update.rs` › flow_tests; a day passing and the window closing are not frames a headless harness can step |
+| 248 | `renameit --uninstall-cleanup` (the uninstaller's call) | ❌ (c) `crates/ren-gui/src/launch.rs` › the_uninstallers_flag_is_understood_only_on_its_own, `tests/installer_contract.rs`; the installer smoke test in `ci.yml` runs it on Windows |
