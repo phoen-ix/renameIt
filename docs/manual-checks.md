@@ -178,7 +178,7 @@ refused. Folders, drives and backgrounds are unaffected and stay either way.
 
 | # | Do this | Expect |
 |---|---|---|
-| 1 | Settings ▸ Shell Integration, tick the box, then right-click a file, a folder, and a **mixed** selection of one of each | A **RenameIt** submenu with the app's icon: *Start from this folder*, *Start and load selected files*, *Copy filenames to clipboard*, a separator, then one item per preset in the order the drawer lists them. The mixed selection shows the same menu — that is what `AllFilesystemObjects` is for |
+| 1 | Settings ▸ Right-click menu, tick the box, then right-click a file, a folder, and a **mixed** selection of one of each | A **RenameIt** submenu with the app's icon: *Start from this folder*, *Start and load selected files*, *Copy filenames to clipboard*, a separator, then one item per preset in the order the drawer lists them. The mixed selection shows the same menu — that is what `AllFilesystemObjects` is for |
 | 2 | Right-click the **empty space** inside a folder, and a **drive** in This PC | The background menu has *Start from this folder* and the presets, and **not** the two selection items. The drive has the full menu |
 | 3 | **Select three files, choose *Start and load selected files*** | **One** window, listing all three. If it is three windows, stop and apply **P82**: the file tier is withdrawn |
 | 4 | Select two files whose names contain spaces and use a preset item | Both arrive, unsplit — this is the bare `%1` under `Player`, the one formulation that cannot be safe under both readings of an undocumented behaviour |
@@ -401,7 +401,7 @@ release and a person at the screen.
 | 4 | Install the previous release, then Settings ▸ Updates ▸ *Check now* once a newer one is published | "RenameIt X is available"; *Update to X* closes the window, and the new version opens on its own (About shows it) |
 | 5 | The same on an all-users install | Windows asks for an administrator first |
 | 6 | *Once a day — install it when I close RenameIt*, with a newer release published: start, wait for "will be installed when you close RenameIt", close | The next start is the new version, and the window did not reopen by itself |
-| 7 | Settings ▸ Shell Integration on, then uninstall | The Explorer menu is gone; *Keep* your data and `%APPDATA%\RenameIt` is still there |
+| 7 | Settings ▸ Right-click menu on, then uninstall | The Explorer menu is gone; *Keep* your data and `%APPDATA%\RenameIt` is still there |
 | 8 | Set `HKLM\SOFTWARE\Policies\RenameIt\DisableUpdateCheck` = 1 (DWORD), open Settings ▸ Updates | "Your administrator has turned update checks off" |
 
 **Results:** *not yet recorded.*
@@ -413,5 +413,17 @@ release and a person at the screen.
 | 1 | On Windows, set Control Panel ▸ Mouse ▸ double-click speed to its slowest, restart RenameIt, double-click a folder at that pace | It opens, as it would in Explorer |
 | 2 | Click a file, wait a second, click its name again | The inline editor opens, about half a second later |
 | 3 | Settings ▸ Display ▸ *Double-click on a file* ▸ *Open it*, double-click a `.txt` | It opens in the default editor |
+
+**Results:** *not yet recorded.*
+
+## D252 — the right-click menu from the installer, and Open in Explorer
+
+| # | Do this | Expect |
+|---|---|---|
+| 1 | Install for yourself, leaving *Right-click menu in Explorer* ticked; right-click a file | The RenameIt submenu is there straight away |
+| 2 | Install for everyone, as one account; sign in as a **second** user and right-click a file, then start RenameIt and right-click again | No menu before the first start; the menu after it |
+| 3 | As that second user, Settings ▸ Right-click menu ▸ untick; then reinstall or update RenameIt and start it | The menu stays off for that user |
+| 4 | ⋯ ▸ *Right-click menu…* | Settings opens on that page |
+| 5 | *Open in Explorer* beside ⟳ | Explorer opens the folder RenameIt is browsing |
 
 **Results:** *not yet recorded.*

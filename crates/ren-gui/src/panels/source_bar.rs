@@ -33,6 +33,10 @@ pub struct SourceBarOutput {
     pub open_settings: bool,
     /// The About button was pressed.
     pub open_about: bool,
+    /// ⋯ ▸ Right-click menu…: Settings, on that page (D252).
+    pub open_menu_page: bool,
+    /// "Open in Explorer": show the folder being browsed in the file manager.
+    pub reveal_dir: bool,
 }
 
 impl SourceBarOutput {
@@ -42,6 +46,8 @@ impl SourceBarOutput {
         self.refilter |= other.refilter;
         self.open_settings |= other.open_settings;
         self.open_about |= other.open_about;
+        self.open_menu_page |= other.open_menu_page;
+        self.reveal_dir |= other.reveal_dir;
     }
 }
 
@@ -51,6 +57,7 @@ pub fn ui(
     filter: &mut FilterForm,
     dialogs: &dyn FileDialogs,
     listing: bool,
+    file_manager: &str,
 ) -> SourceBarOutput {
     let mut out = SourceBarOutput::default();
 
@@ -73,7 +80,7 @@ pub fn ui(
         ui.separator();
 
         match session.settings.mode {
-            SourceMode::Browser => out.merge(browser_controls(ui, session, dialogs)),
+            SourceMode::Browser => out.merge(browser_controls(ui, session, dialogs, file_manager)),
             SourceMode::FreeSelect => out.merge(free_select_controls(ui, session, dialogs)),
         }
 
@@ -87,6 +94,14 @@ pub fn ui(
             egui::Popup::menu(&button).show(|ui| {
                 if ui.button("Settings").on_hover_text("F8").clicked() {
                     out.open_settings = true;
+                    ui.close();
+                }
+                if ui
+                    .button("Right-click menu…")
+                    .on_hover_text(format!("RenameIt in the {file_manager}'s right-click menu"))
+                    .clicked()
+                {
+                    out.open_menu_page = true;
                     ui.close();
                 }
                 if ui.button("About RenameIt").clicked() {
@@ -191,6 +206,7 @@ fn browser_controls(
     ui: &mut egui::Ui,
     session: &mut Session,
     dialogs: &dyn FileDialogs,
+    file_manager: &str,
 ) -> SourceBarOutput {
     let mut out = SourceBarOutput::default();
 
@@ -238,6 +254,17 @@ fn browser_controls(
 
     if ui.button("⟳").on_hover_text("Refresh (F9)").clicked() {
         out.hard_refresh = true;
+    }
+
+    // The way back out to the file manager, for the folder on screen (D252).
+    // The row menu's "Show in file manager" does it for one file; this is the
+    // folder itself, which had no way there at all.
+    if ui
+        .button(format!("Open in {file_manager}"))
+        .on_hover_text(format!("Open this folder in {file_manager}"))
+        .clicked()
+    {
+        out.reveal_dir = true;
     }
 
     out

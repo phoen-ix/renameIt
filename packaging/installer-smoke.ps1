@@ -40,6 +40,11 @@ Check (Test-Path "$dir\docs\cli.md") "the docs are installed"
 Check (-not (Test-Path "$dir\renameit-portable.txt")) "an installed copy is not portable"
 Check ((Get-ItemProperty "HKCU:\$key").InstallLocation -eq $dir) "HKCU InstallLocation names the folder"
 Check (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\RenameIt.lnk") "a Start Menu shortcut"
+# D252: the right-click menu box is ticked by default, and a fresh per-user install sets the
+# menu up at once, as the user it runs as.
+$menu = "HKCU:\Software\Classes\AllFilesystemObjects\shell\RenameIt"
+Check ((Get-ItemProperty "HKCU:\$key").ContextMenu -eq 1) "the menu box is recorded as ticked"
+Check (Test-Path $menu) "a fresh per-user install sets up the right-click menu"
 
 # A running RenameIt, as far as the installer can tell: its exe cannot be opened for writing.
 # Held for a few seconds, the way the updater's window takes a moment to close: a silent
@@ -63,12 +68,21 @@ Uninstall $dir
 Check (-not (Test-Path "HKCU:\$key")) "the HKCU uninstall entry is gone"
 Check (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\RenameIt.lnk")) "the shortcut is gone"
 Check (Test-Path "$data\keep.txt") "a silent uninstall keeps the user's presets, scripts and journal"
+Check (-not (Test-Path $menu)) "the uninstaller removes this copy's right-click menu"
+
+# /NOMENU: the box unticked for a silent install.
+Check ((Run $Installer "/S /NOMENU") -eq 0) "silent per-user install with /NOMENU exits 0"
+Check (-not (Test-Path $menu)) "/NOMENU sets up no right-click menu"
+Check ((Get-ItemProperty "HKCU:\$key").ContextMenu -eq 0) "and records the box as unticked"
+Uninstall $dir
 
 # ---- per machine ----
 $dir = Join-Path $env:ProgramFiles "RenameIt"
 Check ((Run $Installer "/S /AllUsers") -eq 0) "silent per-machine install exits 0"
 Check (Test-Path "$dir\renameit.exe") "renameit.exe is in $dir"
 Check ((Get-ItemProperty "HKLM:\$key").InstallLocation -eq $dir) "HKLM InstallLocation names the folder, in the 64-bit view"
+Check ((Get-ItemProperty "HKLM:\$key").ContextMenu -eq 1) "the menu box is recorded for each user's first start"
+Check (-not (Test-Path $menu)) "an all-users install writes no one's HKCU menu; each user's first start does"
 Uninstall $dir
 Check (-not (Test-Path "HKLM:\$key")) "the HKLM uninstall entry is gone"
 

@@ -1,7 +1,7 @@
 //! The Settings window.
 //!
 //! Ten pages: Batch Replace, Music Styles, Casing Exceptions, Display, File
-//! System, Startup, Shell Integration, Appearance, Updates and Problem Solver
+//! System, Startup, Right-click menu, Appearance, Updates and Problem Solver
 //! (`docs/DESIGN.md` §S9 as amended; there is no Renaming, Scripting or
 //! Advanced page, P71 and P88). Appearance is where the theme control lives,
 //! so the left panel can be purely the pipeline.
@@ -66,7 +66,8 @@ impl Page {
             Self::CasingExceptions => "Casing Exceptions",
             Self::Display => "Display",
             Self::Startup => "Startup",
-            Self::ShellIntegration => "Shell Integration",
+            // What people call it, not the platform's term for it (D252).
+            Self::ShellIntegration => "Right-click menu",
             Self::ProblemSolver => "Problem Solver",
             Self::FileSystem => "File System",
             Self::Appearance => "Appearance",
@@ -107,6 +108,10 @@ pub struct Defaults<'a> {
     pub presets: &'a [ren_core::PresetEntry],
     /// The source settings the File System page owns.
     pub session: &'a mut SessionSettings,
+    /// Whether this user ever chose about the right-click menu, and what
+    /// (D252). Recorded when the box is ticked or unticked, so a first start
+    /// after an install that offers the menu leaves a "no" alone.
+    pub context_menu: &'a mut Option<bool>,
     /// The Updates page's.
     pub updates: &'a mut Updates,
     /// A run or an undo is out, so *Update* must wait: the installer cannot
@@ -284,7 +289,12 @@ fn page_ui(
             defaults.session,
         ),
         Page::Startup => startup_ui(ui, defaults.startup),
-        Page::ShellIntegration => shell_ui(ui, defaults.platform, defaults.presets),
+        Page::ShellIntegration => shell_ui(
+            ui,
+            defaults.platform,
+            defaults.presets,
+            defaults.context_menu,
+        ),
         Page::ProblemSolver => {
             out.reset = problem_solver_ui(
                 ui,
@@ -1072,6 +1082,7 @@ fn shell_ui(
     ui: &mut egui::Ui,
     platform: &dyn ren_platform::Platform,
     presets: &[ren_core::PresetEntry],
+    choice: &mut Option<bool>,
 ) {
     ui.label(
         egui::RichText::new(
@@ -1117,7 +1128,16 @@ fn shell_ui(
         .changed()
     {
         wrote(platform.set_context_menu(want, &menu));
+        *choice = Some(want);
     }
+    ui.label(
+        egui::RichText::new(
+            "The installer can set this up for you. On a computer several people use, each \
+             decides for themselves: turning it off here keeps it off for you.",
+        )
+        .weak()
+        .small(),
+    );
 
     ui.add_space(6.0);
     if installed {
@@ -1272,7 +1292,8 @@ mod tests {
     /// the next repaint dropped it and the box just refused to stay ticked.
     #[test]
     fn a_menu_that_could_not_be_written_keeps_saying_so() {
-        let mut harness = egui_kittest::Harness::new_ui(|ui| shell_ui(ui, &LockedMenu, &[]));
+        let mut harness =
+            egui_kittest::Harness::new_ui(|ui| shell_ui(ui, &LockedMenu, &[], &mut None));
         harness.run();
         harness
             .get_by_label("Show a RenameIt menu when I right-click files, folders and drives")
@@ -1281,5 +1302,21 @@ mod tests {
             harness.run();
         }
         harness.get_by_label_contains("Could not change it:");
+    }
+
+    /// Ticking or unticking the box is this user's answer (D252): a first
+    /// start after an install that offers the menu leaves it alone from then on.
+    #[test]
+    fn the_box_records_the_users_choice() {
+        let mut harness = egui_kittest::Harness::new_ui_state(
+            |ui, choice: &mut Option<bool>| shell_ui(ui, &LockedMenu, &[], choice),
+            None,
+        );
+        harness.run();
+        harness
+            .get_by_label("Show a RenameIt menu when I right-click files, folders and drives")
+            .click();
+        harness.run();
+        assert_eq!(*harness.state(), Some(true));
     }
 }

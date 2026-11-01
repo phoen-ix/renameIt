@@ -870,7 +870,10 @@ mod flow_tests {
     use ren_platform::update::InstallRecord;
 
     const NOW: i64 = 1_800_000_000;
-    const PER_USER_INSTALL: Option<InstallRecord> = Some(InstallRecord { per_machine: false });
+    const PER_USER_INSTALL: Option<InstallRecord> = Some(InstallRecord {
+        per_machine: false,
+        context_menu: false,
+    });
 
     fn newer() -> Version {
         let Version(major, minor, patch) = Version::current();
@@ -949,7 +952,13 @@ mod flow_tests {
     #[test]
     fn a_per_machine_install_asks_for_an_administrator() {
         let temp = tempfile::TempDir::new().unwrap();
-        let release = Release::new(newer(), Some(InstallRecord { per_machine: true }));
+        let release = Release::new(
+            newer(),
+            Some(InstallRecord {
+                per_machine: true,
+                context_menu: false,
+            }),
+        );
         let mut updates = updates(&release, temp.path());
         updates.check_now(NOW);
         updates.settle(NOW);
@@ -1012,7 +1021,13 @@ mod flow_tests {
     #[test]
     fn automatic_only_tells_a_copy_it_cannot_update_quietly() {
         let temp = tempfile::TempDir::new().unwrap();
-        for install in [None, Some(InstallRecord { per_machine: true })] {
+        for install in [
+            None,
+            Some(InstallRecord {
+                per_machine: true,
+                context_menu: false,
+            }),
+        ] {
             let release = Release::new(newer(), install);
             let mut updates = updates(&release, temp.path());
             updates.mode = UpdateMode::Automatic;

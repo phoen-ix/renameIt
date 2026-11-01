@@ -70,6 +70,17 @@ fn main() -> eframe::Result {
         return Ok(());
     }
 
+    // A per-user install with the "Right-click menu in Explorer" box ticked
+    // (D252). The default presets first, as the app's first start would seed
+    // them, so the menu does not open empty.
+    if launch.install_menu {
+        let store = ren_core::PresetStore::user();
+        let _ = store.seed_defaults();
+        let (entries, _) = store.list();
+        let _ = ren_platform::host().set_context_menu(true, &ren_gui::app::menu_presets(&entries));
+        return Ok(());
+    }
+
     // "Copy filenames to clipboard" — before `run_native`, so nothing is drawn
     // at all. See `launch::copy_names` for why the text survives the process.
     if launch.copy_names {

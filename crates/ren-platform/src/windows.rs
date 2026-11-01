@@ -316,6 +316,10 @@ impl Platform for WindowsPlatform {
         crate::update::imp::launch_installer(installer, args, elevate)
     }
 
+    fn file_manager(&self) -> &'static str {
+        "Explorer"
+    }
+
     fn open_file(&self, path: &Path) -> Result<()> {
         crate::update::imp::shell_execute(path, "open", "")
     }

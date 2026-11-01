@@ -3530,7 +3530,7 @@ fn the_settings_window_does_not_change_size_when_you_change_page() {
         "Display",
         "File System",
         "Startup",
-        "Shell Integration",
+        "Right-click menu",
         "Appearance",
         "Problem Solver",
     ];
@@ -4611,7 +4611,7 @@ fn declining_the_reset_changes_nothing() {
     assert_eq!(harness.state().music_styles().len(), trimmed);
 }
 
-/// Settings ▸ Shell Integration says what it can do on this platform.
+/// Settings ▸ Right-click menu says what it can do on this platform.
 #[test]
 fn the_shell_page_says_what_this_platform_can_do() {
     let fixture = Fixture::new(&["one.txt"]);
@@ -4619,7 +4619,7 @@ fn the_shell_page_says_what_this_platform_can_do() {
 
     harness.key_press(egui::Key::F8);
     settle(&mut harness);
-    harness.get_by_label("Shell Integration").click();
+    harness.get_by_label("Right-click menu").click();
     settle(&mut harness);
 
     if cfg!(windows) {

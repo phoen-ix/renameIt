@@ -26,7 +26,7 @@ grep -oE "'[a-z?]' =>" crates/ren-cli/src/compat.rs                             
 
 The rows also cover the dialogs, banners and error states those modules draw.
 
-**Totals:** 255 numbered rows plus the 3 sweep rows. 251 rows are ✅ and 4 are ❌,
+**Totals:** 259 numbered rows plus the 3 sweep rows. 254 rows are ✅ and 5 are ❌,
 all (c) covered at another layer.
 
 Roles: none. This is a single-user desktop app and a CLI, with no accounts.
@@ -274,8 +274,8 @@ Roles: none. This is a single-user desktop app and a CLI, with no accounts.
 | 180 | File System: System files switch | ✅ e2e › the_file_system_page_changes_what_is_listed (the switch; what it hides is a Windows attribute, so Linux lists nothing differently: `crates/ren-platform/src/visibility.rs` › nothing_is_a_system_file_here) |
 | 181 | File System: system-folder guard | ✅ gui › a_guarded_folder_blocks_the_run_with_a_reason |
 | 182 | Startup page | ✅ gui › the_startup_page_stores_a_switch_that_a_later_start_obeys |
-| 183 | Shell Integration page | ✅ gui › the_shell_page_says_what_this_platform_can_do |
-| 184 | Shell Integration: install / refresh the menu (Windows) | ❌ (c) `crates/ren-gui/src/app.rs` MenuSpy tests and `panels/settings.rs` › LockedMenu; Linux has no menu to install |
+| 183 | Right-click menu page (was Shell Integration) | ✅ gui › the_shell_page_says_what_this_platform_can_do |
+| 184 | Right-click menu: install / refresh the menu (Windows) | ❌ (c) `crates/ren-gui/src/app.rs` MenuSpy tests and `panels/settings.rs` › LockedMenu; Linux has no menu to install |
 | 185 | Appearance: theme | ✅ gui › the_theme_control_lives_in_settings_now |
 | 186 | Appearance: interface size | ✅ gui › the_interface_size_scales_the_window_and_the_reset_puts_it_back |
 | 187 | Problem Solver: folders | ✅ gui › the_problem_solver_page_names_the_folders_the_app_really_uses |
@@ -380,3 +380,12 @@ the rows in the sections above. F1 is deliberately unbound (P64).
 | 253 | Rename says what it will do: "Rename 2 files", "Simulate 2 files", "Run on 2 files" | ✅ e2e › the_run_controls_simulate_rename_fold_the_log_and_undo; gui › a_simulated_action_only_run_says_what_it_would_have_done |
 | 254 | Why Rename is unavailable is printed under it | ✅ gui › a_blocked_rename_says_why_under_the_button |
 | 255 | The default window has no scrollbar | ✅ gui › the_default_window_needs_no_scrollbar |
+
+## The right-click menu from the installer, and Open in Explorer (D252)
+
+| # | Feature | Test |
+|---|---|---|
+| 256 | Open in Explorer / file manager beside ⟳ | ✅ e2e › the_folder_being_browsed_opens_in_the_file_manager |
+| 257 | ⋯ ▸ Right-click menu… opens its Settings page | ✅ e2e › the_menu_reaches_the_right_click_menu_page |
+| 258 | The page's box records this user's choice | ✅ `panels/settings.rs` › the_box_records_the_users_choice |
+| 259 | First start sets the menu up after an install offered it; a "no" stays | ❌ (c) `crates/ren-gui/src/app.rs` › an_install_that_offered_the_menu_sets_it_up_at_first_start and its two siblings; `start_from` is reached only from `main`, and installer-smoke covers the installer half on Windows |

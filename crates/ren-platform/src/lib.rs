@@ -395,6 +395,12 @@ pub trait Platform: Send + Sync + fmt::Debug {
 
     fn reveal_in_file_manager(&self, path: &Path) -> Result<()>;
 
+    /// What the user calls the file manager, for labels such as "Open in
+    /// Explorer" (D252). Generic where the desktop's own name is not known.
+    fn file_manager(&self) -> &'static str {
+        "file manager"
+    }
+
     /// Opens `path` with its default program, as a double-click in the file
     /// manager would, and returns without waiting for it (P115).
     fn open_file(&self, _path: &Path) -> Result<()> {

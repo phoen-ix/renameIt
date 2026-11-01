@@ -6,7 +6,7 @@
 ; packaging/stage-windows.ps1 fills the staged folder. Everything in it is installed except
 ; the portable marker: an installed copy keeps its files in the per-user folder (D131).
 ;
-; Switches: /S  /CurrentUser  /AllUsers  /RESTART  /D=<dir> (last)
+; Switches: /S  /CurrentUser  /AllUsers  /RESTART  /MENU  /NOMENU  /D=<dir> (last)
 ;           /RESUME is internal: the copy ElevateForAllUsers starts gets it, and opens on the
 ;           step after the scope page instead of on Welcome again.
 ; Exit codes: 2 = silent /AllUsers without administrator rights (nothing installed)
@@ -37,6 +37,9 @@ SetCompressor /SOLID lzma
 ; The app's download folders (TEMP_PREFIX in crates/ren-gui/src/viewmodel/update.rs).
 !define TEMP_PREFIX "RenameIt-update-"
 !define PORTABLE_MARKER "renameit-portable.txt"
+; A DWORD under UNINST_KEY: 1 when "Right-click menu in Explorer" was ticked. The app reads it
+; (ren_platform::update::CONTEXT_MENU_VALUE) and sets the menu up at each user's first start.
+!define CONTEXT_MENU_VALUE "ContextMenu"
 
 Name "${APP} ${VERSION}"
 OutFile "${OUTDIR}\RenameIt-Setup-${VERSION}.exe"
@@ -45,6 +48,7 @@ BrandingText "${APP} ${VERSION}"
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "FileFunc.nsh"   ; ${GetSize}, ${GetParameters}, ${GetOptions}
+!include "Sections.nsh"   ; UnselectSection, for /NOMENU and an upgrade that had the menu off
 
 ; ---- per-user / per-machine ----
 !define MULTIUSER_EXECUTIONLEVEL Highest
@@ -68,6 +72,7 @@ RequestExecutionLevel user
 Var RealPrivileges   ; the account type as Windows reports it, before the fib to MultiUser
 Var RestartApp       ; "1" when /RESTART was passed: a silent install relaunches RenameIt
 Var Locked           ; "1" when renameit.exe or ren-cli.exe is in use, set by ${UN}CheckLocked
+Var Fresh            ; "1" when -Core found no install of this scope to upgrade
 Var Resume           ; "1" in the elevated copy ElevateForAllUsers started, "2" once it has
                      ; shown its first page: Welcome, License and the scope page were done
 
@@ -178,6 +183,13 @@ Section "-Core" SEC_CORE
   SectionIn RO
   Call EnsureClosed
   SetOutPath "$INSTDIR"
+  ; Before this run writes its own entry: is there an install of this scope to upgrade?
+  ReadRegStr $0 SHCTX "${UNINST_KEY}" "UninstallString"
+  ${If} $0 == ""
+    StrCpy $Fresh "1"
+  ${Else}
+    StrCpy $Fresh "0"
+  ${EndIf}
   File /r /x "${PORTABLE_MARKER}" "${STAGE}\*"
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
@@ -193,6 +205,8 @@ Section "-Core" SEC_CORE
   WriteRegDWORD SHCTX "${UNINST_KEY}" "EstimatedSize" $0
   WriteRegDWORD SHCTX "${UNINST_KEY}" "NoModify" 1
   WriteRegDWORD SHCTX "${UNINST_KEY}" "NoRepair" 1
+  ; Off unless the menu section below runs and says otherwise.
+  WriteRegDWORD SHCTX "${UNINST_KEY}" "${CONTEXT_MENU_VALUE}" 0
 SectionEnd
 
 Section "Start Menu shortcut" SEC_SM
@@ -203,9 +217,19 @@ Section /o "Desktop shortcut" SEC_DESK
   CreateShortcut "$DESKTOP\${APP}.lnk" "$INSTDIR\${EXE}"
 SectionEnd
 
-; No Explorer-menu section: the menu is per user and records the exe's path, so the app
-; writes it (Settings > Shell Integration) as the signed-in user. An elevated install would
-; write the administrator's.
+; The Explorer right-click menu (D252). It is per user and records the exe's path, and an
+; installer for everyone runs as one administrator, whose HKCU is not anybody else's. So the
+; installer records the choice, and each user's first start of RenameIt sets the menu up for
+; them - unless they turned it off in Settings, which the app remembers. A fresh per-user
+; install also sets it up at once, through the app (--install-menu), as the user it runs as.
+; Not on an upgrade: the app knows whether this user said no, and the installer does not.
+Section "Right-click menu in Explorer" SEC_MENU
+  WriteRegDWORD SHCTX "${UNINST_KEY}" "${CONTEXT_MENU_VALUE}" 1
+  ${If} $MultiUser.InstallMode == "CurrentUser"
+  ${AndIf} $Fresh == "1"
+    ExecWait '"$INSTDIR\${EXE}" --install-menu'
+  ${EndIf}
+SectionEnd
 
 Function .onInit
   ; The 64-bit view, so the HKLM entry lands where the 64-bit app reads it.
@@ -267,6 +291,25 @@ Function .onInit
   ${AndIf} ${FileExists} "$0\${EXE}"
     StrCpy $INSTDIR $0
   ${EndIf}
+  ; The right-click menu box: /NOMENU or /MENU say; without either, an upgrade keeps what
+  ; the install it replaces recorded (an install from before the option existed recorded
+  ; nothing, and gets the default); a new install is ticked.
+  ClearErrors
+  ${GetOptions} $R0 "/NOMENU" $R1
+  ${IfNot} ${Errors}
+    !insertmacro UnselectSection ${SEC_MENU}
+  ${Else}
+    ClearErrors
+    ${GetOptions} $R0 "/MENU" $R1
+    ${If} ${Errors}
+      ClearErrors
+      ReadRegDWORD $R1 SHCTX "${UNINST_KEY}" "${CONTEXT_MENU_VALUE}"
+      ${IfNot} ${Errors}
+      ${AndIf} $R1 == 0
+        !insertmacro UnselectSection ${SEC_MENU}
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
   ; /RESTART: start RenameIt again when a silent install finishes. The updater passes it for
   ; an update the user asked for; it closed the window, and nothing else would reopen it.
   StrCpy $RestartApp "0"
@@ -323,6 +366,7 @@ FunctionEnd
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_SM}   "Add RenameIt to the Start Menu."
   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_DESK} "Add RenameIt to the Desktop."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_MENU} "Open RenameIt by right-clicking files and folders in Explorer. Each person who uses this computer can turn it off in Settings."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 ; ---- uninstall ----

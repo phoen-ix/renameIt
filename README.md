@@ -5,7 +5,7 @@ ships first. MIT licensed.
 
 <img src="docs/screenshots/main-preview.png" alt="The RenameIt window: a folder of holiday photos, a Find &amp; Replace card and a Set Casing card on the left, and the file list showing each old name beside its new one with the changed part highlighted" width="800">
 
-**Status:** 1.7.1, [released](https://github.com/phoen-ix/renameIt/releases/latest) for Windows and Linux (x64).
+**Status:** 1.8.0, [released](https://github.com/phoen-ix/renameIt/releases/latest) for Windows and Linux (x64).
 
 Every screen, with a sentence each: [screenshot gallery](docs/screenshots/README.md).
 
@@ -29,8 +29,8 @@ operations produced it.
 - **Visual Assist** on the four pattern fields.
 - **Screen-reader support.**
 - **Ten Settings pages**, the file-list menu and portable mode.
-- **Explorer preset menu:** a RenameIt submenu on files, folders, drives and
-  folder backgrounds, with one item per preset.
+- **Explorer right-click menu**, offered by the installer: a RenameIt submenu
+  on files, folders, drives and folder backgrounds, with one item per preset.
 - **The Windows build** carries its own icon and version metadata and links the
   C runtime statically; a tag cuts a release.
 - **Installer and updates on Windows:** install for yourself or for everyone,
@@ -45,9 +45,13 @@ From the [latest release](https://github.com/phoen-ix/renameIt/releases/latest):
   alone by default, into `%LOCALAPPDATA%\Programs\RenameIt`, with no
   administrator prompt. *Anyone who uses this computer* installs into
   `Program Files` and asks for an administrator. Uninstalling keeps your
-  presets, scripts and undo history unless you say otherwise. For scripted
-  installs, `/S` is silent and `/CurrentUser` or `/AllUsers` picks the scope:
-  [packaging/README.md](packaging/README.md).
+  presets, scripts and undo history unless you say otherwise. Its
+  *Right-click menu in Explorer* box (ticked) puts RenameIt on Explorer's
+  right-click menu. On a computer several people use, each person gets it at
+  their first start and can turn it off for themselves (Settings ▸
+  Right-click menu, also under ⋯). For scripted installs, `/S` is silent,
+  `/CurrentUser` or `/AllUsers` picks the scope and `/NOMENU` leaves the
+  menu out: [packaging/README.md](packaging/README.md).
 - **Windows zip**, `RenameIt-windows-x64.zip`: a [portable](#portable-mode)
   copy. Unzip it anywhere and run `renameit.exe`.
 - **Linux**, `RenameIt-linux-x64.tar.gz`.
@@ -300,6 +304,8 @@ xvfb-run -a cargo run -p ren-gui                       # on a headless box
 The window:
 
 - **Source bar** on top, with Settings and About in the ⋯ menu at its right.
+  *Open in Explorer* opens the folder you are browsing, and ⋯ ▸ *Right-click
+  menu…* turns RenameIt's entry on Explorer's right-click menu on or off.
 - **Pipeline** on the left: the operations as numbered steps, *Run settings*
   under them, and at its foot Undo, Simulate and **Rename N files**. The
   button says how many files it will touch, and when it cannot run it says
@@ -472,7 +478,7 @@ feature and every CLI flag to its test. CI runs the suite as its `e2e` job.
 ## Releases
 
 - **Push `main` first and let CI go green**, then tag:
-  `git tag -a v1.7.1 -m "1.7.1" && git push origin v1.7.1`.
+  `git tag -a v1.8.0 -m "1.8.0" && git push origin v1.8.0`.
 - **The tag runs** [`.github/workflows/release.yml`](.github/workflows/release.yml), which builds, packages
   `RenameIt-Setup-<version>.exe`, `RenameIt-windows-x64.zip` **and**
   `RenameIt-linux-x64.tar.gz`, writes `SHA256SUMS.txt` over all three, and drafts a

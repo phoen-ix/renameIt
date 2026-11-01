@@ -59,6 +59,11 @@ struct Cli {
     /// copy, and exit with no window (D249).
     #[arg(long, hide = true, conflicts_with_all = ["paths", "preset", "start_in", "copy_names"])]
     uninstall_cleanup: bool,
+
+    /// Run by a per-user install whose "Right-click menu in Explorer" box was
+    /// ticked: set the menu up for this user, and exit with no window (D252).
+    #[arg(long, hide = true, conflicts_with_all = ["paths", "preset", "start_in", "copy_names", "uninstall_cleanup"])]
+    install_menu: bool,
 }
 
 /// What the app should do with the command line it was given.
@@ -71,6 +76,8 @@ pub struct Launch {
     pub copy_names: bool,
     /// The uninstaller's call: no window, just the menu's removal.
     pub uninstall_cleanup: bool,
+    /// The installer's call: no window, just the menu's installation.
+    pub install_menu: bool,
     /// Set by the Explorer menu, and the only thing that unlocks the selection
     /// caveat — a drag of two hundred files must not be told about a limit that
     /// did not apply to it.
@@ -105,6 +112,7 @@ pub fn parse(argv: impl IntoIterator<Item = OsString>) -> Launch {
             preset: cli.preset,
             copy_names: cli.copy_names,
             uninstall_cleanup: cli.uninstall_cleanup,
+            install_menu: cli.install_menu,
             from_shell: cli.from_shell,
             complaint: None,
             command_line_chars: chars,
@@ -139,7 +147,7 @@ pub fn parse(argv: impl IntoIterator<Item = OsString>) -> Launch {
     if launch.paths.len() != before {
         launch.complaint = Some(
             "Windows did not fill in the file names for that menu entry. Re-install the menu \
-             in Settings ▸ Shell Integration."
+             in Settings ▸ Right-click menu."
                 .to_owned(),
         );
     }
@@ -258,6 +266,20 @@ mod tests {
         assert!(mixed.complaint.is_some());
     }
 
+    /// The same for the installer's call that sets the menu up.
+    #[test]
+    fn the_installers_flag_is_understood_only_on_its_own() {
+        assert!(parse(argv(&["--install-menu"])).install_menu);
+        let mixed = parse(argv(&["--install-menu", "/tmp/a.txt"]));
+        assert!(!mixed.install_menu);
+        assert!(mixed.complaint.is_some());
+        assert!(
+            parse(argv(&["--install-menu", "--uninstall-cleanup"]))
+                .complaint
+                .is_some()
+        );
+    }
+
     /// The one that matters: a release build has no stderr, so a parser that
     /// exits is a program that silently fails to appear.
     #[test]
@@ -281,7 +303,7 @@ mod tests {
             let launch = parse(argv(&["--from-shell", placeholder]));
             assert!(launch.paths.is_empty(), "{placeholder}");
             let complaint = launch.complaint.expect(placeholder);
-            assert!(complaint.contains("Shell Integration"), "{complaint}");
+            assert!(complaint.contains("Right-click menu"), "{complaint}");
         }
     }
 

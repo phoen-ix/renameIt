@@ -170,6 +170,6 @@ put back before it does.
 <img src="dialog-reset.png" alt="The reset dialog listing what it restores" width="800">
 
 Not pictured: **About** (it carries the version, so every release would change
-it), **Shell Integration** (a Linux render shows the page's "nothing to
+it), **Right-click menu** (a Linux render shows the page's "nothing to
 install" branch, not the Windows one) and **Problem Solver** (it prints the
 machine's own home folder).

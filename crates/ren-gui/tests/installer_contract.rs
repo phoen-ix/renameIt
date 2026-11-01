@@ -97,6 +97,30 @@ fn the_elevated_copy_continues_where_the_first_one_stopped() {
     );
 }
 
+/// D252: the installer's right-click menu box is ticked by default, has a
+/// switch each way for silent installs, records its answer where the app reads
+/// it, and on a fresh per-user install runs a flag the app understands.
+#[test]
+fn the_menu_box_is_on_by_default_and_recorded_where_the_app_reads_it() {
+    assert_eq!(
+        define("CONTEXT_MENU_VALUE"),
+        ren_platform::update::CONTEXT_MENU_VALUE
+    );
+    assert!(
+        NSI.contains(r#"Section "Right-click menu in Explorer" SEC_MENU"#),
+        "ticked by default: no /o"
+    );
+    for switch in ["/MENU", "/NOMENU"] {
+        assert!(
+            NSI.contains(&format!(r#"${{GetOptions}} $R0 "{switch}""#)),
+            "{switch}"
+        );
+    }
+    assert!(NSI.contains(r#"'"$INSTDIR\${EXE}" --install-menu'"#));
+    let launch = ren_gui::launch::parse(["renameit", "--install-menu"].map(Into::into));
+    assert!(launch.install_menu);
+}
+
 /// NSIS shows a message box under `/S` unless it says what to answer. A silent
 /// install or update that stops on a dialog nobody can see is a hang.
 #[test]

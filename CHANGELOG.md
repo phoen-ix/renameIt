@@ -6,6 +6,21 @@ Two things this file does **not** track. Engine and UI decisions live in
 `docs/DECISIONS.md`, which is the authority on why anything behaves as it does;
 and the reasoning behind each default lives beside the code it governs.
 
+## [1.8.0] - 2026-11-01
+
+RenameIt on Explorer's right-click menu from the installer, and the way back
+out to Explorer.
+
+### Added
+
+- The installer's *Right-click menu in Explorer* box, ticked by default
+  (`/MENU` and `/NOMENU` for silent installs). On a computer several people
+  use, each person gets the menu the first time they start RenameIt, and
+  turning it off in Settings keeps it off for them (**D252**).
+- *Open in Explorer* beside ⟳ opens the folder you are browsing.
+- ⋯ ▸ *Right-click menu…* opens its Settings page, which is now called
+  Right-click menu rather than Shell Integration.
+
 ## [1.7.1] - 2026-11-01
 
 ### Fixed

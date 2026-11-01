@@ -311,7 +311,7 @@ fn sweep_every_settings_page_is_reachable_from_the_rail() {
         ("File System", "Hidden files and folders"),
         ("Startup", "Uncheck Subfolders"),
         (
-            "Shell Integration",
+            "Right-click menu",
             if cfg!(windows) {
                 "when I right-click files, folders and drives"
             } else {
@@ -1236,13 +1236,49 @@ fn a_folder_in_free_select_opens_only_if_the_display_page_says_so() {
     assert!(session.settings.dir.ends_with("sub"));
 }
 
+/// D252: the folder being browsed opens in the file manager from the source
+/// bar — the folder itself, which only a row's menu reached before, one file
+/// at a time.
+#[test]
+fn the_folder_being_browsed_opens_in_the_file_manager() {
+    let fixture = Fixture::new(&["one.txt"]);
+    let spy = Spy::new(None);
+    let app = RenameItApp::headless_with_platform(
+        fixture.path().to_path_buf(),
+        fixture.journal.path().to_path_buf(),
+        spy.clone(),
+    );
+    let mut harness = harness(app);
+    click(&mut harness, "Open in file manager");
+    assert_eq!(
+        spy.revealed.lock().unwrap().as_slice(),
+        [fixture.path().to_path_buf()]
+    );
+}
+
+/// D252: the right-click menu's page is one click from the ⋯ menu, not three
+/// levels into Settings under a name nobody looks for.
+#[test]
+fn the_menu_reaches_the_right_click_menu_page() {
+    let fixture = Fixture::new(&["one.txt"]);
+    let mut harness = harness(fixture.app());
+    menu(&mut harness, "Right-click menu…");
+    assert!(
+        present(&harness, "when I right-click files, folders and drives")
+            || present(&harness, "no context-menu entry to install")
+    );
+}
+
 /// Settings ▸ Updates on an installed copy: Check now finds the newer release,
 /// and Update to X downloads it, checks it, and starts the installer silently
 /// in the installed scope with /RESTART — after which the window closes.
 #[test]
 fn update_to_a_newer_release_hands_over_to_the_installer() {
     let fixture = Fixture::new(&["one.txt"]);
-    let spy = Spy::with_release(Some(InstallRecord { per_machine: false }));
+    let spy = Spy::with_release(Some(InstallRecord {
+        per_machine: false,
+        context_menu: false,
+    }));
     let app = RenameItApp::headless_with_platform(
         fixture.path().to_path_buf(),
         fixture.journal.path().to_path_buf(),

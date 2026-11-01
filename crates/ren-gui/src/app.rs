@@ -79,6 +79,10 @@ struct Persisted {
     simulate: bool,
     /// Settings ▸ Updates (D250). Manual unless the user chose otherwise.
     update_mode: UpdateMode,
+    /// The right-click menu: `None` until this user ticks or unticks it, then
+    /// what they chose. A first start after an install that offers the menu
+    /// sets it up only while this is `None` (D252).
+    context_menu: Option<bool>,
     /// The updater's own bookkeeping, kept so a restart neither checks again
     /// at once nor retries an install that did not take: when a check last
     /// went out, and which version the Automatic mode last tried and when.
@@ -125,6 +129,7 @@ impl Default for Persisted {
             theme: Theme::System,
             simulate: false,
             update_mode: UpdateMode::default(),
+            context_menu: None,
             last_update_check: None,
             update_attempt: None,
             operation: OpKind::default(),
@@ -298,6 +303,8 @@ pub struct RenameItApp {
     close_when_idle: bool,
     /// The update check, the download and the handover to the installer.
     updates: Updates,
+    /// See `Persisted::context_menu`.
+    context_menu: Option<bool>,
     /// The decode threads and the texture cache. Owned here rather than by the
     /// table or the grid because both views draw from the one cache, and
     /// because a run, an undo and F9 all have to reach it.
@@ -650,6 +657,7 @@ impl RenameItApp {
             }),
             running: None,
             close_when_idle: false,
+            context_menu: persisted.context_menu,
             updates: {
                 let mut updates = Updates::spawn(platform.clone(), update_temp, {
                     let repaint = repaint.clone();
@@ -994,7 +1002,40 @@ impl RenameItApp {
         // Here and not in `new`, deliberately: `start_from` is reached only
         // from `main`, so no test — and no headless run on a developer's own
         // machine — can write to the real registry.
+        self.first_start_menu();
         self.rewrite_menu();
+    }
+
+    /// The right-click menu an install offered, set up the first time this
+    /// user starts RenameIt (D252).
+    ///
+    /// The menu is per user, and an installer for everyone runs as one
+    /// administrator: the install records the choice (`ContextMenu` under its
+    /// uninstall key) and each user's own first start acts on it. Only while
+    /// the user has never chosen — a "no" given in Settings stays a no through
+    /// every update and reinstall — and never for a portable copy, which has
+    /// no install record.
+    fn first_start_menu(&mut self) {
+        let offered = self
+            .platform
+            .install_record()
+            .is_some_and(|record| record.context_menu);
+        if self.context_menu.is_some()
+            || !offered
+            || self.platform.context_menu_installed() != Some(false)
+        {
+            return;
+        }
+        let (entries, _) = self.presets.list();
+        match self
+            .platform
+            .set_context_menu(true, &menu_presets(&entries))
+        {
+            Ok(()) => self.context_menu = Some(true),
+            Err(error) => {
+                self.status = Some(format!("Could not set up the right-click menu: {error}"));
+            }
+        }
     }
 
     /// The second half of F2's Enter: rename, then open the editor on the
@@ -1324,6 +1365,7 @@ impl RenameItApp {
             theme: self.theme,
             simulate: self.simulate,
             update_mode: self.updates.mode,
+            context_menu: self.context_menu,
             last_update_check: self.updates.last_check,
             update_attempt: self.updates.auto_attempt.clone(),
             operation: OpKind::default(),
@@ -3597,6 +3639,7 @@ impl RenameItApp {
                 presets: &preset_entries,
                 updates: &mut self.updates,
                 busy: self.jobs.is_busy(),
+                context_menu: &mut self.context_menu,
             };
             let out = settings::ui(&ctx, &mut page, defaults, self.theme);
             if let Some(theme) = out.theme {
@@ -3720,6 +3763,7 @@ impl RenameItApp {
                 &mut self.filter,
                 self.dialogs.as_ref(),
                 self.listing.is_listing(),
+                self.platform.file_manager(),
             );
             if out.relist {
                 self.session.request_refresh();
@@ -3735,6 +3779,16 @@ impl RenameItApp {
             }
             if out.open_about {
                 self.about_open = true;
+            }
+            if out.open_menu_page {
+                self.settings_page = Some(settings::Page::ShellIntegration);
+            }
+            if out.reveal_dir {
+                // Best effort, as the row menu's reveal is: no file manager is
+                // not something to interrupt anything over.
+                let _ = self
+                    .platform
+                    .reveal_in_file_manager(&self.session.settings.dir);
             }
         });
 
@@ -4467,6 +4521,7 @@ mod tests {
             theme: Theme::Dark,
             simulate: true,
             update_mode: UpdateMode::Automatic,
+            context_menu: Some(false),
             last_update_check: Some(1_800_000_000),
             update_attempt: Some(("1.7.0".to_owned(), 1_800_000_000)),
             operation: OpKind::default(),
@@ -4492,6 +4547,7 @@ mod tests {
         assert_eq!(back.theme, original.theme);
         assert_eq!(back.simulate, original.simulate);
         assert_eq!(back.clicks, original.clicks);
+        assert_eq!(back.context_menu, original.context_menu);
         assert_eq!(back.update_mode, original.update_mode);
         assert_eq!(back.last_update_check, original.last_update_check);
         assert_eq!(back.update_attempt, original.update_attempt);
@@ -5410,15 +5466,26 @@ mod menu_tests {
     struct MenuSpy {
         inner: Arc<dyn Platform>,
         installed: Mutex<Option<bool>>,
+        /// What the installer recorded, if this copy was installed (D252).
+        install: Option<ren_platform::update::InstallRecord>,
         /// One entry per call, each holding the item captions it was given.
         writes: Mutex<Vec<Vec<String>>>,
     }
 
     impl MenuSpy {
         fn new(installed: Option<bool>) -> Arc<Self> {
+            Self::installed_by(installed, None)
+        }
+
+        /// A copy an installer put here, which did or did not tick the menu.
+        fn installed_by(installed: Option<bool>, offered: Option<bool>) -> Arc<Self> {
             Arc::new(Self {
                 inner: ren_platform::host(),
                 installed: Mutex::new(installed),
+                install: offered.map(|context_menu| ren_platform::update::InstallRecord {
+                    per_machine: true,
+                    context_menu,
+                }),
                 writes: Mutex::new(Vec::new()),
             })
         }
@@ -5492,6 +5559,10 @@ mod menu_tests {
             *self.installed.lock().unwrap()
         }
 
+        fn install_record(&self) -> Option<ren_platform::update::InstallRecord> {
+            self.install
+        }
+
         fn set_context_menu(
             &self,
             installed: bool,
@@ -5546,6 +5617,56 @@ mod menu_tests {
             app.rewrite_menu();
 
             assert!(spy.writes().is_empty(), "{state:?}");
+        }
+    }
+
+    /// D252: an install for everyone records that its menu box was ticked, and
+    /// each user's first start sets the menu up for them — once.
+    #[test]
+    fn an_install_that_offered_the_menu_sets_it_up_at_first_start() {
+        let spy = MenuSpy::installed_by(Some(false), Some(true));
+        let (mut app, _dir, _journal) = app_with(&spy);
+
+        app.first_start_menu();
+        assert_eq!(spy.writes().len(), 1);
+        assert_eq!(
+            app.context_menu,
+            Some(true),
+            "recorded as this user's choice"
+        );
+
+        app.first_start_menu();
+        assert_eq!(spy.writes().len(), 1, "a first start happens once");
+    }
+
+    /// A "no" given in Settings stays a no through every update and reinstall
+    /// that offers the menu again.
+    #[test]
+    fn a_no_given_in_settings_outlasts_an_install_that_offers_the_menu() {
+        let spy = MenuSpy::installed_by(Some(false), Some(true));
+        let (mut app, _dir, _journal) = app_with(&spy);
+        app.context_menu = Some(false);
+
+        app.first_start_menu();
+        assert!(spy.writes().is_empty());
+    }
+
+    /// Only an installer's ticked box sets it up: never a portable copy, and
+    /// never an install whose box was unticked. A menu that is already there
+    /// is the startup repair's business, not this.
+    #[test]
+    fn nothing_else_installs_the_menu_at_first_start() {
+        for (installed, offered) in [
+            (Some(false), None),
+            (Some(false), Some(false)),
+            (Some(true), Some(true)),
+            (None, Some(true)),
+        ] {
+            let spy = MenuSpy::installed_by(installed, offered);
+            let (mut app, _dir, _journal) = app_with(&spy);
+            app.first_start_menu();
+            assert!(spy.writes().is_empty(), "{installed:?} {offered:?}");
+            assert_eq!(app.context_menu, None);
         }
     }
 

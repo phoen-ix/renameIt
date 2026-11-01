@@ -18,6 +18,12 @@
 /// Its `InstallLocation` is what tells an installed copy from a portable one.
 pub const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\RenameIt";
 
+/// A DWORD under [`UNINSTALL_KEY`]: 1 when the installer's "Right-click menu in
+/// Explorer" box was ticked. Each user's first start then sets the menu up for
+/// them, since the menu is per user and an elevated installer reaches only its
+/// own account (D252).
+pub const CONTEXT_MENU_VALUE: &str = "ContextMenu";
+
 /// `HKLM\<POLICY_KEY>\<POLICY_VALUE>` = 1 turns every update check off, so an
 /// administrator can decide this for a whole fleet. The same switch the
 /// sibling apps have.
@@ -38,6 +44,8 @@ pub struct InstallRecord {
     /// Installed for all users, under `Program Files`. Replacing it needs an
     /// administrator.
     pub per_machine: bool,
+    /// The installer was asked for the right-click menu ([`CONTEXT_MENU_VALUE`]).
+    pub context_menu: bool,
 }
 
 /// Whether `recorded`, a path the registry holds, names `actual`.
@@ -80,7 +88,10 @@ pub(crate) mod imp {
     };
     use windows_sys::Win32::UI::Shell::{SEE_MASK_NOASYNC, SHELLEXECUTEINFOW, ShellExecuteExW};
 
-    use super::{HttpHead, InstallRecord, POLICY_KEY, POLICY_VALUE, UNINSTALL_KEY, same_path};
+    use super::{
+        CONTEXT_MENU_VALUE, HttpHead, InstallRecord, POLICY_KEY, POLICY_VALUE, UNINSTALL_KEY,
+        same_path,
+    };
     use crate::{PlatformError, Result};
 
     fn wide(text: &str) -> Vec<u16> {
@@ -359,7 +370,10 @@ pub(crate) mod imp {
             .into_iter()
             .find_map(|(root, per_machine)| {
                 let recorded = reg_string(root, UNINSTALL_KEY, "InstallLocation")?;
-                same_path(&recorded, &dir).then_some(InstallRecord { per_machine })
+                same_path(&recorded, &dir).then(|| InstallRecord {
+                    per_machine,
+                    context_menu: reg_dword(root, UNINSTALL_KEY, CONTEXT_MENU_VALUE) == Some(1),
+                })
             })
     }
 
