@@ -5,36 +5,34 @@ ships first. MIT licensed.
 
 <img src="docs/screenshots/main-preview.png" alt="The RenameIt window: a folder of holiday photos, a Find &amp; Replace card and a Set Casing card on the left, and the file list showing each old name beside its new one with the changed part highlighted" width="800">
 
-> **Status: 1.6.0.** Browse or drag in files, stack up as many operations as you
-> like, watch the composed result preview as you type, save the stack as a
-> preset and run it again later — or from the command line. One rename is one
-> undo, however many operations produced it.
->
-> It reads what is *inside* a file: name a track from its own tags, write tags
-> back from the filename, strip tag blocks out, name a photograph from the
-> moment it was taken. And when none of the seventeen built-in operations fits,
-> the eighteenth — a **script** — can do it: sandboxed, with nine worked
-> examples shipped.
->
-> Also here: the full hotkey set including list navigation and row dragging,
-> nine Settings pages, the file-list menu, portable mode, **thumbnails** as both
-> a grid and a column, **Visual Assist** on the four pattern fields, screen-reader
-> support, and the **Explorer preset menu** — a RenameIt submenu on files,
-> folders, drives and folder backgrounds, with one item per preset. The Windows
-> build carries its own icon and version metadata, links the C runtime
-> statically, and a tag cuts a release.
+**Status:** 1.6.0, [released](https://github.com/phoen-ix/renameIt/releases/latest) for Windows and Linux (x64).
 
-## Workspace
+Every screen, with a sentence each: [screenshot gallery](docs/screenshots/README.md).
 
-| Crate | Role |
-|---|---|
-| `crates/ren-core` | The engine: operations, pipeline, planner, conflict detection, transactional executor, journal-backed undo, metadata readers, scripting. No GUI dependencies and no OS behaviour; its only platform-conditional code is std's lossless path encoding in the journal (D240). |
-| `crates/ren-platform` | `trait Platform` — renames, DOS attributes, file times, naming rules, the system-folder guard, shell integration. Everything OS-specific lives here (D3). |
-| `crates/ren-cli` | Headless runner. The automation story and the test harness; ships in every release. |
-| `crates/ren-gui` | The desktop app (egui/eframe). |
+**Contents:** [What it does](#what-it-does) · [Building](#building) · [Trying it](#trying-it) · [Music and images](#music-and-images) · [Picking positions by eye](#picking-positions-by-eye) · [Presets](#presets) · [Tags](#tags) · [The app](#the-app) · [Command line](#command-line) · [If a run was interrupted](#if-a-run-was-interrupted) · [Files](#where-renameit-keeps-its-files) · [Portable mode](#portable-mode) · [Workspace](#workspace) · [Quality gate](#the-quality-gate) · [Screenshots](#screenshots) · [E2E](#e2e) · [Documentation](#documentation) · [Releases](#releases) · [Licence](#licence)
 
-`docs/DESIGN.md` Part 4 has a module map of each crate and the app's worker
-threads.
+## What it does
+
+Browse or drag in files, stack up as many operations as you like, watch the
+composed result preview as you type, save the stack as a preset and run it
+again later — or from the command line. One rename is one undo, however many
+operations produced it.
+
+- **It reads what is *inside* a file:** name a track from its own tags, write
+  tags back from the filename, strip tag blocks out, name a photograph from the
+  moment it was taken.
+- **Scripts:** when none of the seventeen built-in operations fits, the
+  eighteenth — a **script** — can do it: sandboxed, with nine worked examples
+  shipped.
+- **Keyboard:** the full hotkey set, including list navigation and row dragging.
+- **Thumbnails** as both a grid and a column.
+- **Visual Assist** on the four pattern fields.
+- **Screen-reader support.**
+- **Nine Settings pages**, the file-list menu and portable mode.
+- **Explorer preset menu:** a RenameIt submenu on files, folders, drives and
+  folder backgrounds, with one item per preset.
+- **The Windows build** carries its own icon and version metadata and links the
+  C runtime statically; a tag cuts a release.
 
 ## Building
 
@@ -72,11 +70,13 @@ and a count; `apply` does it and names the transaction; `undo` puts it back, fro
 any folder.
 
 `examples/cleanup.toml` is a **job file** — a TOML listing plus an ordered
-pipeline — used here as a preset: `--preset` runs its pipeline over the folder
-you name and says it ignored the file's own `[source]`. Run as a job
-(`--job examples/cleanup.toml`), it renames its own `dir = "."`, which is read
-relative to the directory you run the command from — the repository, if you
-run it there.
+pipeline:
+
+- **Used as a preset** (`--preset`), it runs its pipeline over the folder you
+  name and says it ignored the file's own `[source]`.
+- **Run as a job** (`--job examples/cleanup.toml`), it renames its own
+  `dir = "."`, which is read relative to the directory you run the command
+  from — the repository, if you run it there.
 
 The schema is the one presets use, so anything you write here loads into the
 GUI unchanged:
@@ -94,55 +94,74 @@ mode = "title"
 lowercase_exceptions = true
 ```
 
-Operations: `replace`, `batch_replace`, `casing`, `add_remove`, `move_section`,
-`space_trim`, `add_counter`, `renumber`, `zero_padding`, `free_format`,
-`csv_list`, `filename_editor`, `script`, `set_attributes`, `set_date`,
-`music_rename`, `music_tagger`, `remove_tags`. Each step also takes
-`scope` (`name` / `extension` / `both`), `enabled`, a `[step.filter]`
-include/exclude filter and a `[step.preproc]` pre-processor. A `[settings]`
-table carries the counter, the parts pattern and the tag policy, which belong to
-the run rather than to any one step. Unknown keys are an error, not a silent
-default.
+The operations, grouped as the add-operation palette groups them:
 
-[`examples/numbered.toml`](examples/numbered.toml) is the worked example for the counter, the `<tag>`
-engine and `<\>`; [`examples/photo-cleanup.toml`](examples/photo-cleanup.toml) is a saved preset;
-[`examples/music-rename.toml`](examples/music-rename.toml) names tracks from their tags and files them into
-`<Artist>/<Album>/` subfolders; [`examples/camera-import.toml`](examples/camera-import.toml) names photographs
-from their Exif date and then puts that date back on the file.
+| Group | `op` values |
+|---|---|
+| General | `replace`, `batch_replace`, `casing`, `add_remove`, `move_section`, `space_trim` |
+| Numbers | `add_counter`, `renumber`, `zero_padding` |
+| Music | `music_rename`, `music_tagger`, `remove_tags` |
+| Advanced | `free_format`, `set_attributes`, `set_date`, `csv_list`, `filename_editor`, `script` |
+
+- **Every step** also takes `scope` (`name` / `extension` / `both`), `enabled`,
+  a `[step.filter]` include/exclude filter and a `[step.preproc]` pre-processor.
+- **A `[settings]` table** carries the counter, the parts pattern and the tag
+  policy, which belong to the run rather than to any one step.
+- **Unknown keys are an error**, not a silent default.
+
+Worked examples:
+
+- [`examples/numbered.toml`](examples/numbered.toml): the counter, the `<tag>` engine and `<\>`.
+- [`examples/photo-cleanup.toml`](examples/photo-cleanup.toml): a saved preset.
+- [`examples/music-rename.toml`](examples/music-rename.toml): names tracks from their tags and files them into
+  `<Artist>/<Album>/` subfolders.
+- [`examples/camera-import.toml`](examples/camera-import.toml): names photographs from their Exif date and then
+  puts that date back on the file.
 
 ## Music and images
 
-`<Artist>`, `<Title>`, `<Album>`, `<Year>`, `<Genre>`, `<Track>`, `<Comment>`
-and about fifty `<ID3-*>` frame tags read from MP3, FLAC, Ogg Vorbis, Opus,
-Speex, MP4/M4A, Musepack and WavPack — one set of names across every format.
-`<Exif-Make>`, `<Exif-Model>` and the rest of the 150 field names the Exif
-standard gives for the primary image, Exif and GPS blocks — a name outside them
-is an error, not an empty value — plus `<ExifDate>` and `<ExifTime>`. A folder
-takes its tags from the first music file inside it.
+One set of tag names across every format:
 
-`<Width>`, `<Height>`, `<Depth>`, `<Depthb>` and `<JpgComment>` read the image's
-own header rather than a camera's Exif block, so they answer for a PNG or a BMP
-where every `<Exif-…>` returns nothing — BMP, GIF, JPEG, PNG, TIFF and TGA.
+- **Music:** `<Artist>`, `<Title>`, `<Album>`, `<Year>`, `<Genre>`, `<Track>`,
+  `<Comment>` and about fifty `<ID3-*>` frame tags. A folder takes its tags
+  from the first music file inside it.
+  - Read from MP3, FLAC, Ogg Vorbis, Opus, Speex, MP4/M4A, Musepack and WavPack.
+- **Exif:** `<Exif-Make>`, `<Exif-Model>` and the rest of the 150 field names
+  the Exif standard gives for the primary image, Exif and GPS blocks, plus
+  `<ExifDate>` and `<ExifTime>`.
+  - A name outside them is an error, not an empty value.
+- **Image header:** `<Width>`, `<Height>`, `<Depth>`, `<Depthb>` and
+  `<JpgComment>` read the image's own header rather than a camera's Exif block,
+  so they answer for a PNG or a BMP where every `<Exif-…>` returns nothing.
+  - Read from BMP, GIF, JPEG, PNG, TIFF and TGA.
 
-The same six formats get **thumbnails**, and you choose how: `List | Grid` at
-the end of the source bar switches the whole view to tiles, and a **Thumb**
-column in Settings ▸ Display puts a small one beside each row instead. A tile
-carries the picture, the name on disk and the name the run is about to write,
-so the grid is somewhere you can work rather than only somewhere you can look.
-Photographs come back upright whatever your phone wrote in their Exif; only
-what is on screen is ever decoded, so a folder of ten thousand costs a
-screenful of work; and renaming them moves the pictures rather than reading
-them again.
+The same six formats get **thumbnails**, and you choose how:
+
+- **Grid:** `List | Grid` at the end of the source bar switches the whole view
+  to tiles.
+  - A tile carries the picture, the name on disk and the name the run is about
+    to write, so the grid is somewhere you can work rather than only somewhere
+    you can look.
+- **Thumb column:** in Settings ▸ Display, it puts a small one beside each row
+  instead.
+- **Upright:** photographs come back upright whatever your phone wrote in their
+  Exif.
+- **Cheap:** only what is on screen is ever decoded, so a folder of ten
+  thousand costs a screenful of work; and renaming them moves the pictures
+  rather than reading them again.
 
 <img src="docs/screenshots/main-grid.png" alt="The grid view: a tile per file with its picture, its name and the new name the run will write; a long name is clipped and a file that is not a picture shows a placeholder" width="800">
 
 <img src="docs/screenshots/card-music-rename.png" alt="A Music Rename card naming four tracks Artist - Title from their own tags" width="800">
 
-Two operations change what is *inside* a file rather than its name — **Music
-Tagger** writes tags from the filename, **Remove Tags** strips ID3v1, ID3v2 and
-Lyrics3 blocks — and neither can be undone. The GUI asks before running one and
-names the files; the CLI refuses with exit 2 unless given
-`--allow-irreversible`. A preset with one such step:
+Two operations change what is *inside* a file rather than its name, and neither
+can be undone:
+
+- **Music Tagger** writes tags from the filename.
+- **Remove Tags** strips ID3v1, ID3v2 and Lyrics3 blocks.
+
+The GUI asks before running one and names the files; the CLI refuses with
+exit 2 unless given `--allow-irreversible`. A preset with one such step:
 
 ```toml
 version = 1
@@ -160,15 +179,16 @@ ren-cli apply ~/music --preset strip-v1.toml                        # refused, e
 ren-cli apply ~/music --preset strip-v1.toml --allow-irreversible
 ```
 
-Fields you have not ticked are left exactly as they are, cover art included.
-That sounds obvious and is not: the tag library's save replaces the whole tag,
-so writing only the artist wipes everything else unless the write reads first.
-And the file itself is never written: the change goes into a copy beside it,
-which replaces it only when complete, keeping its modified date — a full disk
-or a pulled USB stick part-way leaves the file as it was.
-
-WMA and TTA are **not** supported — lofty handles neither. See D55 in
-[`docs/DECISIONS.md`](docs/DECISIONS.md).
+- **Fields you have not ticked are left exactly as they are**, cover art
+  included.
+  - That sounds obvious and is not: the tag library's save replaces the whole
+    tag, so writing only the artist wipes everything else unless the write
+    reads first.
+- **The file itself is never written:** the change goes into a copy beside it,
+  which replaces it only when complete, keeping its modified date. A full disk
+  or a pulled USB stick part-way leaves the file as it was.
+- **WMA and TTA are not supported** — lofty handles neither. See D55 in
+  [`docs/DECISIONS.md`](docs/DECISIONS.md).
 
 ## Picking positions by eye
 
@@ -178,10 +198,13 @@ It shows the text that operation is handed for one of your files; select part of
 it and press **Select** to fill the box.
 
 The text it shows is the operation's own input, which is not always the file
-name: a card further down the stack sees what the cards above it produced, and a
-card set to *Process: Name* sees the stem without its extension. That is the
-whole point — a position measured against the wrong string is wrong by exactly
-the difference.
+name:
+
+- a card further down the stack sees what the cards above it produced;
+- a card set to *Process: Name* sees the stem without its extension.
+
+That is the whole point — a position measured against the wrong string is wrong
+by exactly the difference.
 
 <img src="docs/screenshots/visual-assist.png" alt="Visual Assist open on a Find &amp; Replace card: the name beach_at_sunset with _at_ selected" width="800">
 
@@ -198,17 +221,17 @@ cargo run -p ren-cli -- apply ~/photos --preset "Photo cleanup"
 cargo run -p ren-cli -- apply ~/photos --preset "Add prefix to filename" --answer "0=Holiday - "
 ```
 
-`--preset` takes a path to a `.toml` file, or the **whole** name of a preset in
-the preset folder, ignoring case. The six default presets — *Add prefix to
-filename* is one — are written the first time the app starts; a machine that
-has only ever run `ren-cli` has none until you import one. `ren-cli presets
-list` shows what is there.
+- **`--preset`** takes a path to a `.toml` file, or the **whole** name of a
+  preset in the preset folder, ignoring case.
+- **The six default presets** — *Add prefix to filename* is one — are written
+  the first time the app starts.
+  - A machine that has only ever run `ren-cli` has none until you import one;
+    `ren-cli presets list` shows what is there.
+- **`--job` and `--preset` differ in exactly one way:** a job file brings its
+  own source, a preset borrows yours. So `--preset` takes a folder and honours
+  `--pattern` / `--folders` / `--subfolders`, and `--job` refuses them.
 
 <img src="docs/screenshots/presets-drawer.png" alt="The preset drawer beside the file list, listing the six default presets with Load, Append and Run" width="800">
-
-`--job` and `--preset` differ in exactly one way: a job file brings its own
-source, a preset borrows yours. So `--preset` takes a folder and honours
-`--pattern` / `--folders` / `--subfolders`, and `--job` refuses them.
 
 ## Tags
 
@@ -221,9 +244,10 @@ Any field that builds text takes tags — `<Name>`, `<Counter>`, `<Date-yyyy>`,
   of music ends up named `.mp3`.
 * **`<\>` moves a file into a subfolder** of the folder it is already in,
   creating it if needed — `<Date-yyyy><\><Name>` sorts photos into one folder
-  per year. Undo puts the files back and removes the folders it created, but
-  never one you have since put something else into. A produced name can go down;
-  it can never go up or out.
+  per year.
+  * Undo puts the files back and removes the folders it created, but never one
+    you have since put something else into.
+  * A produced name can go down; it can never go up or out.
 
 ## The app
 
@@ -232,11 +256,14 @@ cargo run -p ren-gui                                   # the app
 xvfb-run -a cargo run -p ren-gui                       # on a headless box
 ```
 
-The window: source bar on top, operation panel on the left, a virtualized file
-table showing old and new names with the changed part highlighted, and counts
-plus Simulate / Undo / Rename along the bottom. The Rename button disables
-itself **with a reason** when the plan has conflicts, because a conflict blocks
-the whole run rather than skipping a file.
+The window:
+
+- **Source bar** on top, **operation panel** on the left.
+- **File table** (virtualized): old and new names, with the changed part
+  highlighted.
+- **Along the bottom:** counts plus Simulate / Undo / Rename. The Rename button
+  disables itself **with a reason** when the plan has conflicts, because a
+  conflict blocks the whole run rather than skipping a file.
 
 ### Launching it
 
@@ -277,83 +304,23 @@ documented places.
 | **Ctrl +** / **Ctrl −** / **Ctrl 0** | Interface size (also in Settings ▸ Appearance). |
 | **Enter** in the `<Ask>` prompt | Answer and rename. |
 
-Three rules decide when a key acts. **Exact modifiers:** Ctrl+Shift+Z is not
-undo, and Alt+F4 is not F4. **Not while you type:** in a text box the keys are
-the box's own — except F3, and except the F-keys in a number box (Ctrl+Z there
-undoes the digit). **Not behind a dialog:** with Settings, About, the palette,
-the `<Ask>` prompt or a confirmation open, no shortcut acts. F1 is not bound.
+Three rules decide when a key acts:
 
-Closing the window while a run, an undo or a rollback is going waits for it to
-finish; Cancel stops a run sooner, between two files.
+- **Exact modifiers:** Ctrl+Shift+Z is not undo, and Alt+F4 is not F4.
+- **Not while you type:** in a text box the keys are the box's own — except F3,
+  and except the F-keys in a number box (Ctrl+Z there undoes the digit).
+- **Not behind a dialog:** with Settings, About, the palette, the `<Ask>`
+  prompt or a confirmation open, no shortcut acts.
+
+F1 is not bound. Closing the window while a run, an undo or a rollback is going
+waits for it to finish; Cancel stops a run sooner, between two files.
 
 ## Command line
 
-```text
-ren-cli [--journal-dir DIR] [--verbose] <preview | apply | undo | recover | presets> …
-```
-
-`ren-cli --help` and `ren-cli <command> --help` are the full reference; this is
-the map.
-
-| Command | Does |
-|---|---|
-| `preview [DIR]` | Show what would change. Touches nothing, never asks. |
-| `apply [DIR]` | Rename, recording a journal so the batch can be undone. |
-| `undo [--txn FILE]` | Revert the most recent transaction, or the one in `FILE`. |
-| `recover [--rollback]` | List transactions that never finished; `--rollback` reverts them. |
-| `presets list \| show NAME \| import FILE \| export NAME TO [--force]` | The preset folder. `export` will not replace an existing `TO` without `--force`. |
-
-`preview` and `apply` take the same options:
-
-| Group | Flag | Means |
-|---|---|---|
-| Pipeline | `--job FILE` | A job file: its own source and pipeline. Takes no source or listing flag. |
-| | `--preset NAME\|FILE` | A preset, by whole name or path, over `DIR` or a list. |
-| | `--suffix TEXT`, `--scope name\|extension\|both` | A one-operation smoke test: append `TEXT`. Only without `--job`/`--preset`. |
-| | `--answer SLOT=TEXT` | Answer `<Ask>` (slot 0) or `<Ask-1>`…`<Ask-9>` up front. A slot the pipeline does not ask for is refused. |
-| Source | `DIR` | The folder to list. |
-| | `--list FILE` | A text file of paths, one per line (`#` comments and blank lines skipped). UTF-8, UTF-16 and the Windows code page are all read. |
-| | `--file PATH` | One path; repeatable. |
-| | `--delete-list` | Delete the `--list` file after a successful command (not under `--simulate`). |
-| Listing | `--pattern MASK` | `*.mp3`; empty, `*` and `*.*` mean everything. |
-| | `--folders`, `--no-files`, `--subfolders` | What the listing includes. |
-| Run | `--simulate` | (`apply`) Plan everything, touch nothing. |
-| | `--allow-irreversible` | (`apply`) Allow tag writes and removal, which cannot be undone. |
-| | `--allow-system-folders` | Rename inside `C:\Windows`, the program folders, `/usr`, `/etc` and the like, which is otherwise refused. |
-| | `--seed N` | Fix `<Rnd*>` and `fr.seed`, to reproduce a run. |
-| Folders | `--preset-dir DIR`, `--script-dir DIR`, `--journal-dir DIR` | Where presets, scripts and journals live, instead of the per-user folder. |
-
-`apply` asks on stdin for any `<Ask>` not answered with `--answer`, and fails if
-stdin closes first.
-
-### Exit codes
-
-| Code | Means | Next step |
-|---|---|---|
-| `0` | Done. An undo that could not put back a tag write still exits 0 and says so: nothing can put one back. | — |
-| `1` | The command line was wrong, or something failed before any work started. Never used once files have moved. | Fix the command. |
-| `2` | Refused before anything was touched: conflicts or errors in the plan, a system folder, an irreversible change without `--allow-irreversible`, a path that is not absolute, or a journal another run is writing. | Fix the cause and run it again. |
-| `3` | The run started and some files did not make it, or an undo or rollback could not put everything back. | `ren-cli recover`. |
-
-### Legacy switches
-
-A command line written with slash switches is translated before it is parsed,
-so an existing batch file keeps working. `--verbose` prints what it became.
-
-| Switch | Becomes |
-|---|---|
-| `/p PATH` | The folder to list. `PATH\*.ext` lists matching names; a path to a file loads just that file; a path that does not exist fails and names it. |
-| `/l FILE` | `--list FILE`. Wins over `/p`. |
-| `/r NAME` | `--preset NAME`, and the line becomes `apply`. **Without `/r` it only previews.** |
-| `/f`, `/d` | Include files / folders. `/d` alone lists folders and not files. |
-| `/s` | `--subfolders`. |
-| `/k` | `--delete-list`: the list is deleted after a successful run. |
-| `/x` | Accepted and ignored — there is no window to keep open. |
-| `/?` | The help. |
-
-```bat
-ren-cli /p "C:\Photos\*.jpg" /r "Photo cleanup"
-```
+`ren-cli` previews, applies, undoes and recovers runs and manages the preset
+folder; an old slash-switch command line (`/p /l /r …`) still works. Commands,
+flags, exit codes and the legacy switches: [docs/cli.md](docs/cli.md), or
+`ren-cli --help`.
 
 ## If a run was interrupted
 
@@ -361,10 +328,11 @@ Every rename is written to a journal before it happens, so a crash, a power cut
 or a killed process leaves a record of exactly what was under way.
 
 * **In the app**, a banner appears at the next start: *N batches did not
-  finish*. It names each file that was mid-change. **Roll back** puts back what
-  those batches did; **Leave as is** hides the banner and keeps the journals. A
-  journal another RenameIt window is still writing is named as running and is
-  never offered for rollback.
+  finish*. It names each file that was mid-change.
+  * **Roll back** puts back what those batches did; **Leave as is** hides the
+    banner and keeps the journals.
+  * A journal another RenameIt window is still writing is named as running and
+    is never offered for rollback.
 
   <img src="docs/screenshots/main-recovery-banner.png" alt="The banner at start-up naming a batch that did not finish, with Roll back and Leave as is" width="800">
 
@@ -372,26 +340,20 @@ or a killed process leaves a record of exactly what was under way.
   `ren-cli recover --rollback` reverts them. An `apply` that exits 3 is the cue.
 * **Cancel** during a run is not an interruption: it stops between two files,
   the run is recorded as finished, and Undo takes back exactly what happened.
-* **What rollback and undo cannot restore:** a tag write or tag removal. Those
-  go through a copy that is swapped in whole, so a file is either as it was or
-  fully changed — never half-written — but the old tags are gone. A file whose
-  state no longer matches the journal (someone renamed or edited it since) is
-  **skipped** and listed, never forced. A date is compared with two seconds'
-  tolerance, because FAT stores times to two seconds.
+* **What rollback and undo cannot restore:** a tag write or tag removal.
+  * Those go through a copy that is swapped in whole, so a file is either as it
+    was or fully changed — never half-written — but the old tags are gone.
+* **A file changed since** (someone renamed or edited it, so it no longer
+  matches the journal) is **skipped** and listed, never forced. A date is
+  compared with two seconds' tolerance, because FAT stores times to two seconds.
 
 ## Where RenameIt keeps its files
 
-| What | Windows | macOS | Linux | Portable copy |
-|---|---|---|---|---|
-| Undo journal | `%APPDATA%\RenameIt\journal` | `~/Library/Application Support/RenameIt/journal` | `$XDG_DATA_HOME/RenameIt/journal`, else `~/.local/share/RenameIt/journal` | `RenameIt-data\journal` beside the program |
-| Presets | `…\RenameIt\presets` | `…/RenameIt/presets` | `…/RenameIt/presets` | `RenameIt-data\presets` |
-| Scripts | `…\RenameIt\scripts` | `…/RenameIt/scripts` | `…/RenameIt/scripts` | `RenameIt-data\scripts` |
-| Settings and window layout | `%APPDATA%\RenameIt\data\app.ron` | `~/Library/Application Support/RenameIt/app.ron` | `~/.local/share/renameit/app.ron` (lower case) | `RenameIt-data\app-state.ron` |
-| Settings a newer version wrote, kept aside | `%APPDATA%\RenameIt\app-state.unreadable-<seconds>.ron` | `…/RenameIt/app-state.unreadable-<seconds>.ron` | `…/RenameIt/app-state.unreadable-<seconds>.ron` | `RenameIt-data\app-state.unreadable-<seconds>.ron` |
-
-Settings ▸ Problem Solver shows which of these this copy uses, with buttons to
-open them. `ren-cli` uses the same folders, so `ren-cli undo` can undo a batch
-the app ran.
+The undo journal, presets, scripts and settings live in a per-user folder (on
+Windows under `%APPDATA%\RenameIt`), or in `RenameIt-data` beside a portable
+copy. Settings ▸ Problem Solver shows which this copy uses; `ren-cli` uses the
+same folders, so `ren-cli undo` can undo a batch the app ran. The table for
+each OS: [docs/cli.md](docs/cli.md#where-renameit-keeps-its-files).
 
 ## Portable mode
 
@@ -406,31 +368,24 @@ be **writable**. A copy in `Program Files` or on a read-only share declines the
 portable path rather than taking it and failing on every write. Settings ▸
 Problem Solver says which mode you are in and where the files actually are.
 
+## Workspace
+
+| Crate | Role |
+|---|---|
+| `crates/ren-core` | The engine: operations, pipeline, planner, conflict detection, transactional executor, journal-backed undo, metadata readers, scripting. No GUI dependencies and no OS behaviour; its only platform-conditional code is std's lossless path encoding in the journal (D240). |
+| `crates/ren-platform` | `trait Platform` — renames, DOS attributes, file times, naming rules, the system-folder guard, shell integration. Everything OS-specific lives here (D3). |
+| `crates/ren-cli` | Headless runner. The automation story and the test harness; ships in every release. |
+| `crates/ren-gui` | The desktop app (egui/eframe). |
+
+`docs/DESIGN.md` Part 4 has a module map of each crate and the app's worker
+threads.
+
 ## The quality gate
 
-Everything below must be green before a session ends — the same list as
-[`CLAUDE.md`](CLAUDE.md):
-
-```sh
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo clippy --workspace --lib --bins --target x86_64-pc-windows-msvc -- -D warnings
-cargo test --workspace
-TZ=Asia/Kolkata cargo test --workspace   # P61: a UTC agent cannot tell Local from Utc
-cargo deny check
-for t in x86_64-unknown-linux-gnu x86_64-pc-windows-msvc; do for p in wgpu colored; do cargo tree -e no-dev -i $p --target $t; done; done   # prints nothing (D248)
-cargo run --release -p ren-core --example plan_budget   # a 10k-file preset plan, p95 under 50 ms
-cargo run --release -p ren-gui --example spike_preview_headless -- 10000 100        # frame budget (D165)
-cargo run --release -p ren-gui --example spike_preview_headless -- 10000 100 grid   # grid tile count (D165)
-cargo bench -p ren-core --bench plan     # the same numbers with criterion's statistics; keep them in the commit message
-```
-
-`plan_budget` is the number of record and fails above its budget; `cargo bench`
-asserts nothing and is there for its statistics (D165).
-
-The Windows cross-check prints one build-script warning — the icon needs a
-Windows host to embed. That is expected off Windows and is not a failure; the
-release build runs on `windows-latest`, where it does not appear.
+Everything in it must be green before a session ends: fmt, clippy (Linux and
+the Windows target), the tests in UTC and in `TZ=Asia/Kolkata`, `cargo deny`,
+the no-`wgpu` check and the performance budgets. The commands and what their
+output means: [`CLAUDE.md`](CLAUDE.md#the-quality-gate).
 
 ## Screenshots
 
@@ -462,31 +417,33 @@ feature and every CLI flag to its test. CI runs the suite as its `e2e` job.
 - [`CLAUDE.md`](CLAUDE.md) — how to work in this repo
 - [`docs/DECISIONS.md`](docs/DECISIONS.md) — **the authority** on every policy and technology call
 - [`docs/DESIGN.md`](docs/DESIGN.md) — architecture: engine model, GUI/UX screens, quality strategy, and Part 4, the app as built
+- [`docs/cli.md`](docs/cli.md) — `ren-cli`, its exit codes and legacy switches, and where the files live
 - [`docs/tags.md`](docs/tags.md) — the `<tag>` reference
 - [`docs/MIGRATION-legacy-scripts.md`](docs/MIGRATION-legacy-scripts.md) — porting a legacy `.frs` script to Koto
 - [`docs/spikes/`](docs/spikes/) — written verdicts on the risky assumptions
 - [`docs/manual-checks.md`](docs/manual-checks.md) — the few things CI cannot prove, and how to check them
+- [`docs/COVERAGE.md`](docs/COVERAGE.md) — every GUI feature and CLI flag mapped to its e2e test
 - [`docs/screenshots/README.md`](docs/screenshots/README.md) — every screen, one picture each
 
 ## Releases
 
-Push `main` first and **let CI go green**, then tag:
-`git tag -a v1.6.0 -m "1.6.0" && git push origin v1.6.0` runs
-[`.github/workflows/release.yml`](.github/workflows/release.yml), which builds, packages
-`RenameIt-windows-x64.zip` **and** `RenameIt-linux-x64.tar.gz`, and drafts a
-GitHub release whose notes are the newest section of [`CHANGELOG.md`](CHANGELOG.md). Draft, not
-published: the tag is the act of building, and deciding it is fit to hand out
-is a separate one. Each archive is built from an explicit list rather than by
-sweeping a directory, and carries the licence notices of everything the
-programs link (`THIRD-PARTY-LICENSES.html`, generated by
-[`cargo-about`](about.toml)), the font notices, and the two docs the app points
-at.
-
-The order matters because the release **does not re-run the tests** — it checks
-that CI already passed on the exact commit the tag points at, and refuses
-otherwise. A tag does not trigger CI, so tagging before CI finishes is a
-refusal rather than a wait: sleeping on a paid runner would cost the minutes
-that check exists to save.
+- **Push `main` first and let CI go green**, then tag:
+  `git tag -a v1.6.0 -m "1.6.0" && git push origin v1.6.0`.
+- **The tag runs** [`.github/workflows/release.yml`](.github/workflows/release.yml), which builds, packages
+  `RenameIt-windows-x64.zip` **and** `RenameIt-linux-x64.tar.gz`, and drafts a
+  GitHub release whose notes are the newest section of [`CHANGELOG.md`](CHANGELOG.md).
+- **Draft, not published:** the tag is the act of building, and deciding it is
+  fit to hand out is a separate one.
+- **Each archive is built from an explicit list** rather than by sweeping a
+  directory. It carries the licence notices of everything the programs link
+  (`THIRD-PARTY-LICENSES.html`, generated by [`cargo-about`](about.toml)), the font
+  notices, and the two docs the app points at.
+- **The order matters** because the release **does not re-run the tests** — it
+  checks that CI already passed on the exact commit the tag points at, and
+  refuses otherwise.
+  - A tag does not trigger CI, so tagging before CI finishes is a refusal
+    rather than a wait: sleeping on a paid runner would cost the minutes that
+    check exists to save.
 
 The application icon is ours, drawn by [`assets/icon.py`](assets/icon.py) and committed with its
 generator so that stays checkable. It needs Pillow:

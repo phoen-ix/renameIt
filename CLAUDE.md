@@ -44,6 +44,7 @@ ships first. MIT-licensed.
 
 - `docs/DECISIONS.md` — decision record (D* locked decisions, P* default policies)
 - `docs/DESIGN.md` — consolidated architecture
+- `docs/cli.md` — `ren-cli`, exit codes, legacy switches, where the files live
 - `docs/tags.md` — the `<tag>` reference
 - `docs/MIGRATION-legacy-scripts.md` — porting a legacy `.frs` script to Koto
 - `docs/manual-checks.md` — the few things CI cannot prove, and how to check them
@@ -90,3 +91,10 @@ cargo run --release -p ren-gui --example spike_preview_headless -- 10000 100    
 cargo run --release -p ren-gui --example spike_preview_headless -- 10000 100 grid   # grid tile count (D165)
 cargo bench -p ren-core --bench plan     # the same numbers with criterion's statistics; keep them in the commit message
 ```
+
+`plan_budget` is the number of record and fails above its budget; `cargo bench`
+asserts nothing and is there for its statistics (D165).
+
+The Windows cross-check prints one build-script warning — the icon needs a
+Windows host to embed. That is expected off Windows and is not a failure; the
+release build runs on `windows-latest`, where it does not appear.
