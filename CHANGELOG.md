@@ -6,6 +6,14 @@ Two things this file does **not** track. Engine and UI decisions live in
 `docs/DECISIONS.md`, which is the authority on why anything behaves as it does;
 and the reasoning behind each default lives beside the code it governs.
 
+## [1.7.1] - 2026-11-01
+
+### Fixed
+
+- Installing for everyone no longer starts the installer over. After the
+  administrator prompt it continues at the next step instead of showing the
+  welcome page, the licence and the scope choice again.
+
 ## [1.7.0] - 2026-11-01
 
 A Windows installer and in-app updates, Explorer's double-click in the file

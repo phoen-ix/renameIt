@@ -396,7 +396,7 @@ release and a person at the screen.
 | # | Do this | Expect |
 |---|---|---|
 | 1 | Run `RenameIt-Setup-<v>.exe` as a standard user and keep *Only for me* | No administrator prompt; installed under `%LOCALAPPDATA%\Programs\RenameIt`, in *Installed apps*, with a Start Menu entry |
-| 2 | Run it again, choose *Anyone who uses this computer* | One administrator prompt, then an install under `Program Files` |
+| 2 | Run it again, choose *Anyone who uses this computer* | One administrator prompt; the installer then continues at Components (Back disabled), not on Welcome; it installs under `Program Files` |
 | 3 | Run the installer with RenameIt open | It asks you to close RenameIt, and Retry continues once you have |
 | 4 | Install the previous release, then Settings ▸ Updates ▸ *Check now* once a newer one is published | "RenameIt X is available"; *Update to X* closes the window, and the new version opens on its own (About shows it) |
 | 5 | The same on an all-users install | Windows asks for an administrator first |

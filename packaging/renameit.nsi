@@ -7,6 +7,8 @@
 ; the portable marker: an installed copy keeps its files in the per-user folder (D131).
 ;
 ; Switches: /S  /CurrentUser  /AllUsers  /RESTART  /D=<dir> (last)
+;           /RESUME is internal: the copy ElevateForAllUsers starts gets it, and opens on the
+;           step after the scope page instead of on Welcome again.
 ; Exit codes: 2 = silent /AllUsers without administrator rights (nothing installed)
 ;             3 = silent run, and RenameIt was still running after 30 seconds (nothing changed)
 ; packaging/README.md explains the design; ci.yml's installer smoke test runs it on Windows,
@@ -66,6 +68,8 @@ RequestExecutionLevel user
 Var RealPrivileges   ; the account type as Windows reports it, before the fib to MultiUser
 Var RestartApp       ; "1" when /RESTART was passed: a silent install relaunches RenameIt
 Var Locked           ; "1" when renameit.exe or ren-cli.exe is in use, set by ${UN}CheckLocked
+Var Resume           ; "1" in the elevated copy ElevateForAllUsers started, "2" once it has
+                     ; shown its first page: Welcome, License and the scope page were done
 
 ; ---- UI ----
 !define MUI_ICON "${ICON_SRC}"
@@ -76,10 +80,16 @@ Var Locked           ; "1" when renameit.exe or ren-cli.exe is in use, set by ${
 !define MUI_FINISHPAGE_RUN_TEXT "Start RenameIt now"
 !define MUI_FINISHPAGE_RUN_FUNCTION "LaunchApp"
 
+; The elevated copy that "anyone who uses this computer" starts skips the three pages the
+; first copy already showed, and opens on Components (SkipIfResumed, FirstPageAfterResume).
+!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfResumed
 !insertmacro MUI_PAGE_WELCOME
+!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfResumed
 !insertmacro MUI_PAGE_LICENSE "..\LICENSE"
+!define MULTIUSER_PAGE_CUSTOMFUNCTION_PRE SkipIfResumed
 !define MULTIUSER_PAGE_CUSTOMFUNCTION_LEAVE ElevateForAllUsers
 !insertmacro MULTIUSER_PAGE_INSTALLMODE
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW FirstPageAfterResume
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
@@ -89,6 +99,22 @@ Var Locked           ; "1" when renameit.exe or ren-cli.exe is in use, set by ${
 !insertmacro MUI_UNPAGE_INSTFILES
 
 !insertmacro MUI_LANGUAGE "English"
+
+; A page the first copy already showed: skipped in the elevated copy.
+Function SkipIfResumed
+  ${If} $Resume != ""
+    Abort
+  ${EndIf}
+FunctionEnd
+
+; The elevated copy's first page has no Back: the pages behind it were the first copy's.
+Function FirstPageAfterResume
+  ${If} $Resume == "1"
+    GetDlgItem $0 $HWNDPARENT 3
+    EnableWindow $0 0
+    StrCpy $Resume "2"
+  ${EndIf}
+FunctionEnd
 
 Function LaunchApp
   ; Through Explorer, so RenameIt starts as the signed-in user even after an elevated
@@ -249,6 +275,17 @@ Function .onInit
   ${IfNot} ${Errors}
     StrCpy $RestartApp "1"
   ${EndIf}
+  ; /RESUME: this is the elevated copy ElevateForAllUsers started, so the user has been
+  ; through Welcome, License and the scope page already. Only for that case: interactive, and
+  ; for everyone.
+  StrCpy $Resume ""
+  ClearErrors
+  ${GetOptions} $R0 "/RESUME" $R1
+  ${IfNot} ${Errors}
+  ${AndIfNot} ${Silent}
+  ${AndIf} $MultiUser.InstallMode == "AllUsers"
+    StrCpy $Resume "1"
+  ${EndIf}
   ClearErrors
   Pop $R2
   Pop $R1
@@ -275,7 +312,7 @@ Function ElevateForAllUsers
     Return
   ${EndIf}
   ClearErrors
-  ExecShell "runas" "$EXEPATH" "/AllUsers"
+  ExecShell "runas" "$EXEPATH" "/AllUsers /RESUME"
   ${IfNot} ${Errors}
     Quit
   ${EndIf}

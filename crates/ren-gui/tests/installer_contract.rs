@@ -71,6 +71,32 @@ fn the_uninstaller_runs_a_flag_the_app_understands() {
     assert!(launch.uninstall_cleanup);
 }
 
+/// Choosing "anyone who uses this computer" starts an elevated copy of the
+/// installer. That copy continues at the step after the scope page instead of
+/// greeting the user again: the relaunch says so with `/RESUME`, `.onInit`
+/// reads it, and the three pages the first copy showed are skipped.
+#[test]
+fn the_elevated_copy_continues_where_the_first_one_stopped() {
+    assert!(NSI.contains(r#"ExecShell "runas" "$EXEPATH" "/AllUsers /RESUME""#));
+    assert!(NSI.contains(r#"${GetOptions} $R0 "/RESUME""#));
+    for page in [
+        "!insertmacro MUI_PAGE_WELCOME",
+        "!insertmacro MUI_PAGE_LICENSE",
+        "!insertmacro MULTIUSER_PAGE_INSTALLMODE",
+    ] {
+        let at = NSI.find(page).unwrap_or_else(|| panic!("{page}"));
+        let before: Vec<&str> = NSI[..at].lines().rev().take(3).collect();
+        assert!(
+            before.iter().any(|line| line.contains("PRE SkipIfResumed")),
+            "{page} is not skipped in the elevated copy"
+        );
+    }
+    assert!(
+        NSI.contains("MUI_PAGE_CUSTOMFUNCTION_SHOW FirstPageAfterResume"),
+        "the first page the elevated copy shows has no Back into the skipped ones"
+    );
+}
+
 /// NSIS shows a message box under `/S` unless it says what to answer. A silent
 /// install or update that stops on a dialog nobody can see is a hang.
 #[test]

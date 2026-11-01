@@ -20,6 +20,7 @@ folder. The installer installs it, minus `renameit-portable.txt`.
 | `/AllUsers` | Install for everyone, under `%ProgramFiles%\RenameIt`. Needs administrator rights. |
 | `/RESTART` | With `/S`, start RenameIt when the install finishes. The updater passes it for an update the user asked for. |
 | `/D=<dir>` | Install folder. Must come last; NSIS's own rule. |
+| `/RESUME` | Internal. The elevated copy that choosing *anyone who uses this computer* starts gets it, and opens on Components instead of on Welcome: the first copy already showed Welcome, the licence and the scope page. |
 
 With no scope switch, an upgrade follows the existing install: per-user first, then
 per-machine, and the folder it was in. The uninstaller is `uninstall.exe` in the install
@@ -33,7 +34,7 @@ folder. `/S` keeps your presets, scripts, journal and settings.
 
 ## Why it is built this way
 
-- **No administrator prompt to open it.** The script uses `RequestExecutionLevel user`. Choosing *anyone who uses this computer* relaunches the installer elevated, and only then.
+- **No administrator prompt to open it.** The script uses `RequestExecutionLevel user`. Choosing *anyone who uses this computer* relaunches the installer elevated, and only then. The elevated copy continues at Components, with Back disabled, rather than starting over.
 - **No quit event.** The sibling apps signal their tray process to quit; RenameIt is a window that may be partway through a batch. The installer asks whether `renameit.exe` and `ren-cli.exe` can be opened for writing. The updater closes the window itself, and the close waits for a running batch.
 - **No Explorer-menu section.** The menu is per user and records the exe's path, so the app writes it (Settings ▸ Shell Integration) as the signed-in user. The uninstaller runs `renameit --uninstall-cleanup`, which removes it only if it points at this copy.
 - **Files are deleted by name, never `RMDir /r $INSTDIR`.** The install folder may be one the user picked, holding more than RenameIt. `installer-smoke.ps1` fails if a staged file is left behind.
