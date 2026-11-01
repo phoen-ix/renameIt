@@ -216,7 +216,7 @@ xvfb-run -a cargo run -p ren-gui     # or just `cargo run -p ren-gui`
 | 1 | Settings ▸ Display, tick *Click anywhere on a row to select it*, close | — |
 | 2 | Click a row's **Size** or **Modified** cell | The row is selected, and the count at the bottom follows |
 | 3 | Ctrl-click the same cell again | It is deselected — the same rule the name cell follows |
-| 4 | Double-click the **name** of a row | The inline editor opens. The row target behind it must not have swallowed this |
+| 4 | Click a selected row's **name** again, slowly | The inline editor opens (P115). The row target behind it must not have swallowed this |
 | 5 | Untick it, click a Size cell again | Nothing is selected: only the name senses a click, which is the default |
 | 6 | Tick *Shade every other row* | Alternate rows are faintly shaded, and a selected row still reads as selected |
 
@@ -403,5 +403,15 @@ release and a person at the screen.
 | 6 | *Once a day — install it when I close RenameIt*, with a newer release published: start, wait for "will be installed when you close RenameIt", close | The next start is the new version, and the window did not reopen by itself |
 | 7 | Settings ▸ Shell Integration on, then uninstall | The Explorer menu is gone; *Keep* your data and `%APPDATA%\RenameIt` is still there |
 | 8 | Set `HKLM\SOFTWARE\Policies\RenameIt\DisableUpdateCheck` = 1 (DWORD), open Settings ▸ Updates | "Your administrator has turned update checks off" |
+
+**Results:** *not yet recorded.*
+
+## P115 — the pointer, Explorer's way
+
+| # | Do this | Expect |
+|---|---|---|
+| 1 | On Windows, set Control Panel ▸ Mouse ▸ double-click speed to its slowest, restart RenameIt, double-click a folder at that pace | It opens, as it would in Explorer |
+| 2 | Click a file, wait a second, click its name again | The inline editor opens, about half a second later |
+| 3 | Settings ▸ Display ▸ *Double-click on a file* ▸ *Open it*, double-click a `.txt` | It opens in the default editor |
 
 **Results:** *not yet recorded.*

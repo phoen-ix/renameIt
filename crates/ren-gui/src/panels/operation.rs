@@ -35,12 +35,17 @@ enum Command {
 struct CardDrag(usize);
 
 /// Draws the stack. Returns true if anything changed the preview.
+/// The least the card stack is given before it scrolls, however little room
+/// the window has: about one expanded card's header and first field.
+const MIN_STACK: f32 = 120.0;
+
 pub fn ui(
     ui: &mut egui::Ui,
     stack: &mut CardStack,
     expanded: &mut Option<CardId>,
     cx: &EditorCx<'_>,
     assist: Option<&crate::panels::visual_assist::VisualAssist>,
+    reserve: f32,
 ) -> bool {
     let mut changed = false;
     let mut commands: Vec<Command> = Vec::new();
@@ -48,12 +53,19 @@ pub fn ui(
     egui::ScrollArea::vertical()
         .id_salt("pipeline")
         // Vertically shrink-to-fit, capped. `[false, false]` reserved the full
-        // 55 % whatever was in it, so a single collapsed card left 338 pt of
+        // height whatever was in it, so a single collapsed card left 338 pt of
         // empty panel between itself and "+ Add operation" — which then sat
         // level with nothing, a third of the way down a column the user reads
         // top to bottom. Horizontally it still fills, so cards are panel-wide.
+        //
+        // **Capped at what the panel has left once `reserve` — the controls
+        // under the stack — is kept for them**, not at a share of it. The cap
+        // was 55 %, and the tail needs about 110 pt of the 45 % it was given:
+        // an open Visual Assist strip or Scope scrolled inside the stack with
+        // 190 pt of empty panel under it.
         .auto_shrink([false, true])
-        .max_height(ui.available_height() * 0.55)
+        .max_height((ui.available_height() - reserve).max(MIN_STACK))
+        .min_scrolled_height(MIN_STACK)
         .show(ui, |ui| {
             if stack.is_empty() {
                 empty_state(ui);

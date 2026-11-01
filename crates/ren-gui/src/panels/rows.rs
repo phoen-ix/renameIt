@@ -169,10 +169,17 @@ fn describe_actions(item: &PlanItem) -> Option<String> {
 /// session, not the clipboard.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RowAction {
-    /// Open the inline editor, as F2 and a double-click do — and as a
-    /// double-click now asks for, rather than opening the editor itself, so
-    /// the app's one refusal while a run is out covers every way in (D169).
+    /// Open the inline editor, as F2 and the row menu do — asked for rather
+    /// than opened by the view, so the app's one refusal while a run is out
+    /// covers every way in (D169).
     Rename(usize),
+    /// A quick double-click (P115): a folder opens, a file does what
+    /// Settings ▸ Display says.
+    Open(usize),
+    /// A plain click on the row that was already the only one selected:
+    /// Explorer's slow second click, which renames once the double-click
+    /// time has passed without the click becoming a double-click (P115).
+    ClickedAgain(usize),
     /// *"show in Explorer"* (DESIGN §S3).
     Reveal(usize),
     /// Browser mode: collect these rows into Free Select, where one run can
@@ -185,6 +192,34 @@ pub enum RowAction {
         what: CopyWhat,
         rows: Vec<usize>,
     },
+}
+
+/// A click on a row's name or picture, the way Explorer reads one (P115).
+///
+/// Selects, and asks for what the click means beyond that: a double-click is
+/// [`RowAction::Open`], and a plain click on the row that was already the only
+/// one selected is [`RowAction::ClickedAgain`]. egui reports `clicked` for
+/// both clicks of a double-click, so the second click of one always arrives
+/// with `double_clicked` too, and `Open` wins.
+pub fn take_click(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    index: usize,
+    selection: &mut crate::viewmodel::Selection,
+    order: &[usize],
+    action: &mut Option<RowAction>,
+) {
+    if response.clicked() {
+        let (ctrl, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
+        let again = !ctrl && !shift && selection.len() == 1 && selection.contains(index);
+        selection.click(index, ctrl, shift, order);
+        if again {
+            *action = Some(RowAction::ClickedAgain(index));
+        }
+    }
+    if response.double_clicked() {
+        *action = Some(RowAction::Open(index));
+    }
 }
 
 /// Which text *Copy to Clipboard* puts there.

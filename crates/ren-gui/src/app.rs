@@ -62,6 +62,9 @@ struct Persisted {
     casing: ren_core::ops::CasingRules,
     /// Settings ▸ Display: row striping and full-row select.
     table_style: crate::viewmodel::TableStyle,
+    /// Settings ▸ Display: what a double-click on a file, or on a folder in
+    /// Free Select, does (P115).
+    clicks: ClickActions,
     /// Settings ▸ Display: which columns the file table shows, in what order.
     /// Reconciled on load, so a blob from a build with fewer columns gains the
     /// rest rather than leaving the header and the body disagreeing.
@@ -116,6 +119,7 @@ impl Default for Persisted {
             startup: Startup::default(),
             casing: ren_core::ops::CasingRules::default(),
             table_style: crate::viewmodel::TableStyle::default(),
+            clicks: ClickActions::default(),
             columns: crate::viewmodel::Columns::default(),
             field_history: std::collections::BTreeMap::new(),
             theme: Theme::System,
@@ -127,6 +131,35 @@ impl Default for Persisted {
             step: StepConfig::default(),
         }
     }
+}
+
+/// What a quick double-click does where a folder does not simply open
+/// (P115, Settings ▸ Display).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClickActions {
+    pub file: FileDoubleClick,
+    /// Free Select has no folder of its own to walk into.
+    pub free_select_folder: FolderDoubleClick,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FileDoubleClick {
+    /// What a double-click did before P115, and still the default.
+    #[default]
+    Rename,
+    /// With its default program, as Explorer does.
+    Open,
+    Nothing,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FolderDoubleClick {
+    #[default]
+    Nothing,
+    /// Leave Free Select and browse into the folder, the rule a single
+    /// dropped folder already follows.
+    Browse,
 }
 
 /// What a fresh start deliberately forgets — the Startup settings page.
@@ -316,6 +349,14 @@ pub struct RenameItApp {
     casing: ren_core::ops::CasingRules,
     /// Row striping and full-row select.
     table_style: crate::viewmodel::TableStyle,
+    clicks: ClickActions,
+    /// Explorer's slow second click on a selected row (P115): which file, and
+    /// the frame time of the click. The editor opens once the double-click
+    /// time has passed, unless a double-click or a new selection came first.
+    pending_slow_rename: Option<(PathBuf, f64)>,
+    /// The frame's clock (`InputState::time`), for arming the above from
+    /// `row_action`, which is handed no context.
+    frame_time: f64,
     /// Which columns the file table shows, in what order.
     columns: crate::viewmodel::Columns,
     /// See `Persisted::field_history`.
@@ -476,6 +517,11 @@ impl RenameItApp {
         // "the preview and the rename that follows it agree" still holds.
         app.settings.reseed();
         ctx.set_theme(egui::ThemePreference::from(app.theme));
+        // The OS's double-click speed, so a double-click here is one wherever
+        // else it is one (P115). egui's own default is 0.3 s; Windows' is 0.5.
+        if let Some(delay) = app.platform.double_click_time() {
+            ctx.options_mut(|o| o.input_options.max_double_click_delay = delay);
+        }
         app.session.request_refresh();
         app.status = unreadable;
         app
@@ -638,6 +684,9 @@ impl RenameItApp {
             startup: persisted.startup,
             casing: persisted.casing,
             table_style: persisted.table_style,
+            clicks: persisted.clicks,
+            pending_slow_rename: None,
+            frame_time: 0.0,
             field_history: persisted.field_history,
             columns: {
                 // A blob from a build with fewer columns is missing the rest,
@@ -1269,6 +1318,7 @@ impl RenameItApp {
             startup: self.startup,
             casing: self.casing.clone(),
             table_style: self.table_style,
+            clicks: self.clicks,
             columns: self.columns.clone(),
             field_history: self.field_history.clone(),
             theme: self.theme,
@@ -1306,6 +1356,7 @@ impl RenameItApp {
         self.casing = fresh.casing.clone();
         self.startup = fresh.startup;
         self.table_style = fresh.table_style;
+        self.clicks = fresh.clicks;
         self.columns = fresh.columns.clone();
         self.field_history = fresh.field_history.clone();
         self.theme = fresh.theme;
@@ -2627,10 +2678,9 @@ impl RenameItApp {
     /// Enter goes into the folder under the keyboard, Backspace up to the
     /// parent — Browser mode only, since Free Select has no folder to walk.
     ///
-    /// **P77 is not reopened.** That policy refused *double-click* meaning two
-    /// things depending on which view is lit; these are keys, they mean the
-    /// same thing in the list and the grid, and the pointer stays unoverloaded
-    /// — which is the limb of P77 that was load-bearing.
+    /// A quick double-click on a folder row does what Enter does (P115, which
+    /// amends P77 and P87): the same gesture in the list and the grid, as in
+    /// Explorer.
     ///
     /// The two directions are deliberately asymmetric in what they need:
     /// **Backspace works whatever the Folders chip says**, because a parent
@@ -2873,6 +2923,69 @@ impl RenameItApp {
         }
     }
 
+    /// A quick double-click on row `index` (P115). A folder opens, as Enter
+    /// opens it; anything else does what Settings ▸ Display says.
+    fn open_row(&mut self, index: usize) {
+        use crate::viewmodel::SourceMode;
+        let Some(entry) = self.session.entries().get(index) else {
+            return;
+        };
+        let path = entry.path.clone();
+        let browsing = self.session.settings.mode == SourceMode::Browser;
+        match (entry.is_dir, browsing) {
+            (true, true) => self.set_dir(path),
+            (true, false) => match self.clicks.free_select_folder {
+                FolderDoubleClick::Nothing => {}
+                FolderDoubleClick::Browse => {
+                    self.session.settings.mode = SourceMode::Browser;
+                    self.set_dir(path);
+                }
+            },
+            (false, _) => match self.clicks.file {
+                FileDoubleClick::Rename => self.open_inline_rename(index),
+                FileDoubleClick::Open => {
+                    if let Err(error) = self.platform.open_file(&path) {
+                        self.status = Some(format!("Could not open it: {error}"));
+                    }
+                }
+                FileDoubleClick::Nothing => {}
+            },
+        }
+    }
+
+    /// Opens the editor a slow second click asked for, once the double-click
+    /// time has passed with no double-click (P115). Dropped if the selection
+    /// moved off that one row in the meantime, which is what any other click,
+    /// key or relist does.
+    fn slow_rename_due(&mut self, ctx: &egui::Context) {
+        let Some((path, armed)) = &self.pending_slow_rename else {
+            return;
+        };
+        let selection = &self.session.selection;
+        let index = selection
+            .iter()
+            .next()
+            .filter(|_| selection.len() == 1)
+            .filter(|&i| {
+                self.session
+                    .entries()
+                    .get(i)
+                    .is_some_and(|e| e.path == *path)
+            });
+        let Some(index) = index.filter(|_| self.inline_rename.is_none()) else {
+            self.pending_slow_rename = None;
+            return;
+        };
+        let wait = ctx.options(|o| o.input_options.max_double_click_delay);
+        let left = armed + wait - ctx.input(|i| i.time);
+        if left <= 0.0 {
+            self.pending_slow_rename = None;
+            self.open_inline_rename(index);
+        } else {
+            ctx.request_repaint_after_secs(left as f32);
+        }
+    }
+
     /// Carries out what the file list's right-click menu asked for.
     ///
     /// Here rather than in the table because every one of these needs something
@@ -2882,6 +2995,17 @@ impl RenameItApp {
 
         match action {
             RowAction::Rename(index) => self.open_inline_rename(index),
+            RowAction::Open(index) => {
+                self.pending_slow_rename = None;
+                self.open_row(index);
+            }
+            RowAction::ClickedAgain(index) => {
+                self.pending_slow_rename = self
+                    .session
+                    .entries()
+                    .get(index)
+                    .map(|entry| (entry.path.clone(), self.frame_time));
+            }
             RowAction::Reveal(index) => {
                 if let Some(entry) = self.session.entries().get(index) {
                     // Best effort: there may be no file manager, and failing to
@@ -3357,6 +3481,7 @@ impl RenameItApp {
     /// The whole window, independent of eframe so tests can drive it.
     pub fn show(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        self.frame_time = ctx.input(|i| i.time);
         if self.unstyled {
             self.unstyled = false;
             // Here rather than in `new`, because `headless` has no `Context` to
@@ -3432,6 +3557,7 @@ impl RenameItApp {
                 casing: &mut self.casing,
                 columns: &mut self.columns,
                 table_style: &mut self.table_style,
+                clicks: &mut self.clicks,
                 startup: &mut self.startup,
                 session: &mut self.session.settings,
                 platform: self.platform.as_ref(),
@@ -3649,6 +3775,13 @@ impl RenameItApp {
                 });
                 ui.add_space(4.0);
 
+                // The height of what is drawn under the stack, as last frame
+                // measured it, so the stack can have everything else. The
+                // tail does not depend on the stack's height, so this settles
+                // in one frame; a guess covers the first.
+                let tail_id = egui::Id::unique("pipeline_tail");
+                let tail = ui.data(|d| d.get_temp::<f32>(tail_id)).unwrap_or(120.0);
+
                 let mut expanded = self.expanded;
                 {
                     // Disjoint field borrows: the stack is taken mutably while
@@ -3673,6 +3806,7 @@ impl RenameItApp {
                         &mut expanded,
                         &cx,
                         self.visual_assist.as_ref(),
+                        tail,
                     ) {
                         self.needs_preview = true;
                     }
@@ -3705,6 +3839,7 @@ impl RenameItApp {
                     self.batch_replace.push(rule);
                 }
 
+                let tail_top = ui.cursor().top();
                 ui.add_space(4.0);
                 if ui
                     .button("+ Add operation")
@@ -3738,6 +3873,11 @@ impl RenameItApp {
                         .weak()
                         .small(),
                     );
+                }
+                let measured = ui.cursor().top() - tail_top + ui.spacing().item_spacing.y;
+                if (measured - tail).abs() > 0.5 {
+                    ui.data_mut(|d| d.insert_temp(tail_id, measured));
+                    ui.ctx().request_repaint();
                 }
             });
 
@@ -3881,6 +4021,7 @@ impl RenameItApp {
             if let Some((path, name)) = rename_confirmed {
                 self.rename_file(&path, name);
             }
+            self.slow_rename_due(ui.ctx());
         });
 
         // Anything drawn this frame that asked for a relist gets it now, in
@@ -4287,6 +4428,10 @@ mod tests {
                 stripes: true,
                 full_row_select: true,
             },
+            clicks: ClickActions {
+                file: FileDoubleClick::Open,
+                free_select_folder: FolderDoubleClick::Browse,
+            },
             columns: {
                 let mut columns = crate::viewmodel::Columns::default();
                 columns.all_mut()[0].width = 321.0;
@@ -4320,6 +4465,7 @@ mod tests {
         assert_eq!(back.startup, original.startup);
         assert_eq!(back.theme, original.theme);
         assert_eq!(back.simulate, original.simulate);
+        assert_eq!(back.clicks, original.clicks);
         assert_eq!(back.update_mode, original.update_mode);
         assert_eq!(back.last_update_check, original.last_update_check);
         assert_eq!(back.update_attempt, original.update_attempt);

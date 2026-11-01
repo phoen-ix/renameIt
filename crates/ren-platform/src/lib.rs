@@ -52,12 +52,14 @@ pub enum Capability {
     LinkReadOnly,
     /// Checking for a newer release and installing it (D250).
     Updates,
+    /// Opening a file with its default program (P115).
+    OpenFile,
 }
 
 impl Capability {
     /// Every capability, so a caller can ask about all of them without
     /// hand-listing the set and silently missing the next one added.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::CreatedTime,
         Self::AccessedTime,
         Self::ModifiedTime,
@@ -69,6 +71,7 @@ impl Capability {
         Self::ShellContextMenu,
         Self::LinkReadOnly,
         Self::Updates,
+        Self::OpenFile,
     ];
 }
 
@@ -86,6 +89,7 @@ impl fmt::Display for Capability {
             Self::ShellContextMenu => "a file manager context-menu entry",
             Self::LinkReadOnly => "making a symbolic link read-only",
             Self::Updates => "checking for updates",
+            Self::OpenFile => "opening a file with its default program",
         };
         f.write_str(s)
     }
@@ -390,6 +394,21 @@ pub trait Platform: Send + Sync + fmt::Debug {
     fn case_sensitivity(&self, dir: &Path) -> CaseSensitivity;
 
     fn reveal_in_file_manager(&self, path: &Path) -> Result<()>;
+
+    /// Opens `path` with its default program, as a double-click in the file
+    /// manager would, and returns without waiting for it (P115).
+    fn open_file(&self, _path: &Path) -> Result<()> {
+        Err(PlatformError::CapabilityUnsupported {
+            capability: Capability::OpenFile,
+            platform: self.name(),
+        })
+    }
+
+    /// The desktop's double-click time in seconds, where it has one to read,
+    /// so a double-click here is one wherever else it is one (P115).
+    fn double_click_time(&self) -> Option<f64> {
+        None
+    }
 
     /// Best-effort notification that the folder holding `path` changed, so
     /// the OS file manager refreshes it. Never fails.

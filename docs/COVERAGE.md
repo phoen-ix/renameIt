@@ -10,7 +10,7 @@ accessibility tree (egui_kittest, D24). The CLI tests run the built binary as a
 process. The screenshot suite `snapshots.rs` (D248) is the docs tour, not part
 of this map.
 
-**Inventory**, 2026-11-01. Re-run these commands from the repo root to check
+**Inventory**, 2026-11-01 (P115 rows added the same day). Re-run these commands from the repo root to check
 the list below:
 
 ```sh
@@ -26,7 +26,7 @@ grep -oE "'[a-z?]' =>" crates/ren-cli/src/compat.rs                             
 
 The rows also cover the dialogs, banners and error states those modules draw.
 
-**Totals:** 248 numbered rows plus the 3 sweep rows. 244 rows are ✅ and 4 are ❌,
+**Totals:** 252 numbered rows plus the 3 sweep rows. 248 rows are ✅ and 4 are ❌,
 all (c) covered at another layer.
 
 Roles: none. This is a single-user desktop app and a CLI, with no accounts.
@@ -363,3 +363,12 @@ the rows in the sections above. F1 is deliberately unbound (P64).
 | 246 | Updates: a portable copy is pointed at the download page; Automatic needs an installed copy | ✅ e2e › a_portable_copy_is_pointed_at_the_download_page |
 | 247 | Updates: the daily check, install at exit, a checksum mismatch, the administrator prompt for an all-users install | ❌ (c) `crates/ren-gui/src/viewmodel/update.rs` › flow_tests; a day passing and the window closing are not frames a headless harness can step |
 | 248 | `renameit --uninstall-cleanup` (the uninstaller's call) | ❌ (c) `crates/ren-gui/src/launch.rs` › the_uninstallers_flag_is_understood_only_on_its_own, `tests/installer_contract.rs`; the installer smoke test in `ci.yml` runs it on Windows |
+
+## The pointer on a row (P115)
+
+| # | Feature | Test |
+|---|---|---|
+| 249 | Quick double-click on a folder opens it, in the list and the grid | ✅ e2e › a_quick_double_click_opens_a_folder_in_the_list_and_the_grid |
+| 250 | Slow second click renames; a Ctrl-click does not | ✅ e2e › a_slow_second_click_on_the_selected_row_renames_it |
+| 251 | Display: *Double-click on a file* (Rename it / Open it) | ✅ e2e › a_quick_double_click_on_a_file_does_what_the_display_page_says |
+| 252 | Display: *Double-click on a folder in Free Select* (Do nothing / Browse into it) | ✅ e2e › a_folder_in_free_select_opens_only_if_the_display_page_says_so |

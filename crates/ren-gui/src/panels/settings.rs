@@ -15,7 +15,7 @@ use crate::app::Theme;
 use ren_core::listing::PatternScope;
 use ren_core::ops::CasingRules;
 
-use crate::app::Startup;
+use crate::app::{ClickActions, FileDoubleClick, FolderDoubleClick, Startup};
 use crate::viewmodel::update::{Install, Status, UpdateMode, Updates, Version, release_page};
 use crate::viewmodel::{ColumnKind, Columns, SessionSettings};
 use crate::widgets::rule_table;
@@ -93,6 +93,8 @@ pub struct Defaults<'a> {
     pub casing: &'a mut CasingRules,
     pub columns: &'a mut Columns,
     pub table_style: &'a mut crate::viewmodel::TableStyle,
+    /// What a double-click on a file, or on a folder in Free Select, does.
+    pub clicks: &'a mut ClickActions,
     pub startup: &'a mut Startup,
     /// For the Problem Solver page's folder shortcuts.
     pub platform: &'a dyn ren_platform::Platform,
@@ -274,7 +276,13 @@ fn page_ui(
         Page::BatchReplace => batch_replace_ui(ui, defaults.batch_replace),
         Page::MusicStyles => music_styles_ui(ui, defaults.music_styles),
         Page::CasingExceptions => casing_ui(ui, defaults.casing),
-        Page::Display => display_ui(ui, defaults.columns, defaults.table_style, defaults.session),
+        Page::Display => display_ui(
+            ui,
+            defaults.columns,
+            defaults.table_style,
+            defaults.clicks,
+            defaults.session,
+        ),
         Page::Startup => startup_ui(ui, defaults.startup),
         Page::ShellIntegration => shell_ui(ui, defaults.platform, defaults.presets),
         Page::ProblemSolver => {
@@ -631,6 +639,7 @@ fn display_ui(
     ui: &mut egui::Ui,
     columns: &mut Columns,
     style: &mut crate::viewmodel::TableStyle,
+    clicks: &mut ClickActions,
     session: &mut SessionSettings,
 ) {
     ui.label(
@@ -713,8 +722,60 @@ fn display_ui(
     )
     .on_hover_text(
         "Off, you must click the name — which is what this app has always done. \
-         The name still takes the double-click that renames it either way.",
+         The name still takes the double-click and the slow second click either way.",
     );
+
+    // P115: a folder opens on a double-click and a slow second click renames,
+    // as in Explorer. What is left to choose is what has no folder to open.
+    ui.add_space(6.0);
+    ui.label(
+        egui::RichText::new(
+            "A double-click on a folder opens it. Click a selected name again, slowly, to \
+             rename it.",
+        )
+        .weak()
+        .small(),
+    );
+    egui::Grid::new("double_click")
+        .num_columns(2)
+        .show(ui, |ui| {
+            const FILE: &str = "Double-click on a file";
+            ui.label(FILE);
+            ui.name_inputs(FILE, |ui| {
+                egui::ComboBox::from_id_salt("double_click_file")
+                    .selected_text(match clicks.file {
+                        FileDoubleClick::Rename => "Rename it",
+                        FileDoubleClick::Open => "Open it",
+                        FileDoubleClick::Nothing => "Do nothing",
+                    })
+                    .show_ui(ui, |ui| {
+                        let choice = &mut clicks.file;
+                        ui.selectable_value(choice, FileDoubleClick::Rename, "Rename it");
+                        ui.selectable_value(choice, FileDoubleClick::Open, "Open it")
+                            .on_hover_text("With its default program, as your file manager would");
+                        ui.selectable_value(choice, FileDoubleClick::Nothing, "Do nothing");
+                    })
+            });
+            ui.end_row();
+            const FOLDER: &str = "Double-click on a folder in Free Select";
+            ui.label(FOLDER);
+            ui.name_inputs(FOLDER, |ui| {
+                egui::ComboBox::from_id_salt("double_click_free_select_folder")
+                    .selected_text(match clicks.free_select_folder {
+                        FolderDoubleClick::Nothing => "Do nothing",
+                        FolderDoubleClick::Browse => "Browse into it",
+                    })
+                    .show_ui(ui, |ui| {
+                        let choice = &mut clicks.free_select_folder;
+                        ui.selectable_value(choice, FolderDoubleClick::Nothing, "Do nothing");
+                        ui.selectable_value(choice, FolderDoubleClick::Browse, "Browse into it")
+                            .on_hover_text(
+                                "Leaves Free Select for the folder, as dropping one folder does",
+                            );
+                    })
+            });
+            ui.end_row();
+        });
 
     ui.add_space(10.0);
     ui.separator();

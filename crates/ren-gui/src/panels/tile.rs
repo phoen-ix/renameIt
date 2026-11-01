@@ -53,8 +53,8 @@ fn refusal(why: &NoThumbnail) -> &'static str {
 /// Draws the tile for one entry, and asks for it if it is not held yet.
 ///
 /// The returned `Response` is the click target, so the caller decides what a
-/// click means — the column and the grid both want selection, and the grid
-/// wants a double-click as well.
+/// click means — the column and the grid both want selection, the
+/// double-click and the slow second click (`rows::take_click`, P115).
 ///
 /// **Never calls `request_repaint`.** The decode threads call the app's injected
 /// repaint when a tile lands (D135); a view that asked for a frame while any

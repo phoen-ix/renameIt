@@ -163,6 +163,9 @@ features = [
     # handed us. `std::env::args` cannot answer that — it has already split
     # and unquoted, so the number it implies is not the number Windows capped.
     "Win32_System_Environment",
+    # P115: the desktop's double-click time, so a double-click here is one
+    # wherever else it is one.
+    "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
 ]
 

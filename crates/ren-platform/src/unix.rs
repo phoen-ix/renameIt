@@ -535,6 +535,7 @@ const CAPABILITIES: &[Capability] = &[
     Capability::ModifiedTime,
     Capability::ReadOnlyAttribute,
     Capability::RevealInFileManager,
+    Capability::OpenFile,
 ];
 
 impl Platform for UnixPlatform {
@@ -686,28 +687,38 @@ impl Platform for UnixPlatform {
         } else {
             path.parent().unwrap_or(path)
         };
-        match Command::new("xdg-open").arg(target).spawn() {
-            Ok(mut child) => {
-                // Reaped on a thread of its own: std never waits for a dropped
-                // child, and each exited `xdg-open` would otherwise stay a
-                // zombie until the app quits.
-                std::thread::spawn(move || {
-                    let _ = child.wait();
-                });
-                Ok(())
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                Err(PlatformError::CapabilityUnsupported {
-                    capability: Capability::RevealInFileManager,
-                    platform: PLATFORM,
-                })
-            }
-            Err(e) => Err(PlatformError::io(target, e)),
-        }
+        xdg_open(target, Capability::RevealInFileManager)
+    }
+
+    fn open_file(&self, path: &Path) -> Result<()> {
+        xdg_open(path, Capability::OpenFile)
     }
 
     fn notify_shell_changed(&self, _path: &Path) {
         // Nothing to do: Linux file managers use inotify.
+    }
+}
+
+/// Hands `target` to the desktop's opener. No `xdg-open` at all is the
+/// platform lacking `capability`, not an I/O failure.
+fn xdg_open(target: &Path, capability: Capability) -> Result<()> {
+    match Command::new("xdg-open").arg(target).spawn() {
+        Ok(mut child) => {
+            // Reaped on a thread of its own: std never waits for a dropped
+            // child, and each exited `xdg-open` would otherwise stay a
+            // zombie until the app quits.
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err(PlatformError::CapabilityUnsupported {
+                capability,
+                platform: PLATFORM,
+            })
+        }
+        Err(e) => Err(PlatformError::io(target, e)),
     }
 }
 

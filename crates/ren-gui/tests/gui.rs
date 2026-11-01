@@ -4651,8 +4651,8 @@ fn full_row_select_makes_the_whole_row_a_click_target() {
     assert!(harness.state().table_style().stripes);
 
     // The name cell still takes its own clicks with both switched on, which is
-    // what keeps double-click-to-rename working — and is the half of this the
-    // harness *can* see.
+    // what keeps its double-click and slow second click working (P115) — and
+    // is the half of this the harness *can* see.
     harness.get_by_label_contains("one.txt").click();
     settle(&mut harness);
     assert_eq!(
@@ -4808,6 +4808,38 @@ fn the_marker_button_opens_the_strip_on_its_own_card() {
     // A caret at the start, because a Replace box holds text rather than a
     // position and there is nothing to seed from.
     harness.get_by_label_contains("Position: 0");
+}
+
+/// An open strip makes the card taller, and the stack grows into the panel's
+/// free space rather than scrolling inside a fixed share of it. The stack was
+/// capped at 55 % of the panel, so at 1280×800 the strip's buttons scrolled
+/// out of sight with about 190 pt of empty panel under the run settings.
+#[test]
+fn an_open_strip_grows_the_card_stack_instead_of_scrolling_it() {
+    // From the strip's last row to "+ Add operation": the strip's frame, the
+    // card's and the gap after it. In a window tall enough that nothing can
+    // scroll, that is the natural distance; at 1280×800 it must be the same,
+    // or the stack is clipping the card and showing a scrollbar.
+    let gap = |make: fn(RenameItApp) -> Harness<'static, RenameItApp>| {
+        let fixture = Fixture::new(&["my_holiday.jpg"]);
+        let mut harness = make(fixture.app());
+        *harness.state_mut().operation_mut() = OpKind::Replace(Replace::new("x", "y"));
+        settle(&mut harness);
+        harness.state_mut().expand_card(0);
+        settle(&mut harness);
+        harness.get_by_label_contains("⌖ find").click();
+        settle(&mut harness);
+        let cancel = harness
+            .get_by_role_and_label(egui::accesskit::Role::Button, "Cancel")
+            .rect();
+        harness.get_by_label("+ Add operation").rect().top() - cancel.bottom()
+    };
+    let natural = gap(tall_harness);
+    let at_800 = gap(harness);
+    assert!(
+        (at_800 - natural).abs() < 0.5,
+        "{at_800} pt at 1280×800 against {natural} pt with room to spare"
+    );
 }
 
 /// The strip shows the text the operation is **handed**, not the file name.
@@ -6393,9 +6425,9 @@ fn the_pre_processor_regex_switch_unticks_and_new_searches_follow_it() {
 
 // --- The grid, the tile and the row menu --------------------------------------
 
-/// A tile that is not a picture is still a tile: a click selects it, a
-/// right-click opens the row menu, and a double-click renames — P77 in both
-/// views. Clicked through the glyph where the picture would be, which carries
+/// A tile that is not a picture is still a tile: a click selects it and a
+/// right-click opens the row menu, as in the list. (Its double-click and slow
+/// second click are `e2e.rs`'s, P115.) Clicked through the glyph where the picture would be, which carries
 /// no name of its own (P72), so the click is aimed from the caption under it.
 #[test]
 fn a_tile_that_is_not_a_picture_still_takes_a_click() {

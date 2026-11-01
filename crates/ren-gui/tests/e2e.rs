@@ -881,6 +881,8 @@ struct Spy {
     release: Option<Option<InstallRecord>>,
     /// Every installer started, with its arguments.
     launched: Mutex<Vec<Vec<String>>>,
+    /// Every file opened with its default program.
+    opened: Mutex<Vec<PathBuf>>,
 }
 
 impl Spy {
@@ -891,6 +893,7 @@ impl Spy {
             gate,
             release: None,
             launched: Mutex::default(),
+            opened: Mutex::default(),
         })
     }
 
@@ -1001,6 +1004,10 @@ impl ren_platform::Platform for Spy {
         self.revealed.lock().unwrap().push(path.to_path_buf());
         Ok(())
     }
+    fn open_file(&self, path: &Path) -> ren_platform::Result<()> {
+        self.opened.lock().unwrap().push(path.to_path_buf());
+        Ok(())
+    }
     fn notify_shell_changed(&self, path: &Path) {
         self.inner.notify_shell_changed(path);
     }
@@ -1041,6 +1048,169 @@ fn show_in_file_manager_reveals_the_row_and_the_problem_solver_its_folders() {
         spy.revealed.lock().unwrap().last(),
         Some(&fixture.journal.path().to_path_buf())
     );
+}
+
+// --- The pointer on a row, Explorer's way (P115) -----------------------------
+
+/// Frames 50 ms apart, so two clicks queued back to back land inside the
+/// double-click time. At kittest's default 250 ms a frame, every event is its
+/// own frame and two clicks are always a slow click.
+fn quick(app: RenameItApp) -> Harness<'static, RenameItApp> {
+    let mut harness = Harness::builder()
+        .with_max_steps(MAX_STEPS)
+        .with_step_dt(0.05)
+        .with_size(egui::vec2(1280.0, 800.0))
+        .build_ui_state(|ui, app: &mut RenameItApp| app.show(ui), app);
+    settle(&mut harness);
+    harness
+}
+
+fn double_click_at(harness: &mut Harness<'_, RenameItApp>, pos: egui::Pos2) {
+    harness.hover_at(pos);
+    for pressed in [true, false, true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        });
+    }
+    settle(harness);
+}
+
+fn double_click(harness: &mut Harness<'_, RenameItApp>, label: &str) {
+    let at = harness.get_by_label(label).rect().center();
+    double_click_at(harness, at);
+}
+
+/// The inline editor, if it is open on `name`.
+fn editing(harness: &Harness<'_, RenameItApp>, name: &str) -> bool {
+    harness
+        .query_all_by_role(Role::TextInput)
+        .any(|n| n.value().as_deref() == Some(name))
+}
+
+/// Opens the drop-down a screen reader names `combo` and picks `choice`.
+fn pick(harness: &mut Harness<'_, RenameItApp>, combo: &str, choice: &str) {
+    harness.get_by_role_and_label(Role::ComboBox, combo).click();
+    settle(harness);
+    click(harness, choice);
+}
+
+fn with_a_folder(fixture: &Fixture) -> RenameItApp {
+    let mut app = fixture.app();
+    app.session_mut().settings.folders = true;
+    app.session_mut().request_refresh();
+    app
+}
+
+#[test]
+fn a_quick_double_click_opens_a_folder_in_the_list_and_the_grid() {
+    let fixture = Fixture::new(&["a.txt", "sub/inside.txt"]);
+    let mut harness = quick(with_a_folder(&fixture));
+    double_click(&mut harness, "📁 sub");
+    assert!(harness.state().session().settings.dir.ends_with("sub"));
+    harness.get_by_label("inside.txt");
+    assert!(!editing(&harness, "sub"), "opened, not renamed");
+
+    let mut harness = quick(with_a_folder(&fixture));
+    click(&mut harness, "Grid");
+    // The picture carries no name of its own (P72): aim above the caption.
+    let caption = harness.get_by_label("sub").rect();
+    double_click_at(
+        &mut harness,
+        egui::pos2(caption.center().x, caption.top() - 30.0),
+    );
+    assert!(harness.state().session().settings.dir.ends_with("sub"));
+}
+
+/// Explorer's slow second click: a click on the row that is already the only
+/// one selected opens the editor once the double-click time has passed.
+#[test]
+fn a_slow_second_click_on_the_selected_row_renames_it() {
+    let fixture = Fixture::new(&["a.txt", "b.txt"]);
+    let mut first = harness(fixture.app());
+    click(&mut first, "a.txt");
+    assert!(!editing(&first, "a.txt"), "the first click only selects");
+    click(&mut first, "a.txt");
+    assert!(editing(&first, "a.txt"));
+
+    // A Ctrl-click is a selection edit, never a rename.
+    let mut again = harness(fixture.app());
+    click(&mut again, "b.txt");
+    again
+        .get_by_label("b.txt")
+        .click_modifiers(egui::Modifiers::COMMAND);
+    settle(&mut again);
+    assert!(!editing(&again, "b.txt"));
+}
+
+/// A quick double-click on a file renames it by default; Settings ▸ Display
+/// can make it open the file with its default program instead.
+#[test]
+fn a_quick_double_click_on_a_file_does_what_the_display_page_says() {
+    let fixture = Fixture::new(&["a.txt"]);
+    let spy = Spy::new(None);
+    let app = RenameItApp::headless_with_platform(
+        fixture.path().to_path_buf(),
+        fixture.journal.path().to_path_buf(),
+        spy.clone(),
+    );
+    let mut harness = quick(app);
+    double_click(&mut harness, "a.txt");
+    assert!(editing(&harness, "a.txt"), "Rename it, the default");
+    harness.key_press(egui::Key::Escape);
+    settle(&mut harness);
+
+    harness.key_press(egui::Key::F8);
+    settle(&mut harness);
+    click(&mut harness, "Display");
+    pick(&mut harness, "Double-click on a file", "Open it");
+    click(&mut harness, "Close");
+
+    double_click(&mut harness, "a.txt");
+    assert_eq!(
+        spy.opened.lock().unwrap().as_slice(),
+        [fixture.path().join("a.txt")]
+    );
+    assert!(!editing(&harness, "a.txt"));
+}
+
+/// Free Select has no folder of its own: a double-click on a folder there does
+/// nothing, unless the Display page says to browse into it.
+#[test]
+fn a_folder_in_free_select_opens_only_if_the_display_page_says_so() {
+    let fixture = Fixture::new(&["a.txt", "sub/inside.txt"]);
+    let mut app = fixture.app();
+    app.session_mut().add_to_free_select(vec![
+        fixture.path().join("sub"),
+        fixture.path().join("a.txt"),
+    ]);
+    let mut harness = quick(app);
+    double_click(&mut harness, "📁 sub");
+    assert_eq!(
+        harness.state().session().settings.mode,
+        ren_gui::viewmodel::SourceMode::FreeSelect,
+        "Do nothing, the default"
+    );
+
+    harness.key_press(egui::Key::F8);
+    settle(&mut harness);
+    click(&mut harness, "Display");
+    pick(
+        &mut harness,
+        "Double-click on a folder in Free Select",
+        "Browse into it",
+    );
+    click(&mut harness, "Close");
+
+    double_click(&mut harness, "📁 sub");
+    let session = harness.state().session();
+    assert_eq!(
+        session.settings.mode,
+        ren_gui::viewmodel::SourceMode::Browser
+    );
+    assert!(session.settings.dir.ends_with("sub"));
 }
 
 /// Settings ▸ Updates on an installed copy: Check now finds the newer release,

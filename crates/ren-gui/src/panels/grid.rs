@@ -256,18 +256,15 @@ impl<'a> Grid<'a> {
                 self.row_action = asked;
             }
 
-            if picture.clicked() {
-                let (ctrl, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
-                self.selection.click(index, ctrl, shift, &self.visible);
-            }
-            // The same gesture as in the list (P77). The alternative — a
-            // double-click that navigates into a folder here and renames there —
-            // is one gesture meaning two things depending on which button is
-            // lit, which is worse than a feature left out. Asked for rather
-            // than opened, so the app's refusal while a run is out covers it.
-            if picture.double_clicked() {
-                self.row_action = Some(RowAction::Rename(index));
-            }
+            // The same gestures as in the list (P115).
+            rows::take_click(
+                ui,
+                &picture,
+                index,
+                self.selection,
+                &self.visible,
+                &mut self.row_action,
+            );
         });
     }
 

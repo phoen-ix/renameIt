@@ -316,6 +316,17 @@ impl Platform for WindowsPlatform {
         crate::update::imp::launch_installer(installer, args, elevate)
     }
 
+    fn open_file(&self, path: &Path) -> Result<()> {
+        crate::update::imp::shell_execute(path, "open", "")
+    }
+
+    fn double_click_time(&self) -> Option<f64> {
+        // SAFETY: no arguments, and it cannot fail.
+        let millis =
+            unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime() };
+        Some(f64::from(millis) / 1000.0)
+    }
+
     fn rename(&self, from: &Path, to: &Path) -> Result<()> {
         let from_w = wide_verbatim(from);
         let to_w = wide_verbatim(to);

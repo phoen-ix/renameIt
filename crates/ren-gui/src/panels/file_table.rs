@@ -403,7 +403,8 @@ impl egui_table::TableDelegate for FileTable<'_> {
 
         // Full Row Select: a click anywhere on the row selects it. The name
         // cell is drawn after this and sits on top, so it still wins where the
-        // two overlap — which is what keeps double-click-to-rename working.
+        // two overlap — which is what keeps its double-click and its slow
+        // second click working (P115).
         if self.style.full_row_select {
             let response = ui.interact(
                 rect,
@@ -449,7 +450,7 @@ impl egui_table::TableDelegate for FileTable<'_> {
         // is painted before the cells, so an interact there is covered by them
         // and never sees a click.
         // The Name and Thumb cells are skipped because each already senses its
-        // own click — and their double-click is what opens the editor.
+        // own click — and their double-click and slow second click (P115).
         if self.style.full_row_select && !matches!(kind, ColumnKind::Name | ColumnKind::Thumbnail) {
             let response = ui.interact(
                 ui.max_rect(),
@@ -466,13 +467,14 @@ impl egui_table::TableDelegate for FileTable<'_> {
             ColumnKind::Thumbnail => {
                 let look = self.thumb;
                 let response = tile::picture(ui, self.thumbs, entry, look);
-                if response.clicked() {
-                    let (ctrl, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
-                    self.selection.click(index, ctrl, shift, &self.visible);
-                }
-                if response.double_clicked() {
-                    self.row_action = Some(RowAction::Rename(index));
-                }
+                rows::take_click(
+                    ui,
+                    &response,
+                    index,
+                    self.selection,
+                    &self.visible,
+                    &mut self.row_action,
+                );
             }
             ColumnKind::Name => self.name_cell(ui, index, entry),
             ColumnKind::NewName => new_name_cell(ui, entry, cell_kind),
@@ -557,16 +559,14 @@ impl FileTable<'_> {
             self.row_action = asked;
         }
 
-        if response.clicked() {
-            let (ctrl, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
-            self.selection.click(index, ctrl, shift, &self.visible);
-        }
-        // Asked for rather than opened here, so the app can refuse it while a
-        // run is out — as it refuses F2 — instead of opening an editor whose
-        // Enter it would then have to turn down.
-        if response.double_clicked() {
-            self.row_action = Some(RowAction::Rename(index));
-        }
+        rows::take_click(
+            ui,
+            &response,
+            index,
+            self.selection,
+            &self.visible,
+            &mut self.row_action,
+        );
     }
 }
 

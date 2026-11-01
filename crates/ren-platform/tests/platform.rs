@@ -436,6 +436,8 @@ fn every_capability_the_platform_claims_it_can_do_it_actually_does() {
             // Needs the network and an installed copy; `update::tests` and
             // ren-gui's updater tests cover what can run here.
             Capability::Updates => continue,
+            // Would start a program on the runner's desktop.
+            Capability::OpenFile => continue,
         };
 
         let refused = matches!(attempt, Err(PlatformError::CapabilityUnsupported { .. }));

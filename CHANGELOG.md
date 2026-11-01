@@ -20,6 +20,18 @@ and the reasoning behind each default lives beside the code it governs.
   the release's `SHA256SUMS.txt`, and reopens RenameIt once it is installed.
   Nothing goes online unless you choose to (**D250**).
 - Every release carries `SHA256SUMS.txt`.
+- The file list takes Explorer's gestures (**P115**). A quick double-click
+  on a folder opens it, and clicking a selected name again, slowly, renames
+  it. Settings ▸ Display chooses what a double-click on a file does (rename
+  it, open it, or nothing) and on a folder in Free Select (nothing, or browse
+  into it). The double-click speed is Windows'.
+
+### Fixed
+
+- An open Visual Assist strip or Scope section no longer makes the card
+  stack scroll while the panel has room below it: the stack was capped at
+  55 % of the panel, and now takes everything the controls under it do not
+  need.
 
 ## [1.6.0] - 2026-10-31
 

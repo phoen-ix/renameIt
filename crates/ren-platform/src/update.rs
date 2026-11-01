@@ -374,9 +374,19 @@ pub(crate) mod imp {
     /// `CreateProcess` would only fail with "elevation required". A declined
     /// prompt comes back as `ERROR_CANCELLED`.
     pub fn launch_installer(installer: &Path, args: &[&str], elevate: bool) -> Result<()> {
-        let file = wide(&installer.to_string_lossy());
-        let parameters = wide(&args.join(" "));
-        let verb = wide(if elevate { "runas" } else { "open" });
+        shell_execute(
+            installer,
+            if elevate { "runas" } else { "open" },
+            &args.join(" "),
+        )
+    }
+
+    /// `ShellExecuteExW` with `verb`: "open" on a document starts its default
+    /// program, as Explorer's double-click does (P115).
+    pub(crate) fn shell_execute(path: &Path, verb: &str, parameters: &str) -> Result<()> {
+        let file = wide(&path.to_string_lossy());
+        let parameters = wide(parameters);
+        let verb = wide(verb);
         // SAFETY: an all-zero SHELLEXECUTEINFOW is the documented "nothing
         // set"; every pointer then set is a NUL-terminated buffer that outlives
         // the call.
@@ -393,7 +403,7 @@ pub(crate) mod imp {
             ShellExecuteExW(&mut info)
         };
         if ok == 0 {
-            return Err(PlatformError::io(installer, io::Error::last_os_error()));
+            return Err(PlatformError::io(path, io::Error::last_os_error()));
         }
         Ok(())
     }
