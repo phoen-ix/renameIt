@@ -6,7 +6,10 @@ Two things this file does **not** track. Engine and UI decisions live in
 `docs/DECISIONS.md`, which is the authority on why anything behaves as it does;
 and the reasoning behind each default lives beside the code it governs.
 
-## [Unreleased]
+## [1.7.0] - 2026-11-01
+
+A Windows installer and in-app updates, Explorer's double-click in the file
+list, and a new layout: Rename under the pipeline, saying what it will do.
 
 ### Added
 
