@@ -15,10 +15,10 @@ use crate::viewmodel::{Column, ColumnKind, Columns, RowFilter, SortColumn, Table
 
 /// Breathing room above and below a row's text.
 ///
-/// With `Body` at 13 this reproduced the old hardcoded row height of 20 (and
-/// `Body` is 14 now); the point is that it moves with the type scale instead of
-/// being a number that happened to fit one of them.
-const ROW_PADDING: f32 = 2.5;
+/// Six points each side make a `Body` row about 30 tall — D251's roomy rows,
+/// up from 2.5. It moves with the type scale instead of being a number that
+/// happened to fit one of them.
+const ROW_PADDING: f32 = 6.0;
 
 /// What the header needs beyond a row: its label is a frameless `Button`, so
 /// it carries `button_padding` as well.

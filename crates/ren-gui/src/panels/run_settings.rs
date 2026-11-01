@@ -1,64 +1,76 @@
-//! Counter Setup and Setup Parts — the two run-wide objects.
+//! Counter Setup, Setup Parts and the tag policy — the run-wide settings.
 //!
-//! They belong to the *run*, not to any one operation, which is why they sit
-//! below the operation editor rather than inside it.
+//! They belong to the *run*, not to any one operation, which is why they are
+//! not inside a card. D251 put all three behind one *Run settings* button
+//! under the stack: they are set once and rarely touched, and three chips
+//! were three more things between the cards and the Rename button. What would
+//! change a name — anything not at its default — is printed under the button,
+//! so a forgotten counter start is never invisible.
 
 use ren_core::model::FileEntry;
 use ren_core::{CounterSetup, PartsSpec, RunSettings};
 
-/// Draws the two pinned chips and the tag policy. Returns true if anything
-/// changed.
-///
-/// Counter and Parts appear as two pinned chips at the top of the panel —
-/// "Counter: 1, step 1, pad auto" and "Parts: `<%1> - <%2>`" — each opening its
-/// own dialog. They are run-wide, not per-card, which is why they sit above the
-/// stack rather than inside any of it.
+/// The button, its popover, and the line saying what is not at its default.
+/// Returns true if anything changed.
 pub fn ui(ui: &mut egui::Ui, settings: &mut RunSettings, sample: Option<&FileEntry>) -> bool {
     let mut changed = false;
 
-    ui.horizontal_wrapped(|ui| {
-        let chip = ui
-            .selectable_label(
-                false,
-                format!("Counter setup: {}", counter_chip(&settings.counter)),
-            )
-            .on_hover_text("Start, step, padding and the resets");
-        // Both chips stay open until a click lands outside them; egui's default
-        // closes a popup on any click, a ticked box included (as the include
-        // filter's popover does in `source_bar`).
-        egui::Popup::from_toggle_button_response(&chip)
-            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-            .show(|ui| {
-                ui.set_min_width(300.0);
-                changed |= counter_ui(ui, &mut settings.counter);
-            });
+    let button = ui.button("Run settings ▾").on_hover_text(format!(
+        "Counter setup: {}\nSetup parts: {}\nOnly rename if all tags are available: {}",
+        counter_chip(&settings.counter),
+        parts_chip(&settings.parts),
+        if settings.require_all_tags {
+            "on"
+        } else {
+            "off"
+        },
+    ));
+    // Stays open until a click lands outside it; egui's default closes a popup
+    // on any click, a ticked box included (as the include filter's popover
+    // does in `source_bar`).
+    egui::Popup::from_toggle_button_response(&button)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            ui.set_min_width(320.0);
+            ui.label(egui::RichText::new("Counter setup").strong())
+                .on_hover_text("Start, step, padding and the resets");
+            changed |= counter_ui(ui, &mut settings.counter);
+            ui.separator();
+            ui.label(egui::RichText::new("Setup parts").strong())
+                .on_hover_text("How your filenames are put together, for <%1> … <%9>");
+            changed |= parts_ui(ui, &mut settings.parts, sample);
+            ui.separator();
+            changed |= ui
+                .checkbox(
+                    &mut settings.require_all_tags,
+                    "Only rename if all tags are available",
+                )
+                .on_hover_text(
+                    "A file whose tags cannot all be filled in is left alone rather than \
+                     renamed with the gaps left empty.",
+                )
+                .changed();
+        });
 
-        let chip = ui
-            .selectable_label(
-                false,
-                format!("Setup parts: {}", parts_chip(&settings.parts)),
-            )
-            .on_hover_text("How your filenames are put together, for <%1> … <%9>");
-        egui::Popup::from_toggle_button_response(&chip)
-            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-            .show(|ui| {
-                ui.set_min_width(320.0);
-                changed |= parts_ui(ui, &mut settings.parts, sample);
-            });
-    });
-
-    changed |= ui
-        .checkbox(
-            &mut settings.require_all_tags,
-            "Only rename if all tags are available",
-        )
-        .on_hover_text(
-            "A file whose tags cannot all be filled in is left alone rather than \
-             renamed with the gaps left empty.",
-        )
-        .changed();
-
+    if let Some(line) = not_default(settings) {
+        ui.label(egui::RichText::new(line).weak().small());
+    }
     changed
+}
+
+/// What differs from a fresh start, or `None` when nothing does.
+fn not_default(settings: &RunSettings) -> Option<String> {
+    let mut parts = Vec::new();
+    if settings.counter != CounterSetup::default() {
+        parts.push(format!("Counter {}", counter_chip(&settings.counter)));
+    }
+    if !settings.parts.is_empty() {
+        parts.push(format!("Parts {}", settings.parts.pattern));
+    }
+    if settings.require_all_tags {
+        parts.push("Only if all tags".to_owned());
+    }
+    (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
 fn counter_ui(ui: &mut egui::Ui, counter: &mut CounterSetup) -> bool {

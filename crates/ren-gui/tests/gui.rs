@@ -105,6 +105,33 @@ fn tall_harness(app: RenameItApp) -> Harness<'static, RenameItApp> {
     harness
 }
 
+/// An item of the ⋯ menu at the window's top right (D251).
+fn open_menu(harness: &mut Harness<'_, RenameItApp>, item: &str) {
+    harness.get_by_label("Menu").click();
+    settle(harness);
+    harness.get_by_label(item).click();
+}
+
+/// The run button, whose label carries the count (D251): "Rename 3 files",
+/// "Run on 1 file", or a bare "Rename" or "Run" when nothing would change —
+/// and not the row menu's "Rename…" or a preset's Rename.
+fn is_run_label(label: &str) -> bool {
+    let counted = |verb: &str| {
+        label
+            .strip_prefix(verb)
+            .and_then(|rest| rest.split(' ').next())
+            .is_some_and(|n| n.parse::<usize>().is_ok())
+    };
+    label == "Rename" || label == "Run" || counted("Rename ") || counted("Run on ")
+}
+
+fn rename_button<'h>(harness: &'h Harness<'_, RenameItApp>) -> egui_kittest::Node<'h> {
+    harness
+        .get_all_by_role(egui::accesskit::Role::Button)
+        .find(|n| n.accesskit_node().label().is_some_and(|l| is_run_label(&l)))
+        .expect("the Rename button")
+}
+
 fn harness(app: RenameItApp) -> Harness<'static, RenameItApp> {
     let mut harness = Harness::builder()
         .with_max_steps(MAX_STEPS)
@@ -823,9 +850,13 @@ fn the_counter_setup_panel_drives_the_counter() {
         OpKind::AddCounter(AddCounter::new(CounterPlacement::First, "-"));
     settle(&mut harness);
 
-    // The header is there to be opened, and the tag policy is a plain checkbox.
+    // One button opens all three run-wide settings (D251).
+    harness.get_by_label("Run settings ▾").click();
+    settle(&mut harness);
     harness.get_by_label_contains("Counter setup");
     harness.get_by_label_contains("Only rename if all tags are available");
+    harness.key_press(egui::Key::Escape);
+    settle(&mut harness);
 
     harness.state_mut().settings_mut().counter = CounterSetup {
         start: 10,
@@ -849,7 +880,7 @@ fn the_parts_pattern_feeds_the_part_tags() {
     let fixture = Fixture::new(&["Metallica - Nothing Else Matters.mp3"]);
     let mut harness = harness(fixture.app());
 
-    harness.get_by_label_contains("Setup parts");
+    harness.get_by_label("Run settings ▾");
 
     harness.state_mut().settings_mut().parts = PartsSpec::new("<%1> - <%2>");
     *harness.state_mut().operation_mut() = OpKind::AddRemove(AddRemove {
@@ -988,7 +1019,7 @@ fn music_rename_names_files_from_their_tags() {
     harness.get_by_label("05. Fade to Black.mp3");
 
     // And it really renames.
-    harness.get_by_label("Rename").click();
+    rename_button(&harness).click();
     settle(&mut harness);
     assert_eq!(fixture.names(), ["04. One.mp3", "05. Fade to Black.mp3"]);
 }
@@ -1016,7 +1047,7 @@ fn music_rename_leaves_an_untagged_file_alone() {
         .add_operation(OpKind::MusicRename(Default::default()));
     settle(&mut harness);
 
-    harness.get_by_label("Rename").click();
+    rename_button(&harness).click();
     settle(&mut harness);
     assert_eq!(fixture.names(), ["Metallica - One.mp3", "a.mp3", "b.mp3"]);
 }
@@ -1107,7 +1138,7 @@ fn the_tag_operations_are_offered_but_refused_until_they_are_confirmed() {
     );
 
     // P2's gate. Pressing Rename asks first, and touches nothing until asked.
-    harness.get_by_label("Rename").click();
+    rename_button(&harness).click();
     settle(&mut harness);
     let confirm = ren_gui::panels::confirm::go_ahead_label(1);
     harness.get_by_label_contains(&confirm);
@@ -1133,7 +1164,7 @@ fn the_tag_operations_are_offered_but_refused_until_they_are_confirmed() {
     );
 
     // Saying yes writes.
-    harness.get_by_label("Rename").click();
+    rename_button(&harness).click();
     settle(&mut harness);
     harness.get_by_label_contains(&confirm).click();
     settle(&mut harness);
@@ -1169,7 +1200,7 @@ fn consent_does_not_survive_a_change_to_the_pipeline() {
         .add_operation(OpKind::MusicTagger(Box::new(tagger)));
     settle(&mut harness);
 
-    harness.get_by_label("Rename").click();
+    rename_button(&harness).click();
     settle(&mut harness);
     let confirm = ren_gui::panels::confirm::go_ahead_label(1);
     harness.get_by_label_contains(&confirm);
@@ -1216,7 +1247,7 @@ fn asking_again_while_the_dialog_is_up_does_not_stack_dialogs() {
         }));
     settle(&mut harness);
 
-    harness.get_by_label("Rename").click();
+    rename_button(&harness).click();
     settle(&mut harness);
     harness.state_mut().run_now();
     harness.state_mut().run_now();
@@ -1275,7 +1306,7 @@ fn an_ordinary_rename_is_still_one_click() {
     *harness.state_mut().operation_mut() = OpKind::Replace(Replace::new("a", "b"));
     settle(&mut harness);
 
-    harness.get_by_label("Rename").click();
+    rename_button(&harness).click();
     settle(&mut harness);
     assert_eq!(fixture.names(), ["b.txt"], "it should just have run");
     assert!(
@@ -1405,7 +1436,7 @@ fn an_action_only_run_reports_what_it_did() {
         }));
     settle(&mut harness);
 
-    harness.get_by_label("Rename").click();
+    rename_button(&harness).click();
     settle(&mut harness);
 
     let status = harness.state().status().unwrap_or_default().to_owned();
@@ -1464,9 +1495,10 @@ fn a_simulated_action_only_run_says_what_it_would_have_done() {
         }));
     settle(&mut harness);
 
-    // Through the button, which is now possible: the toggle is "Simulate" and
-    // the button it changes is "Run simulation", so the two no longer collide.
-    harness.get_by_label("Run simulation").click();
+    // Through the button: the toggle is "Simulate" and the button it changes
+    // says what it would do — "Simulate 2 files" (D251) — so the two never
+    // collide.
+    harness.get_by_label("Simulate 2 files").click();
     settle(&mut harness);
     let status = harness.state().status().unwrap_or_default().to_owned();
     assert!(status.contains("Modified 2"), "{status}");
@@ -1482,7 +1514,7 @@ fn the_log_names_a_folder_the_run_created() {
         OpKind::FreeFormat(ren_core::ops::FreeFormat::new("sorted<\\><Name>"));
     settle(&mut harness);
 
-    harness.get_by_label("Rename").click();
+    rename_button(&harness).click();
     settle(&mut harness);
     harness.get_by_label_contains("created folder sorted");
 }
@@ -2261,11 +2293,10 @@ fn the_settings_window_edits_the_list_a_new_batch_replace_card_starts_from() {
     let shipped = harness.state().batch_replace_rules().len();
     assert!(shipped > 1, "D27 ships a pre-loaded list");
 
-    harness.get_by_label("Settings").click();
+    open_menu(&mut harness, "Settings");
     settle(&mut harness);
-    // Two now: the toolbar button that opened it, and the window's heading.
     assert!(
-        harness.query_all_by_label_contains("Settings").count() >= 2,
+        harness.query_by_label("Problem Solver").is_some(),
         "the Settings window did not open"
     );
     harness.get_by_label_contains("rules, run top to bottom");
@@ -2306,7 +2337,7 @@ fn a_batch_replace_card_keeps_its_own_rules() {
     };
 
     // Now change the default list in Settings.
-    harness.get_by_label("Settings").click();
+    open_menu(&mut harness, "Settings");
     settle(&mut harness);
     harness.get_all_by_label("✖").next().unwrap().click();
     settle(&mut harness);
@@ -2333,7 +2364,7 @@ fn the_theme_control_lives_in_settings_now() {
         "not in the main window any more"
     );
 
-    harness.get_by_label("Settings").click();
+    open_menu(&mut harness, "Settings");
     settle(&mut harness);
     harness.get_by_label("Appearance").click();
     settle(&mut harness);
@@ -2352,7 +2383,7 @@ fn the_theme_control_lives_in_settings_now() {
 /// The two run-wide objects are chips that summarise themselves, and open their
 /// dialog on a click.
 #[test]
-fn the_counter_and_parts_chips_summarise_and_open() {
+fn the_run_settings_say_what_is_set_and_open() {
     use ren_core::{CounterSetup, PartsSpec};
 
     let fixture = Fixture::new(&["a.txt"]);
@@ -2368,11 +2399,12 @@ fn the_counter_and_parts_chips_summarise_and_open() {
     harness.state_mut().settings_mut().parts = PartsSpec::new("<%1> - <%2>");
     settle(&mut harness);
 
-    harness.get_by_label_contains("Counter setup: 5, step 2, pad 3");
-    harness.get_by_label_contains("Setup parts: <%1> - <%2>");
+    // What is not at its default is printed under the button (D251).
+    harness.get_by_label_contains("Counter 5, step 2, pad 3");
+    harness.get_by_label_contains("Parts <%1> - <%2>");
 
-    // And the chip opens the dialog behind it.
-    harness.get_by_label_contains("Counter setup").click();
+    // And the button opens the editors behind it.
+    harness.get_by_label("Run settings ▾").click();
     settle(&mut harness);
     harness.get_by_label_contains("Start value");
     harness.get_by_label_contains("Example:");
@@ -3066,7 +3098,7 @@ fn a_run_that_only_wrote_tags_does_not_arm_undo() {
     // A real rename first, so there is something worth protecting.
     *harness.state_mut().operation_mut() = OpKind::Replace(Replace::new("song", "tune"));
     settle(&mut harness);
-    harness.get_by_label("Rename").click();
+    rename_button(&harness).click();
     settle(&mut harness);
     assert_eq!(fixture.names(), ["tune.mp3"]);
 
@@ -3345,7 +3377,7 @@ fn about_opens_and_reports_what_the_session_did() {
     let fixture = Fixture::new(&["one.txt", "two.txt"]);
     let mut harness = harness(fixture.app());
 
-    harness.get_by_label("About RenameIt").click();
+    open_menu(&mut harness, "About RenameIt");
     settle(&mut harness);
     harness.get_by_label_contains("Nothing renamed yet this session");
     harness.get_by_label_contains("MIT licensed");
@@ -3360,7 +3392,7 @@ fn about_opens_and_reports_what_the_session_did() {
     harness.key_press(egui::Key::F5);
     settle(&mut harness);
 
-    harness.get_by_label("About RenameIt").click();
+    open_menu(&mut harness, "About RenameIt");
     settle(&mut harness);
     harness.get_by_label_contains("Renamed 2 items, over 1 run this session");
 }
@@ -4839,6 +4871,49 @@ fn an_open_strip_grows_the_card_stack_instead_of_scrolling_it() {
     assert!(
         (at_800 - natural).abs() < 0.5,
         "{at_800} pt at 1280×800 against {natural} pt with room to spare"
+    );
+}
+
+/// Why Rename is unavailable is printed under it, not only hidden in its
+/// hover text, which a screen reader never reaches (D251).
+#[test]
+fn a_blocked_rename_says_why_under_the_button() {
+    let fixture = Fixture::new(&["a.txt"]);
+    let harness = harness(fixture.app());
+    // The default card has nothing to find yet.
+    harness.get_by_label("Nothing would change.");
+    assert_eq!(
+        rename_button(&harness).accesskit_node().label().as_deref(),
+        Some("Rename")
+    );
+}
+
+/// The window as it opens — 1200×760, the default card — shows everything
+/// without a scrollbar (D251): the card is laid out exactly as in a window
+/// tall enough that nothing could scroll, and the table's columns fit.
+#[test]
+fn the_default_window_needs_no_scrollbar() {
+    let layout = |height: f32| {
+        let fixture = Fixture::new(&["a_b.txt", "c_d.txt"]);
+        let mut harness = Harness::builder()
+            .with_max_steps(MAX_STEPS)
+            .with_size(egui::vec2(1200.0, height))
+            .build_ui_state(|ui, app: &mut RenameItApp| app.show(ui), fixture.app());
+        settle(&mut harness);
+        let scope = harness.get_by_label("Scope").rect();
+        let add = harness.get_by_label("+ Add operation").rect();
+        let modified = harness.get_by_label("Modified").rect();
+        (add.top() - scope.bottom(), modified.right())
+    };
+    let (gap, right) = layout(760.0);
+    let (natural, _) = layout(1800.0);
+    assert!(
+        (gap - natural).abs() < 0.5,
+        "the default card scrolls at 1200×760: {gap} pt against {natural} pt"
+    );
+    assert!(
+        right <= 1200.0,
+        "the table is wider than the window: {right}"
     );
 }
 
@@ -6856,7 +6931,7 @@ fn the_pattern_box_is_named_by_its_label() {
 fn the_reset_at_number_is_named_by_its_checkbox() {
     let fixture = Fixture::new(&["a.txt"]);
     let mut harness = harness(fixture.app());
-    harness.get_by_label_contains("Counter setup").click();
+    harness.get_by_label("Run settings ▾").click();
     settle(&mut harness);
 
     harness
@@ -6915,7 +6990,7 @@ fn the_preset_rename_box_has_a_name() {
 fn the_counter_popover_stays_open_while_its_boxes_are_ticked() {
     let fixture = Fixture::new(&["a.txt"]);
     let mut harness = harness(fixture.app());
-    harness.get_by_label_contains("Counter setup").click();
+    harness.get_by_label("Run settings ▾").click();
     settle(&mut harness);
 
     for label in [
@@ -6960,7 +7035,7 @@ fn the_include_filter_popover_takes_a_click_and_then_typing() {
 fn the_parts_wand_keeps_its_popover_open() {
     let fixture = Fixture::new(&["01 - Artist - Title.mp3"]);
     let mut harness = harness(fixture.app());
-    harness.get_by_label_contains("Setup parts").click();
+    harness.get_by_label("Run settings ▾").click();
     settle(&mut harness);
 
     harness.get_by_label("✨").click();

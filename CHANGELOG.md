@@ -26,6 +26,15 @@ and the reasoning behind each default lives beside the code it governs.
   it, open it, or nothing) and on a folder in Free Select (nothing, or browse
   into it). The double-click speed is Windows'.
 
+- A new layout, chosen from clickable prototypes (**D251**). Rename, Undo
+  and Simulate sit under the pipeline, and the button says what it will do:
+  *Rename 9 files*. When it cannot run, the reason is printed under it. The
+  counts and the All / Changed / Conflicts filter sit above the table. The
+  operations are numbered steps. Counter setup, Setup parts and the tag rule
+  share one *Run settings* button. Settings and About are in a ⋯ menu. The
+  look is roomier: white table and cards on a grey pipeline panel, rounder
+  corners, taller rows.
+
 ### Fixed
 
 - An open Visual Assist strip or Scope section no longer makes the card

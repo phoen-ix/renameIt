@@ -60,7 +60,7 @@ const SHOWN: usize = 6;
 /// Whether a plan needs this dialog before it runs (P2, and the script-write
 /// rule in the module doc).
 pub fn needed(plan: &Plan) -> bool {
-    plan.irreversible() > 0 || crate::panels::status_bar::writes(plan) > 0
+    plan.irreversible() > 0 || crate::panels::run_controls::writes(plan) > 0
 }
 
 impl Confirm {
@@ -116,8 +116,8 @@ impl Confirm {
         Self {
             generation,
             irreversible: plan.irreversible(),
-            writes: crate::panels::status_bar::writes(plan),
-            clauses: crate::panels::status_bar::plan_clauses(plan),
+            writes: crate::panels::run_controls::writes(plan),
+            clauses: crate::panels::run_controls::plan_clauses(plan),
             lines,
             more,
             verdict: plan.undoability().describe(),
@@ -374,12 +374,12 @@ mod tests {
 
     /// And its summary is the status bar's, for the same reason.
     #[test]
-    fn the_summary_is_the_status_bars_own_clauses() {
+    fn the_summary_is_the_results_bars_own_clauses() {
         let dir = TempDir::new().unwrap();
         let plan = two_card_plan(&dir);
         assert_eq!(
             Confirm::new(&plan, 0).clauses,
-            crate::panels::status_bar::plan_clauses(&plan)
+            crate::panels::run_controls::plan_clauses(&plan)
         );
     }
 

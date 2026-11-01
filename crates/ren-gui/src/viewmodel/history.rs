@@ -37,7 +37,7 @@ impl Batch {
 }
 
 /// "Renamed 3 items", "Modified 2 items", "Renamed 3 and modified 2 items" —
-/// the past tense of `status_bar::plan_clauses`, with the same suppression
+/// the past tense of `run_controls::plan_clauses`, with the same suppression
 /// rule.
 ///
 /// A tag-only run used to report *"Renamed 0 item(s)"*, which is the exact

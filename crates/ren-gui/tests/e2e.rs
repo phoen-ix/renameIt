@@ -143,6 +143,34 @@ fn click(harness: &mut Harness<'_, RenameItApp>, label: &str) {
     settle(harness);
 }
 
+/// The run button's labels (D251): "Rename 3 files", "Run on 1 file", or a
+/// bare "Rename" or "Run" — and not the row menu's "Rename…" or the presets
+/// drawer's own Rename.
+fn is_run_label(label: &str) -> bool {
+    let counted = |verb: &str| {
+        label
+            .strip_prefix(verb)
+            .and_then(|rest| rest.split(' ').next())
+            .is_some_and(|n| n.parse::<usize>().is_ok())
+    };
+    label == "Rename" || label == "Run" || counted("Rename ") || counted("Run on ")
+}
+
+/// An item of the ⋯ menu at the window's top right (D251).
+fn menu(harness: &mut Harness<'_, RenameItApp>, item: &str) {
+    click(harness, "Menu");
+    click(harness, item);
+}
+
+/// The run button under the pipeline, whose label carries the count
+/// ("Rename 3 files", D251).
+fn rename_button<'h>(harness: &'h Harness<'_, RenameItApp>) -> egui_kittest::Node<'h> {
+    harness
+        .get_all_by_role(Role::Button)
+        .find(|n| n.accesskit_node().label().is_some_and(|l| is_run_label(&l)))
+        .expect("the Rename button")
+}
+
 /// Whether `node` is the text box a screen reader names `name`: by its label,
 /// or by its hint, which egui makes the name of a box that has one.
 fn named(node: &egui_kittest::Node<'_>, name: &str) -> bool {
@@ -275,8 +303,7 @@ fn sweep_every_settings_page_is_reachable_from_the_rail() {
     let fixture = Fixture::new(&["one.txt"]);
     let mut harness = harness(fixture.app());
 
-    harness.get_by_label("Settings").click();
-    settle(&mut harness);
+    menu(&mut harness, "Settings");
     let pages = [
         ("Music Styles", "+ Add style"),
         ("Casing Exceptions", "Exception words"),
@@ -310,8 +337,8 @@ fn sweep_every_window_and_popover_opens_and_closes() {
     let fixture = Fixture::new(&["one.txt", "two.txt"]);
     let mut harness = harness(fixture.app());
 
-    // About.
-    click(&mut harness, "About RenameIt");
+    // About, from the ⋯ menu.
+    menu(&mut harness, "About RenameIt");
     assert!(present(&harness, "MIT licensed"));
     click(&mut harness, "Close");
     assert!(!present(&harness, "MIT licensed"));
@@ -329,20 +356,15 @@ fn sweep_every_window_and_popover_opens_and_closes() {
     settle(&mut harness);
     assert!(harness.query_by_label("Add operation").is_none());
 
-    // The two run-wide chips and the include filter open popovers.
-    harness.get_by_label_contains("Counter setup").click();
-    settle(&mut harness);
+    // Run settings and the include filter open popovers. Run settings holds
+    // all three run-wide settings at once (D251).
+    click(&mut harness, "Run settings ▾");
     assert!(present(&harness, "Reset each folder"));
+    assert!(present(&harness, "use <%1> … <%9> as tags"));
+    assert!(present(&harness, "Only rename if all tags are available"));
     harness.key_press(egui::Key::Escape);
     settle(&mut harness);
     assert!(!present(&harness, "Reset each folder"));
-
-    harness.get_by_label_contains("Setup parts").click();
-    settle(&mut harness);
-    assert!(present(&harness, "use <%1> … <%9> as tags"));
-    harness.key_press(egui::Key::Escape);
-    settle(&mut harness);
-    assert!(!present(&harness, "use <%1> … <%9> as tags"));
 
     harness.get_by_label("Include filter…").click();
     settle(&mut harness);
@@ -464,7 +486,7 @@ fn the_folder_button_lists_the_folder_it_returns() {
 /// A whole run from the controls a user has: the Replace card typed into,
 /// Simulate ticked and run, unticked and renamed, the log hidden, Undo.
 #[test]
-fn the_status_bar_simulates_renames_hides_the_log_and_undoes() {
+fn the_run_controls_simulate_rename_fold_the_log_and_undo() {
     let fixture = Fixture::new(&["one.txt", "two.txt"]);
     let mut harness = harness(fixture.app());
 
@@ -478,7 +500,8 @@ fn the_status_bar_simulates_renames_hides_the_log_and_undoes() {
         .get_by_role_and_label(Role::CheckBox, "Simulate")
         .click();
     settle(&mut harness);
-    click(&mut harness, "Run simulation");
+    // The button says what it will do, count included (D251).
+    click(&mut harness, "Simulate 2 files");
     assert_eq!(
         fixture.names(),
         ["one.txt", "two.txt"],
@@ -498,7 +521,7 @@ fn the_status_bar_simulates_renames_hides_the_log_and_undoes() {
         .get_by_role_and_label(Role::CheckBox, "Simulate")
         .click();
     settle(&mut harness);
-    click(&mut harness, "Rename");
+    click(&mut harness, "Rename 2 files");
     assert_eq!(fixture.names(), ["0ne.txt", "tw0.txt"]);
 
     // The log opens with the run, and its button folds it away.
@@ -700,8 +723,7 @@ fn the_counter_setup_popover_drives_the_counter() {
     let mut harness = sized(fixture.app(), 1000.0);
     add_from_palette(&mut harness, "Add Counter", false);
 
-    harness.get_by_label_contains("Counter setup").click();
-    settle(&mut harness);
+    click(&mut harness, "Run settings ▾");
     set_number(&mut harness, "Start value:", 10.0);
     set_number(&mut harness, "Step:", 5.0);
     assert_eq!(new_names(&harness), ["10-a.txt", "15-b.txt", "20-c.txt"]);
@@ -724,6 +746,7 @@ fn only_if_all_tags_are_available_leaves_an_untagged_file_alone() {
     type_into(&mut harness, "Pattern:", "<Name> by <Artist>.txt");
     assert_eq!(new_names(&harness), ["a by .txt"]);
 
+    click(&mut harness, "Run settings ▾");
     harness
         .get_by_role_and_label(Role::CheckBox, "Only rename if all tags are available")
         .click();
@@ -1273,7 +1296,7 @@ fn a_portable_copy_is_pointed_at_the_download_page() {
     assert!(spy.launched.lock().unwrap().is_empty());
 }
 
-/// The status bar's Cancel, clicked while the first rename is held: that file
+/// The run controls' Cancel, clicked while the first rename is held: that file
 /// is renamed, the rest are not, and the status says the run stopped.
 #[test]
 fn cancel_stops_a_running_batch_after_the_file_under_way() {
@@ -1289,9 +1312,7 @@ fn cancel_stops_a_running_batch_after_the_file_under_way() {
     type_into(&mut harness, "leave empty to delete", "-");
 
     // Frames only while the gate is shut: `settle` waits for the run to end.
-    harness
-        .get_by_role_and_label(Role::Button, "Rename")
-        .click();
+    rename_button(&harness).click();
     harness.step();
     let (state, signal) = &*gate;
     let (guard, wait) = signal

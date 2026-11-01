@@ -477,7 +477,8 @@ fn dialog_irreversible() {
         ..Default::default()
     }));
     settle(&mut harness);
-    harness.get_by_label("Rename").click();
+    // A tag-only run: the button says "Run on 2 files" (D251).
+    harness.get_by_label("Run on 2 files").click();
     settle(&mut harness);
     harness.get_by_label_contains(&ren_gui::panels::confirm::go_ahead_label(2));
     shoot(&mut harness, "dialog-irreversible");

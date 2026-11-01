@@ -1,8 +1,16 @@
-//! Counts on the left, actions on the right — the bottom zone of screen S1.
+//! The run's numbers and its controls, in the two places D251 put them.
+//!
+//! * [`results_bar`], above the file table: what the preview will do — the
+//!   counts — and the All / Changed / Conflicts filter over it.
+//! * [`footer`], under the pipeline: Undo, Simulate, the log, and the Rename
+//!   button, which says how many files it will touch. They used to share a
+//!   status bar at the bottom of the window, where the one control the app
+//!   exists for sat in the corner furthest from where the pipeline is edited.
 //!
 //! The Rename button is the one place P4 becomes visible: conflicts *block* a
 //! run rather than being skipped one by one, so a disabled button that does not
-//! say why would be the app's worst moment.
+//! say why would be the app's worst moment — which is why the reason is now
+//! printed above it, not only in its hover text.
 
 use std::path::Path;
 
@@ -10,9 +18,9 @@ use ren_core::{Counts, Plan, PlannedOp};
 
 use crate::viewmodel::{History, RowFilter, Session};
 
-/// What the status bar wants the app to do.
+/// What the run controls want the app to do.
 #[derive(Debug, Default, PartialEq, Eq)]
-pub struct StatusBarOutput {
+pub struct RunOutput {
     pub run: bool,
     pub undo: bool,
     pub row_filter: Option<RowFilter>,
@@ -38,46 +46,99 @@ pub struct PreviewState<'a> {
     pub listing: bool,
 }
 
-pub fn ui(
-    ui: &mut egui::Ui,
-    session: &Session,
-    preview: PreviewState<'_>,
-    history: &History,
-    simulate: &mut bool,
-    pipeline_empty: bool,
-) -> StatusBarOutput {
-    let mut out = StatusBarOutput::default();
-    let PreviewState {
-        plan,
-        stale,
-        failure,
-        job,
-        cancelling,
-        listing,
-    } = preview;
-
-    // One pass over the plan for every number this bar shows, rather than
-    // one pass per number per place it is shown.
-    let counts = plan.map(Plan::counts);
-    let writes = plan.map_or(0, writes);
+/// The bar above the table: the counts, whether the preview is catching up,
+/// and the row filter.
+pub fn results_bar(ui: &mut egui::Ui, session: &Session, preview: PreviewState<'_>) -> RunOutput {
+    let mut out = RunOutput::default();
+    let counts = preview.plan.map(Plan::counts);
+    let writes = preview.plan.map_or(0, writes);
 
     ui.horizontal(|ui| {
         ui.label(summary(session, counts, writes));
-        if stale {
+        if preview.stale {
             // Deliberately not a spinner: an animated widget asks egui to
             // repaint forever, which never settles in a headless test and
             // burns a core in the real app for a preview that lands in
             // milliseconds.
             ui.label(egui::RichText::new("updating…").weak().italics());
         }
+        if let Some(failure) = preview.failure {
+            // The engine panicked on this listing. Said here rather than
+            // nowhere: without it the table shows "—" on every row and the
+            // Rename button is disabled, which looks like a run that was
+            // never asked for.
+            ui.label(
+                egui::RichText::new(format!("preview failed: {failure}"))
+                    .color(ui.visuals().error_fg_color),
+            )
+            .on_hover_text(
+                "The preview engine hit a bug on one of these files. Change the pipeline or \
+                 the listing to try again; if it keeps happening, please report it.",
+            );
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            for filter in RowFilter::ALL.iter().rev() {
+                if ui
+                    .selectable_label(session.settings.row_filter == *filter, filter.label())
+                    .clicked()
+                {
+                    out.row_filter = Some(*filter);
+                }
+            }
+        });
+    });
+    out
+}
+
+/// The foot of the pipeline panel: progress while a job is out, the reason
+/// Rename is unavailable, Undo / Simulate / Log, the Rename button, and the
+/// last thing the app had to say.
+pub fn footer(
+    ui: &mut egui::Ui,
+    session: &Session,
+    preview: PreviewState<'_>,
+    history: &History,
+    simulate: &mut bool,
+    pipeline_empty: bool,
+    status: Option<&str>,
+) -> RunOutput {
+    let mut out = RunOutput::default();
+    let PreviewState {
+        plan,
+        failure,
+        job,
+        cancelling,
+        listing,
+        ..
+    } = preview;
+    let counts = plan.map(Plan::counts);
+    let writes = plan.map_or(0, writes);
+
+    let blocked = if job.is_some() {
+        Some("A run is still going.".to_owned())
+    } else if listing {
+        Some("Listing… the preview is for the rows as they were.".to_owned())
+    } else {
+        blocked_reason(
+            counts,
+            writes,
+            plan.map_or(&[][..], |plan| &plan.blockers[..]),
+            pipeline_empty,
+            session.guarded.as_deref(),
+            failure,
+        )
+    };
+
+    // One row, whatever is happening, so the panel keeps its height and the
+    // buttons stay under the pointer: a run swaps Undo / Simulate / Log for
+    // its progress and Cancel.
+    ui.horizontal(|ui| {
         if let Some(job) = job {
             // Static, like "updating…": the worker wakes the UI once when the
             // job lands, and the count moves on the frames the user's own
-            // input causes. A spinner here would never settle (D26).
-            ui.separator();
-            // Undo reports no progress of its own — it has to finish to be
-            // exact, so there is no count worth watching — and a "0 of N"
-            // that never moves would read as stuck.
+            // input causes. A spinner here would never settle (D26). Undo
+            // reports no progress of its own — it has to finish to be exact —
+            // and a "0 of N" that never moves would read as stuck.
             let text = match job.kind {
                 crate::viewmodel::JobKind::Run => {
                     format!("Renaming {} of {}…", job.done, job.total)
@@ -100,101 +161,111 @@ pub fn ui(
                     out.cancel = true;
                 }
             }
+            return;
         }
-        if let Some(failure) = failure {
-            // The engine panicked on this listing. Said here rather than
-            // nowhere: without it the table shows "—" on every row and the
-            // Rename button is disabled, which looks like a run that was
-            // never asked for.
-            ui.label(
-                egui::RichText::new(format!("preview failed: {failure}"))
-                    .color(ui.visuals().error_fg_color),
-            )
-            .on_hover_text(
-                "The preview engine hit a bug on one of these files. Change the pipeline or \
-                 the listing to try again; if it keeps happening, please report it.",
-            );
+        let undo = ui.add_enabled(history.can_undo(), egui::Button::new("Undo"));
+        if undo.clicked() {
+            out.undo = true;
         }
-
-        ui.separator();
-        for filter in RowFilter::ALL {
-            if ui
-                .selectable_label(session.settings.row_filter == filter, filter.label())
-                .clicked()
-            {
-                out.row_filter = Some(filter);
-            }
+        if history.can_undo() {
+            undo.on_hover_text("F4");
+        } else {
+            undo.on_disabled_hover_text("Nothing to undo yet");
         }
-
+        ui.checkbox(simulate, "Simulate")
+            .on_hover_text("Run the whole plan without touching the disk");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let blocked = if job.is_some() {
-                Some("A run is still going.".to_owned())
-            } else if listing {
-                Some("Listing… the preview is for the rows as they were.".to_owned())
-            } else {
-                blocked_reason(
-                    counts,
-                    writes,
-                    plan.map_or(&[][..], |plan| &plan.blockers[..]),
-                    pipeline_empty,
-                    session.guarded.as_deref(),
-                    failure,
-                )
-            };
-            // "Run simulation", not "Simulate": the checkbox beside it is
-            // already called Simulate, and two adjacent controls with the same
-            // word on them do not say which is the verb.
-            let label = if *simulate {
-                "Run simulation"
-            } else {
-                "Rename"
-            };
-            // The one primary action in the window, and the only irreversible
-            // one. `RichText::strong()` was its whole emphasis, which left it
-            // dimmer than the *Simulate* label beside it and indistinguishable
-            // from disabled *Undo* in the far corner. A simulation is not
-            // irreversible, so it does not get the accent.
-            let accent = crate::theme::Accents::from_ui(ui);
-            let mut run =
-                egui::Button::new(egui::RichText::new(label).strong().color(if *simulate {
-                    ui.visuals().widgets.inactive.fg_stroke.color
-                } else {
-                    accent.on_primary
-                }))
-                .min_size(egui::vec2(84.0, 0.0));
-            if !*simulate {
-                run = run.fill(accent.primary);
-            }
-            let button = ui.add_enabled(blocked.is_none(), run);
-            if let Some(reason) = &blocked {
-                button.on_disabled_hover_text(reason);
-            } else if button.on_hover_text("F5").clicked() {
-                out.run = true;
-            }
-
-            ui.checkbox(simulate, "Simulate")
-                .on_hover_text("Run the whole plan without touching the disk");
-
-            let can_undo = history.can_undo() && job.is_none();
-            let undo = ui.add_enabled(can_undo, egui::Button::new("Undo"));
-            if undo.clicked() {
-                out.undo = true;
-            }
-            if !can_undo {
-                undo.on_disabled_hover_text(if job.is_some() {
-                    "A run is still going"
-                } else {
-                    "Nothing to undo yet"
-                });
-            }
-
             if !history.log.is_empty() && ui.button("Log").clicked() {
                 out.toggle_log = true;
             }
         });
     });
 
+    // The one primary action in the window, and the only irreversible one:
+    // the accent, the full width of the panel and a height of its own. A
+    // simulation is not irreversible, so it does not get the accent.
+    let accent = crate::theme::Accents::from_ui(ui);
+    let label = run_label(*simulate, counts, writes, plan, session);
+    let text = egui::RichText::new(label)
+        .strong()
+        .size(15.0)
+        .color(if *simulate {
+            ui.visuals().widgets.inactive.fg_stroke.color
+        } else {
+            accent.on_primary
+        });
+    let mut run = egui::Button::new(text);
+    if !*simulate {
+        run = run.fill(accent.primary);
+    }
+    let button = ui.add_enabled_ui(blocked.is_none(), |ui| {
+        ui.add_sized(egui::vec2(ui.available_width(), RUN_HEIGHT), run)
+    });
+    let button = button.inner;
+    if let Some(reason) = &blocked {
+        button.on_disabled_hover_text(reason);
+    } else if button.on_hover_text("F5").clicked() {
+        out.run = true;
+    }
+
+    // Printed, not only hovered: a disabled button's hover text is the last
+    // place anybody looks, and it never reaches a screen reader. Not during a
+    // run, which the row above already explains.
+    if job.is_none()
+        && let Some(reason) = &blocked
+    {
+        ui.label(egui::RichText::new(reason).weak().small());
+    }
+    if let Some(status) = status {
+        ui.label(egui::RichText::new(status).weak().small());
+    }
     out
+}
+
+/// The Rename button's height: the window's one primary action, bigger than
+/// every other button in it (D251).
+const RUN_HEIGHT: f32 = 36.0;
+
+/// What the run button says: the verb and how many rows it touches, so the
+/// button states what will happen before it is pressed (D251).
+///
+/// "Rename" for a plan that renames anything; "Run on" for one that only
+/// modifies (an action-only pipeline renames nothing, and "Rename 3 files"
+/// would be a lie). "items" as soon as a folder is among them. A simulation
+/// keeps its own verb, because the checkbox beside the button is already
+/// called Simulate and the two must not say the same thing.
+fn run_label(
+    simulate: bool,
+    counts: Option<Counts>,
+    writes: usize,
+    plan: Option<&Plan>,
+    session: &Session,
+) -> String {
+    let counts = counts.unwrap_or_default();
+    let touched = counts.affected;
+    if touched == 0 {
+        return if simulate {
+            "Run simulation".to_owned()
+        } else if writes > 0 {
+            "Run".to_owned()
+        } else {
+            "Rename".to_owned()
+        };
+    }
+    let folders = plan.is_some_and(|plan| {
+        plan.items.iter().any(|item| {
+            (item.state.is_changed() || item.acts())
+                && session.entries().get(item.index).is_some_and(|e| e.is_dir)
+        })
+    });
+    let what = ren_core::plural(touched, if folders { "item" } else { "file" });
+    if simulate {
+        format!("Simulate {what}")
+    } else if counts.changed > 0 {
+        format!("Rename {what}")
+    } else {
+        format!("Run on {what}")
+    }
 }
 
 /// What this run will do, in clauses.
@@ -416,7 +487,7 @@ mod tests {
     /// "5 will change" for a run that renames three files and re-dates two says
     /// nothing useful about either.
     #[test]
-    fn the_status_bar_counts_renames_and_modifications_separately() {
+    fn the_counts_name_renames_and_modifications_separately() {
         let mut plan = plan_with(&[RowState::Changed, RowState::Unchanged]);
         plan.items[1].actions = acted_plan(1).items[0].actions.clone();
 

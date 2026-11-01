@@ -78,15 +78,23 @@ pub fn ui(
         }
 
         // Settings and About: the window's own commands, at the window's own
-        // top-right corner. They used to live in the *Pipeline* panel's header,
-        // which scoped them wrongly — neither has anything to do with the card
-        // stack, and the panel is resizable, so they moved when it did.
+        // top-right corner, in one menu (D251). They used to live in the
+        // *Pipeline* panel's header, which scoped them wrongly — neither has
+        // anything to do with the card stack — and then as two icons here.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             use crate::widgets::icons::{Icon, icon_button};
-            out.open_settings |= icon_button(ui, Icon::Gear, "Settings")
-                .on_hover_text("Settings (F8)")
-                .clicked();
-            out.open_about |= icon_button(ui, Icon::Info, "About RenameIt").clicked();
+            let button = icon_button(ui, Icon::Kebab, "Menu");
+            egui::Popup::menu(&button).show(|ui| {
+                if ui.button("Settings").on_hover_text("F8").clicked() {
+                    out.open_settings = true;
+                    ui.close();
+                }
+                if ui.button("About RenameIt").clicked() {
+                    out.open_about = true;
+                    ui.close();
+                }
+            });
+            button.on_hover_text("Settings and About");
         });
     });
 

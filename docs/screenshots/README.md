@@ -27,8 +27,8 @@ A folder with nothing in it: the list says *Nothing here* and how to fill it
 ## A conflict
 
 Two files would end up with the same name, so the whole run is blocked: the
-status bar counts the conflicts and Rename is greyed out (hover it for the
-reason).
+bar above the table counts the conflicts, Rename is greyed out, and the
+reason is printed under it.
 
 <img src="main-conflict.png" alt="Two rows marked as conflicting and the Rename button disabled" width="800">
 
@@ -118,7 +118,7 @@ operation is handed; select part of it and press **Select** to fill the box.
 
 ## Settings
 
-**F8** or ⚙. Each page:
+**F8**, or ⋯ ▸ Settings. Each page:
 
 ### Batch Replace
 

@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::dialogs::{FileDialogs, HostDialogs, NoDialogs};
 use crate::panels::{
-    AskForm, AskOutcome, FileTable, about, ask, confirm, operation, palette, presets, run_settings,
-    settings, source_bar, status_bar, visual_assist,
+    AskForm, AskOutcome, FileTable, about, ask, confirm, operation, palette, presets, run_controls,
+    run_settings, settings, source_bar, visual_assist,
 };
 use crate::thumbs::Thumbs;
 use crate::viewmodel::update::unix_now;
@@ -1625,6 +1625,37 @@ impl RenameItApp {
     ///
     /// Its own method because M4 makes an empty pipeline reachable — until now
     /// there was always exactly one operation.
+    /// What the run controls are drawn from, read once per frame.
+    fn preview_state(&self) -> run_controls::PreviewState<'_> {
+        run_controls::PreviewState {
+            plan: self.preview.plan(),
+            stale: self.preview.is_stale(),
+            failure: self.preview.failure(),
+            job: self.jobs.in_flight(),
+            cancelling: self.jobs.cancelling(),
+            listing: self.session.relist_wanted || self.listing.is_listing(),
+        }
+    }
+
+    /// Carries out what the results bar or the run footer asked for.
+    fn take_run_output(&mut self, out: crate::panels::RunOutput) {
+        if let Some(filter) = out.row_filter {
+            self.session.settings.row_filter = filter;
+        }
+        if out.toggle_log {
+            self.show_log = !self.show_log;
+        }
+        if out.cancel {
+            self.jobs.cancel();
+        }
+        if out.run {
+            self.run();
+        }
+        if out.undo {
+            self.undo();
+        }
+    }
+
     fn pipeline_is_empty(&self) -> bool {
         self.stack.is_empty()
     }
@@ -1634,7 +1665,7 @@ impl RenameItApp {
     /// Exposed because a disabled button's hover text does not reach the
     /// accessibility tree, so a headless test cannot read it any other way.
     pub fn blocked_reason(&self) -> Option<String> {
-        status_bar::blocked_reason_for(
+        run_controls::blocked_reason_for(
             self.preview.plan(),
             self.pipeline_is_empty(),
             self.session.guarded.as_deref(),
@@ -2479,7 +2510,7 @@ impl RenameItApp {
         // D127 for one file: the same refusal the run makes, asked of this
         // file's folder rather than the whole listing's.
         if let Some(folder) = self.session.guarded_for(&entry.path) {
-            self.status = status_bar::blocked_reason_for(None, false, Some(&folder), None);
+            self.status = run_controls::blocked_reason_for(None, false, Some(&folder), None);
             return;
         }
 
@@ -3707,52 +3738,43 @@ impl RenameItApp {
             }
         });
 
-        egui::Panel::bottom("status").show(ui, |ui| {
-            let pipeline_empty = self.pipeline_is_empty();
-            let out = status_bar::ui(
-                ui,
-                &self.session,
-                status_bar::PreviewState {
-                    plan: self.preview.plan(),
-                    stale: self.preview.is_stale(),
-                    failure: self.preview.failure(),
-                    job: self.jobs.in_flight(),
-                    cancelling: self.jobs.cancelling(),
-                    listing: self.session.relist_wanted || self.listing.is_listing(),
-                },
-                &self.history,
-                &mut self.simulate,
-                pipeline_empty,
-            );
-            if let Some(filter) = out.row_filter {
-                self.session.settings.row_filter = filter;
-            }
-            if out.toggle_log {
-                self.show_log = !self.show_log;
-            }
-            if out.cancel {
-                self.jobs.cancel();
-            }
-            if out.run {
-                self.run();
-            }
-            if out.undo {
-                self.undo();
-            }
+        // The log, across the foot of the window while it is open. Everything
+        // else that lived down here moved in D251: the counts and the row
+        // filter above the table, the run controls under the pipeline.
+        if self.show_log && !self.history.log.is_empty() {
+            egui::Panel::bottom("log").show(ui, |ui| self.log_panel(ui));
+        }
 
-            if let Some(status) = &self.status {
-                ui.label(egui::RichText::new(status).weak());
-            }
-            if self.show_log && !self.history.log.is_empty() {
-                ui.separator();
-                self.log_panel(ui);
-            }
-        });
-
+        let side = crate::theme::Accents::from_ui(ui).side;
         egui::Panel::left("operation")
             .resizable(true)
             .default_size(320.0)
+            .frame(egui::Frame::side_top_panel(ui.style()).fill(side))
             .show(ui, |ui| {
+                // First, so the stack above it gets whatever is left: the run
+                // controls sit at the foot of the pipeline, under the steps
+                // they run (D251).
+                egui::Panel::bottom("run")
+                    .frame(
+                        egui::Frame::new()
+                            .fill(side)
+                            .inner_margin(egui::Margin::symmetric(0, 8)),
+                    )
+                    .show(ui, |ui| {
+                        let mut simulate = self.simulate;
+                        let out = run_controls::footer(
+                            ui,
+                            &self.session,
+                            self.preview_state(),
+                            &self.history,
+                            &mut simulate,
+                            self.pipeline_is_empty(),
+                            self.status.as_deref(),
+                        );
+                        self.simulate = simulate;
+                        self.take_run_output(out);
+                    });
+
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Pipeline").heading());
                     // Settings and About used to be here too. They are the
@@ -3849,8 +3871,7 @@ impl RenameItApp {
                     self.open_palette();
                 }
 
-                ui.add_space(8.0);
-                ui.separator();
+                ui.add_space(4.0);
                 // Borrowed, not cloned: `settings` and `session` are disjoint
                 // fields, and the popup this feeds is closed on almost every
                 // frame.
@@ -3903,6 +3924,11 @@ impl RenameItApp {
         }
 
         egui::CentralPanel::default().show(ui, |ui| {
+            // The counts and the row filter, over the rows they describe (D251).
+            egui::Panel::top("results").show(ui, |ui| {
+                let out = run_controls::results_bar(ui, &self.session, self.preview_state());
+                self.take_run_output(out);
+            });
             // No early return for an empty listing: both views say why they
             // are empty and how to fill them (`file_table::empty_state`).
             // The view needs the listing and the selection at once, and both

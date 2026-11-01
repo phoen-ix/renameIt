@@ -73,7 +73,7 @@ pub fn ui(
             }
             for index in 0..stack.len() {
                 changed |= card_ui(ui, stack, index, expanded, &mut commands, cx, assist);
-                ui.add_space(4.0);
+                ui.add_space(STEP_GAP);
             }
         });
 
@@ -148,12 +148,100 @@ fn card_ui(
         return false;
     };
     let id = card.id;
+    let enabled = card.enabled;
     let is_expanded = *expanded == Some(id);
     let last = index + 1 == stack.len();
 
+    // Numbered steps (D251): the stack *is* the run order, so the order is
+    // shown — a numbered badge beside each card, joined to the next by a line.
+    let row = ui.horizontal_top(|ui| {
+        let (_, badge) = ui.allocate_space(egui::vec2(BADGE, BADGE));
+        paint_badge(ui, badge, index + 1, enabled);
+        let dropped = ui
+            .vertical(|ui| {
+                card_body(
+                    ui,
+                    stack,
+                    index,
+                    is_expanded,
+                    last,
+                    commands,
+                    cx,
+                    assist,
+                    &mut changed,
+                )
+            })
+            .inner;
+        (badge, dropped)
+    });
+    let (badge, dropped) = row.inner;
+    if !last {
+        ui.painter().vline(
+            badge.center().x,
+            (badge.bottom() + 3.0)..=(row.response.rect.bottom() + STEP_GAP),
+            ui.visuals().widgets.noninteractive.bg_stroke,
+        );
+    }
+
+    if let Some(drag) = dropped {
+        commands.push(Command::Move {
+            from: drag.0,
+            to: index,
+        });
+    }
+    changed
+}
+
+/// The step number's disc: the selection colour while the card runs, the
+/// button grey while it is switched off.
+fn paint_badge(ui: &egui::Ui, rect: egui::Rect, number: usize, enabled: bool) {
+    let visuals = ui.visuals();
+    let (fill, text) = if enabled {
+        (visuals.selection.bg_fill, visuals.selection.stroke.color)
+    } else {
+        (
+            visuals.widgets.inactive.weak_bg_fill,
+            visuals.weak_text_color(),
+        )
+    };
+    let painter = ui.painter();
+    painter.circle_filled(rect.center(), rect.width() / 2.0, fill);
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        number.to_string(),
+        egui::FontId::proportional(12.0),
+        text,
+    );
+}
+
+/// The badge's side.
+const BADGE: f32 = 22.0;
+/// The space between two cards, which the connector line spans.
+const STEP_GAP: f32 = 6.0;
+
+/// One card — header, problem line and, when open, the editor — in its frame.
+/// Returns what was dropped on it.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one card of the stack, and what it reports"
+)]
+fn card_body(
+    ui: &mut egui::Ui,
+    stack: &mut CardStack,
+    index: usize,
+    is_expanded: bool,
+    last: bool,
+    commands: &mut Vec<Command>,
+    cx: &EditorCx<'_>,
+    assist: Option<&crate::panels::visual_assist::VisualAssist>,
+    changed_out: &mut bool,
+) -> Option<std::sync::Arc<CardDrag>> {
+    let mut changed = false;
+    let id = stack.get(index).expect("index checked by the caller").id;
     // Everything inside is salted with the card's identity, which is what lets
     // two cards of the same kind keep their own text cursors and popups.
-    let frame = egui::Frame::group(ui.style());
+    let frame = crate::theme::card_frame(ui);
     let (_, dropped) = ui.dnd_drop_zone::<CardDrag, _>(frame, |ui| {
         ui.push_id(id, |ui| {
             ui.horizontal(|ui| {
@@ -254,13 +342,8 @@ fn card_ui(
         });
     });
 
-    if let Some(drag) = dropped {
-        commands.push(Command::Move {
-            from: drag.0,
-            to: index,
-        });
-    }
-    changed
+    *changed_out |= changed;
+    dropped
 }
 
 /// The card's summary, and the control that opens it.

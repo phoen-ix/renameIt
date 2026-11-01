@@ -299,12 +299,14 @@ xvfb-run -a cargo run -p ren-gui                       # on a headless box
 
 The window:
 
-- **Source bar** on top, **operation panel** on the left.
-- **File table** (virtualized): old and new names, with the changed part
-  highlighted.
-- **Along the bottom:** counts plus Simulate / Undo / Rename. The Rename button
-  disables itself **with a reason** when the plan has conflicts, because a
-  conflict blocks the whole run rather than skipping a file.
+- **Source bar** on top, with Settings and About in the ⋯ menu at its right.
+- **Pipeline** on the left: the operations as numbered steps, *Run settings*
+  under them, and at its foot Undo, Simulate and **Rename N files**. The
+  button says how many files it will touch, and when it cannot run it says
+  why underneath — a conflict blocks the whole run rather than skipping a
+  file.
+- **File table** (virtualized): the counts and the All / Changed / Conflicts
+  filter above it, then old and new names with the changed part highlighted.
 
 ### Launching it
 

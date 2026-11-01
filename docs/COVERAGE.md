@@ -26,7 +26,7 @@ grep -oE "'[a-z?]' =>" crates/ren-cli/src/compat.rs                             
 
 The rows also cover the dialogs, banners and error states those modules draw.
 
-**Totals:** 252 numbered rows plus the 3 sweep rows. 248 rows are ✅ and 4 are ❌,
+**Totals:** 255 numbered rows plus the 3 sweep rows. 251 rows are ✅ and 4 are ❌,
 all (c) covered at another layer.
 
 Roles: none. This is a single-user desktop app and a CLI, with no accounts.
@@ -41,7 +41,7 @@ Roles: none. This is a single-user desktop app and a CLI, with no accounts.
 |---|---|
 | All 18 operation editors, added from the palette by button and by Ctrl+K | ✅ e2e › sweep_every_operation_in_the_palette_opens_its_editor |
 | All 10 Settings pages, from the rail | ✅ e2e › sweep_every_settings_page_is_reachable_from_the_rail |
-| About, presets drawer, palette (Esc), Counter setup, Setup parts, Include filter, row menu, Grid/List | ✅ e2e › sweep_every_window_and_popover_opens_and_closes |
+| About (⋯ menu), presets drawer, palette (Esc), Run settings, Include filter, row menu, Grid/List | ✅ e2e › sweep_every_window_and_popover_opens_and_closes |
 
 ## Source bar (`panels/source_bar.rs`)
 
@@ -57,8 +57,8 @@ Roles: none. This is a single-user desktop app and a CLI, with no accounts.
 | 8 | Include filter popover (include, typed) | ✅ gui › the_include_filter_popover_takes_a_click_and_then_typing |
 | 9 | Include filter: what it narrows | ✅ gui › the_include_filter_narrows_which_files_change |
 | 10 | List ⇄ Grid switch | ✅ e2e › sweep_every_window_and_popover_opens_and_closes |
-| 11 | Settings (gear) button | ✅ e2e › sweep_every_settings_page_is_reachable_from_the_rail |
-| 12 | About button | ✅ gui › about_opens_and_reports_what_the_session_did |
+| 11 | ⋯ menu ▸ Settings | ✅ e2e › sweep_every_settings_page_is_reachable_from_the_rail |
+| 12 | ⋯ menu ▸ About RenameIt | ✅ gui › about_opens_and_reports_what_the_session_did |
 | 13 | Free Select: Add files… | ✅ e2e › the_mode_switch_and_free_selects_add_and_clear |
 | 14 | Free Select: Clear | ✅ e2e › the_mode_switch_and_free_selects_add_and_clear |
 | 15 | Free Select: drag and drop | ✅ gui › dropped_files_populate_free_select |
@@ -105,7 +105,7 @@ Roles: none. This is a single-user desktop app and a CLI, with no accounts.
 
 | # | Operation / control | Test |
 |---|---|---|
-| 49 | Replace: Find / Replace with typed | ✅ e2e › the_status_bar_simulates_renames_hides_the_log_and_undoes |
+| 49 | Replace: Find / Replace with typed | ✅ e2e › the_run_controls_simulate_rename_fold_the_log_and_undo |
 | 50 | Replace: regex error clears when finished | ✅ gui › a_regex_that_is_finished_being_typed_clears_its_error |
 | 51 | Replace: add to the Batch Replace list | ✅ gui › add_to_batch_replace_carries_all_seven_settings_not_just_the_two_boxes |
 | 52 | Batch Replace card keeps its own rules | ✅ gui › a_batch_replace_card_keeps_its_own_rules |
@@ -206,14 +206,14 @@ Roles: none. This is a single-user desktop app and a CLI, with no accounts.
 | 132 | Name that is not text | ✅ gui › a_name_that_is_not_text_says_so_and_can_still_be_renamed |
 | 133 | Error state: a conflict blocks Rename | ✅ gui › a_conflict_blocks_the_rename_button |
 
-## Status bar and run (`panels/status_bar.rs`)
+## Run controls (`panels/run_controls.rs`: the bar above the table, the footer under the pipeline)
 
 | # | Feature | Test |
 |---|---|---|
-| 134 | Rename button | ✅ e2e › the_status_bar_simulates_renames_hides_the_log_and_undoes |
-| 135 | Simulate checkbox + Run simulation | ✅ e2e › the_status_bar_simulates_renames_hides_the_log_and_undoes |
-| 136 | Undo button | ✅ e2e › the_status_bar_simulates_renames_hides_the_log_and_undoes |
-| 137 | Log button, and the log after a run | ✅ e2e › the_status_bar_simulates_renames_hides_the_log_and_undoes |
+| 134 | Rename button | ✅ e2e › the_run_controls_simulate_rename_fold_the_log_and_undo |
+| 135 | Simulate checkbox + Simulate N files | ✅ e2e › the_run_controls_simulate_rename_fold_the_log_and_undo |
+| 136 | Undo button | ✅ e2e › the_run_controls_simulate_rename_fold_the_log_and_undo |
+| 137 | Log button, and the log after a run | ✅ e2e › the_run_controls_simulate_rename_fold_the_log_and_undo |
 | 138 | Log at full height | ✅ gui › the_run_log_opens_at_its_full_height |
 | 139 | Log names a created folder | ✅ gui › the_log_names_a_folder_the_run_created |
 | 140 | Row filter chips All / Changed / Conflicts | ✅ e2e › the_row_filter_chips_narrow_the_rows |
@@ -372,3 +372,11 @@ the rows in the sections above. F1 is deliberately unbound (P64).
 | 250 | Slow second click renames; a Ctrl-click does not | ✅ e2e › a_slow_second_click_on_the_selected_row_renames_it |
 | 251 | Display: *Double-click on a file* (Rename it / Open it) | ✅ e2e › a_quick_double_click_on_a_file_does_what_the_display_page_says |
 | 252 | Display: *Double-click on a folder in Free Select* (Do nothing / Browse into it) | ✅ e2e › a_folder_in_free_select_opens_only_if_the_display_page_says_so |
+
+## The layout (D251)
+
+| # | Feature | Test |
+|---|---|---|
+| 253 | Rename says what it will do: "Rename 2 files", "Simulate 2 files", "Run on 2 files" | ✅ e2e › the_run_controls_simulate_rename_fold_the_log_and_undo; gui › a_simulated_action_only_run_says_what_it_would_have_done |
+| 254 | Why Rename is unavailable is printed under it | ✅ gui › a_blocked_rename_says_why_under_the_button |
+| 255 | The default window has no scrollbar | ✅ gui › the_default_window_needs_no_scrollbar |

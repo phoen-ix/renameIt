@@ -75,6 +75,11 @@ pub struct Accents {
     pub primary: Color32,
     /// Text drawn on [`Self::primary`].
     pub on_primary: Color32,
+    /// The pipeline panel's ground: a shade off the panel fill the table, the
+    /// bars and the cards share, so the cards read as objects on it (D251).
+    pub side: Color32,
+    /// A pipeline card.
+    pub card: Color32,
 }
 
 impl Accents {
@@ -84,12 +89,16 @@ impl Accents {
                 surface: Color32::from_gray(40),
                 primary: Color32::from_rgb(24, 110, 155),
                 on_primary: Color32::WHITE,
+                side: Color32::from_rgb(31, 34, 39),
+                card: Color32::from_rgb(38, 42, 48),
             }
         } else {
             Self {
                 surface: Color32::from_gray(238),
                 primary: Color32::from_rgb(21, 101, 192),
                 on_primary: Color32::WHITE,
+                side: Color32::from_rgb(241, 243, 246),
+                card: Color32::WHITE,
             }
         }
     }
@@ -254,6 +263,10 @@ fn text_styles() -> std::collections::BTreeMap<egui::TextStyle, egui::FontId> {
 /// the pointer while leaving it in the accessibility tree. Vertical room is
 /// bought at section boundaries with [`space`], not a point at a time on every
 /// row.
+///
+/// D251's roomy look leaves these alone for the same reason: a point more
+/// here pushed the Problem Solver's reset button out of its modal. Its room
+/// comes from surfaces, corners, row height and the Rename button instead.
 fn spacing(style: &mut egui::Style) {
     let s = &mut style.spacing;
     s.item_spacing = egui::vec2(8.0, 3.0);
@@ -372,13 +385,51 @@ fn visuals(dark: bool) -> Visuals {
         v.extreme_bg_color = Color32::from_gray(16);
     }
 
-    v.widgets.noninteractive.corner_radius = CornerRadius::same(4);
-    v.widgets.inactive.corner_radius = CornerRadius::same(4);
-    v.widgets.hovered.corner_radius = CornerRadius::same(4);
-    v.widgets.active.corner_radius = CornerRadius::same(4);
-    v.widgets.open.corner_radius = CornerRadius::same(4);
+    // D251, roomy: the table, the bars and the cards on white (or the dark
+    // equivalent), the pipeline panel a shade off it, rows striped faintly.
+    v.panel_fill = if dark {
+        Color32::from_rgb(25, 27, 31)
+    } else {
+        Color32::WHITE
+    };
+    v.faint_bg_color = if dark {
+        Color32::from_rgb(31, 34, 39)
+    } else {
+        Color32::from_rgb(246, 248, 250)
+    };
+
+    for w in [
+        &mut v.widgets.noninteractive,
+        &mut v.widgets.inactive,
+        &mut v.widgets.hovered,
+        &mut v.widgets.active,
+        &mut v.widgets.open,
+    ] {
+        w.corner_radius = CornerRadius::same(WIDGET_RADIUS);
+    }
 
     v
+}
+
+/// Corners: 6 on a widget, 8 on a card (D251).
+const WIDGET_RADIUS: u8 = 6;
+const CARD_RADIUS: u8 = 8;
+
+/// A pipeline card: white on the panel's grey, with a hairline and a shadow
+/// just deep enough to lift it (D251).
+pub fn card_frame(ui: &egui::Ui) -> egui::Frame {
+    let a = Accents::from_ui(ui);
+    egui::Frame::new()
+        .fill(a.card)
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+        .corner_radius(CARD_RADIUS)
+        .inner_margin(egui::Margin::same(8))
+        .shadow(egui::Shadow {
+            offset: [0, 1],
+            blur: 3,
+            spread: 0,
+            color: Color32::from_black_alpha(if ui.visuals().dark_mode { 90 } else { 22 }),
+        })
 }
 
 /// How tall a modal's scrolling body may be, given the window behind it.
@@ -690,8 +741,29 @@ mod tests {
             let body = v.widgets.noninteractive.fg_stroke.color;
             let button_text = v.widgets.inactive.fg_stroke.color;
 
-            let cases: [(&str, Color32, Color32, f64); 10] = [
+            let side = a.side;
+            let white_card = a.card;
+            let cases: [(&str, Color32, Color32, f64); 14] = [
                 ("body on panel", body, panel, 4.5),
+                ("body on the pipeline panel", body, side, 4.5),
+                (
+                    "weak on the pipeline panel",
+                    faded(body, side, v.weak_text_alpha),
+                    side,
+                    4.5,
+                ),
+                (
+                    "weak on a pipeline card",
+                    faded(body, white_card, v.weak_text_alpha),
+                    white_card,
+                    4.5,
+                ),
+                (
+                    "checkbox outline on a pipeline card",
+                    inactive_outline(dark),
+                    white_card,
+                    3.0,
+                ),
                 ("body on card", body, card, 4.5),
                 (
                     "weak on panel",

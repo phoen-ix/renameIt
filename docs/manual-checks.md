@@ -82,9 +82,9 @@ repeat after any change to the listing or the journal.
 
 
 The headless tests assert behaviour, not pixels. Worth eyeballing once at
-**125 %** and **150 %** scaling: the file table's columns, the status bar's
-right-hand buttons, and the operation panel's radio groups should all still fit
-without clipping.
+**125 %** and **150 %** scaling: the file table's columns, the run controls
+at the foot of the pipeline, and the operation panel's radio groups should all
+still fit without clipping.
 
 **Results:** *not yet recorded.*
 
