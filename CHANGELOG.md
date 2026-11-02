@@ -6,7 +6,10 @@ Two things this file does **not** track. Engine and UI decisions live in
 `docs/DECISIONS.md`, which is the authority on why anything behaves as it does;
 and the reasoning behind each default lives beside the code it governs.
 
-## [Unreleased]
+## [1.10.0] - 2026-11-02
+
+Explorer's sort order, one Filter box, Open in Free Select from Explorer, and
+a window that shows what a simulation would do.
 
 ### Changed
 
