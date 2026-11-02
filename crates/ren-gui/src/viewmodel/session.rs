@@ -92,21 +92,11 @@ pub struct Sort {
     /// It stops `sort_entries` from re-deriving an order the user set by hand,
     /// and it moves the arrow to the New name header. Cleared by any real sort
     /// and by a relist (`install_listing`), which rebuilds the listing and so
-    /// has no hand-set order left to preserve — except the one a run hands on
-    /// through `refresh_after_run`. `#[serde(default)]` on the struct is what
-    /// keeps a settings file written before M8 parsing.
+    /// has no hand-set order left to preserve. `#[serde(default)]` on the
+    /// struct is what keeps a settings file written before M8 parsing — and
+    /// one written while row drag existed, whose `dragged` field is ignored
+    /// (D256).
     pub manual: bool,
-    /// True when the hand-set order came from a **row drag** rather than the
-    /// New-name command.
-    ///
-    /// Implies `manual`, and is set in exactly the two places that produce an
-    /// order. It exists so no column header claims a dragged listing: after a
-    /// drag the rows are in nobody's column order, and leaving `column` at
-    /// whatever it was before would keep an arrow pointing at a claim that has
-    /// stopped being true. Storing it rather than clearing `column` means the
-    /// column the user *had* chosen survives the drag and takes over again when
-    /// a refresh re-derives the order.
-    pub dragged: bool,
 }
 
 impl Default for Sort {
@@ -115,7 +105,6 @@ impl Default for Sort {
             column: SortColumn::Name,
             ascending: true,
             manual: false,
-            dragged: false,
         }
     }
 }
@@ -399,10 +388,6 @@ pub struct Session {
     /// no worker of its own: it is egui-free and thread-free by design, so
     /// it says *that* a relist is wanted and the app says *when*.
     pub relist_wanted: bool,
-    /// A hand-set row order to put back when the next listing lands
-    /// (D157): the paths in the order the user had them, as the run left
-    /// them. Consumed by `install_listing`.
-    pending_order: Option<Vec<PathBuf>>,
     /// Who decides which folders are the operating system's (D127): the
     /// app's own platform, so the guard and the run ask the same one.
     platform: Arc<dyn Platform>,
@@ -419,7 +404,6 @@ impl Default for Session {
             problems: Vec::new(),
             guarded: None,
             relist_wanted: false,
-            pending_order: None,
             platform: ren_platform::host(),
         }
     }
@@ -532,10 +516,8 @@ impl Session {
     ///
     /// Selection is dropped: the indices it held pointed into the old list, and
     /// silently re-pointing them at different files is how a user renames
-    /// something they did not mean to (P23). A hand-set order left by
-    /// `refresh_after_run` is put back, because a rename is not a re-listing
-    /// (D157); any other relist has no hand-set order left to preserve, and
-    /// the previous column takes over again.
+    /// something they did not mean to (P23). A relist has no hand-set order
+    /// left to preserve, so the previous column takes over again.
     pub fn install_listing(
         &mut self,
         listed: std::io::Result<(Vec<FileEntry>, Vec<ren_core::listing::ListProblem>)>,
@@ -549,7 +531,6 @@ impl Session {
         self.error = None;
         self.problems.clear();
         self.settings.sort.manual = false;
-        self.settings.sort.dragged = false;
 
         match listed {
             Ok((entries, problems)) => {
@@ -563,10 +544,6 @@ impl Session {
         }
         self.sort_entries();
         self.guarded = self.find_guarded();
-
-        if let Some(order) = self.pending_order.take() {
-            self.restore_order(&order);
-        }
     }
 
     /// The first folder this listing would touch that the OS needs left alone.
@@ -697,7 +674,6 @@ impl Session {
                 column,
                 ascending: true,
                 manual: false,
-                dragged: false,
             };
         }
         self.sort_entries();
@@ -765,112 +741,14 @@ impl Session {
 
         self.apply_order(&order);
         self.settings.sort.manual = true;
-        // Not a drag: this order **is** the New name column's, so its header
-        // keeps the arrow (D157 amending D119).
-        self.settings.sort.dragged = false;
         self.settings.sort.ascending = ascending;
     }
 
-    /// Re-lists after a run, an F2 rename or an undo, keeping a hand-set
-    /// order and the Free Select set by following the rename report.
-    ///
-    /// Always, never a setting: a hand-set order is the run order, so losing
-    /// it on the run that used it would make dragging half a feature. A
-    /// relist clears `manual` because a *re-listing* has no hand-set order
-    /// left to preserve — but a rename is not a re-listing, it is a set of
-    /// known old→new paths, which is exactly what **D139** already uses to
-    /// rekey the texture cache beside the caller. An undo's report is the same
-    /// shape in the other direction, so it keeps the order too.
-    ///
-    /// Anything the run did not touch keeps its name, so `renamed` only has to
-    /// cover what moved.
+    /// Re-lists after a run, an F2 rename or an undo, keeping the Free Select
+    /// set by following the rename report.
     pub fn refresh_after_run(&mut self, renamed: &[(PathBuf, PathBuf)]) {
         self.follow_renames(renamed);
-        if self.settings.sort.manual {
-            // A map, not `find` per entry: ten thousand dragged rows renamed
-            // meant a hundred million path comparisons here, and as many
-            // again in the rank below.
-            let moved = moves(renamed);
-            let order: Vec<PathBuf> = self
-                .entries
-                .iter()
-                .map(|entry| followed(&moved, &entry.path))
-                .collect();
-            self.pending_order = Some(order);
-        }
         self.request_refresh();
-    }
-
-    /// Puts a hand-set order back over a fresh listing.
-    fn restore_order(&mut self, order: &[PathBuf]) {
-        let position: HashMap<&Path, usize> = order
-            .iter()
-            .enumerate()
-            .map(|(i, path)| (path.as_path(), i))
-            .collect();
-        let mut rank: Vec<usize> = (0..self.entries.len()).collect();
-        rank.sort_by_key(|&i| {
-            position
-                .get(self.entries[i].path.as_path())
-                .copied()
-                // A file the run created, or one that appeared underneath it,
-                // has no place in the old order and goes to the end rather than
-                // silently to the front.
-                .unwrap_or(usize::MAX)
-        });
-        self.apply_order(&rank);
-        self.settings.sort.manual = true;
-        self.settings.sort.dragged = true;
-    }
-
-    /// Moves `rows` so they land in front of the entry now at `before`.
-    ///
-    /// A drag in the list. The order is the run order, so this is also how a
-    /// user decides which number a counter gives each file.
-    ///
-    /// `before` is an index into the **current** listing, and
-    /// `entries().len()` means "at the end". The moved rows are taken out
-    /// first, so a `before` that falls inside the moved block means the same
-    /// place as the row after it.
-    ///
-    /// Returns false and changes nothing when that would be a no-op, so a drag
-    /// that ends where it started does not dirty the preview — the same
-    /// contract `CardStack::move_card` keeps for the operation stack.
-    pub fn move_rows(&mut self, rows: &[usize], before: usize) -> bool {
-        let moving: BTreeSet<usize> = rows
-            .iter()
-            .copied()
-            .filter(|&i| i < self.entries.len())
-            .collect();
-        if moving.is_empty() {
-            return false;
-        }
-
-        let mut order: Vec<usize> = Vec::with_capacity(self.entries.len());
-        let mut inserted = false;
-        for i in 0..self.entries.len() {
-            if i == before {
-                order.extend(moving.iter().copied());
-                inserted = true;
-            }
-            if !moving.contains(&i) {
-                order.push(i);
-            }
-        }
-        if !inserted {
-            order.extend(moving.iter().copied());
-        }
-
-        if order.iter().copied().eq(0..self.entries.len()) {
-            return false;
-        }
-        self.apply_order(&order);
-        // A hand-set order is not one to re-derive — the same flag the New-name
-        // reorder sets (D119), which anticipated this second producer — plus
-        // the bit that stops any header claiming it.
-        self.settings.sort.manual = true;
-        self.settings.sort.dragged = true;
-        true
     }
 
     /// Permutes the listing, carrying the selection with it.
@@ -1432,89 +1310,6 @@ mod tests {
 
         session.set_sort(SortColumn::Size);
         assert_eq!(session.entries().len(), 3, "every row survives a sort");
-    }
-
-    /// A dragged row lands where it was dropped, and so takes that place in
-    /// the run order.
-    #[test]
-    fn dragging_a_row_down_puts_it_where_it_was_dropped() {
-        let dir = tree();
-        let mut session = session_on(dir.path());
-        assert_eq!(names_of(&session), ["a.txt", "b.txt", "c.mp3"]);
-
-        // `a.txt` lands in front of whatever is at index 2 now.
-        assert!(session.move_rows(&[0], 2));
-        assert_eq!(names_of(&session), ["b.txt", "a.txt", "c.mp3"]);
-
-        // And to the very end.
-        assert!(session.move_rows(&[0], 3));
-        assert_eq!(names_of(&session), ["a.txt", "c.mp3", "b.txt"]);
-    }
-
-    /// Dragging a multi-row selection is the gesture anyone tries first, and
-    /// the rows have to arrive in the order they were in rather than the order
-    /// they happened to be listed in the payload.
-    #[test]
-    fn dragging_a_whole_selection_keeps_them_together_and_in_order() {
-        let dir = tree();
-        let mut session = session_on(dir.path());
-        assert!(session.move_rows(&[2, 0], 3));
-        assert_eq!(names_of(&session), ["b.txt", "a.txt", "c.mp3"]);
-    }
-
-    /// A drag that ends where it started must not dirty the preview — the same
-    /// contract `CardStack::move_card` keeps for the operation stack.
-    #[test]
-    fn a_drop_that_changes_nothing_is_not_a_change() {
-        let dir = tree();
-        let mut session = session_on(dir.path());
-        assert!(!session.move_rows(&[0], 0));
-        assert!(!session.move_rows(&[1], 1));
-        assert!(!session.settings.sort.manual, "and does not claim an order");
-    }
-
-    /// The drag is the second producer of a hand-set order, which **D119**
-    /// anticipated when it added the flag — and the New name header must not
-    /// claim it: after a drag the listing is in nobody's column order.
-    #[test]
-    fn a_dragged_order_is_hand_set_but_is_not_the_new_name_columns() {
-        let dir = tree();
-        let mut session = session_on(dir.path());
-        session.move_rows(&[0], 3);
-
-        assert!(session.settings.sort.manual);
-        assert!(
-            session.settings.sort.dragged,
-            "the New name header would otherwise show an arrow for an order it did not make"
-        );
-        assert_eq!(
-            session.settings.sort.column,
-            SortColumn::Name,
-            "and the column the user had chosen survives, to take over on the next refresh"
-        );
-
-        // And it is not re-derived.
-        session.sort_entries();
-        assert_eq!(names_of(&session), ["b.txt", "c.mp3", "a.txt"]);
-    }
-
-    /// The permutation carries everything that points into the listing.
-    #[test]
-    fn a_dragged_order_carries_the_selection_and_the_lead() {
-        let dir = tree();
-        let mut session = session_on(dir.path());
-        session.selection.set([0]); // a.txt
-
-        session.move_rows(&[0], 3);
-        assert_eq!(
-            session
-                .selection
-                .iter()
-                .map(|i| session.entries()[i].file_name.clone())
-                .collect::<Vec<_>>(),
-            ["a.txt"]
-        );
-        assert_eq!(session.selection.lead, Some(2));
     }
 
     /// A hand-set order survives a re-plan and nothing else: a real sort takes

@@ -36,8 +36,8 @@ pub struct RunCx<'a> {
     pub sample: Option<&'a ren_core::model::FileEntry>,
 }
 
-/// The payload a dragged card carries. A newtype, not a bare index: the file
-/// table will want row dragging too, and `DragAndDrop` matches on the type.
+/// The payload a dragged card carries. A newtype, not a bare index:
+/// `DragAndDrop` matches on the type.
 #[derive(Debug, Clone, Copy)]
 struct CardDrag(usize);
 

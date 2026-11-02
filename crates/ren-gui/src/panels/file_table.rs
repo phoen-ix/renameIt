@@ -30,14 +30,6 @@ const HEADER_EXTRA: f32 = 3.0;
 /// two columns' text touch.
 const CELL_GUTTER: f32 = 8.0;
 
-/// The rows a drag is carrying.
-///
-/// A newtype, as `panels::operation`'s own payload comment predicted:
-/// `DragAndDrop` matches on the type, so a bare `Vec<usize>` would let a
-/// dragged operation card land on a file row.
-#[derive(Debug, Clone)]
-struct RowDrag(Vec<usize>);
-
 /// What the table needs to draw one frame.
 pub struct FileTable<'a> {
     pub entries: &'a [FileEntry],
@@ -77,8 +69,6 @@ pub struct FileTable<'a> {
     /// Set when the New name header was clicked — a reorder command, not a
     /// sort (D119), so it travels separately.
     pub reorder_request: bool,
-    /// A drag that landed: the entries to move, and where they go.
-    pub move_request: Option<(Vec<usize>, usize)>,
     /// Set when an inline rename was confirmed with Enter.
     /// The file the editor was opened on, and the name typed for it.
     pub rename_confirmed: Option<(std::path::PathBuf, String)>,
@@ -134,7 +124,6 @@ impl<'a> FileTable<'a> {
             inline_rename,
             sort_request: None,
             reorder_request: false,
-            move_request: None,
             rename_confirmed: None,
             row_action: None,
             free_select: false,
@@ -301,13 +290,10 @@ impl egui_table::TableDelegate for FileTable<'_> {
             return;
         };
         let kind = column.kind;
-        // The New name header owns the arrow only while the hand-set order is
-        // **its own**, and no other header has one then. After a row drag the
-        // listing is in nobody's column order, so no header claims it —
-        // `move_rows` sets `manual` and leaves `column` alone, while
-        // `reorder_by_new_names` sets both.
+        // The New name header owns the arrow while its reorder holds, and no
+        // other header has one then.
         let active = if kind == ColumnKind::NewName {
-            self.sort.manual && !self.sort.dragged
+            self.sort.manual
         } else {
             !self.sort.manual && kind.sort() == Some(self.sort.column)
         };
@@ -366,67 +352,6 @@ impl egui_table::TableDelegate for FileTable<'_> {
                 ui.visuals().selection.stroke,
                 egui::StrokeKind::Inside,
             );
-        }
-
-        // Dragging rows up and down changes the list order, and the list order
-        // is the run order — so it is how a file gets the counter value it
-        // should have.
-        //
-        // **The whole row is the drag source, and the cells keep their clicks.**
-        // egui resolves click hits and drag hits independently, so a
-        // click-sensing widget inside a drag-sensing one yields *both* — the
-        // Name label keeps its click, its double-click and its menu. That is
-        // the opposite of the Full Row Select case below, which had to move
-        // into the cells because a *click* must be topmost.
-        let drag = ui.interact(
-            rect,
-            ui.scope_id().with(("row_drag", index)),
-            egui::Sense::drag(),
-        );
-        if drag.drag_started() {
-            // Dragging one of several selected rows takes all of them, which is
-            // the gesture every file manager has. Dragging an unselected row
-            // takes it alone and leaves the selection be — changing it mid-drag
-            // would re-scope the run and re-plan under the pointer.
-            let rows: Vec<usize> = if self.selection.contains(index) {
-                self.selection.iter().collect()
-            } else {
-                vec![index]
-            };
-            egui::DragAndDrop::set_payload(ui.ctx(), RowDrag(rows));
-        }
-        if egui::DragAndDrop::has_payload_of_type::<RowDrag>(ui.ctx()) && drag.contains_pointer() {
-            // Which half of the row the pointer is over decides whether the
-            // files land in front of it or behind it.
-            let after = ui
-                .input(|i| i.pointer.hover_pos())
-                .is_some_and(|p| p.y > rect.center().y);
-            // Inset one pixel inside this row's own rect: the next row paints
-            // afterwards and would cover a line drawn on the shared edge.
-            let y = if after {
-                rect.bottom() - 1.0
-            } else {
-                rect.top() + 1.0
-            };
-            ui.painter()
-                .hline(rect.x_range(), y, ui.visuals().selection.stroke);
-
-            if let Some(payload) = drag.dnd_release_payload::<RowDrag>() {
-                // **`index`, not `row`.** `index` is the entry; `row` is the
-                // position in the *visible* list. With a row filter on they are
-                // different numbers and the wrong file moves — silently,
-                // because with the filter off they are equal.
-                //
-                // **No test covers this line**, and swapping it for `row`
-                // leaves the suite green: the harness drives the accessibility
-                // tree and a drag is a pointer gesture, so
-                // `a_row_dropped_while_the_filter_hides_others_lands_where_it_
-                // looks_like_it_lands` exercises `move_rows` directly and
-                // proves only that *it* takes entry indices. The call site is a
-                // `docs/manual-checks.md` row, said here rather than implied by
-                // a comment that reads like a guarantee.
-                self.move_request = Some((payload.0.clone(), index + usize::from(after)));
-            }
         }
 
         // Full Row Select: a click anywhere on the row selects it. The name

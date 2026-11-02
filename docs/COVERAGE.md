@@ -190,7 +190,7 @@ Roles: none. This is a single-user desktop app and a CLI, with no accounts.
 | 114 | F2 case-only rename | ✅ gui › f2_accepts_a_case_only_rename |
 | 115 | Error state: inline rename onto an existing name | ✅ gui › a_manual_rename_onto_an_existing_name_is_refused |
 | 116 | Enter jumps to the next file | ✅ gui › the_jump_follows_the_file_the_sort_puts_next_and_not_the_row_number |
-| 117 | Row drag reorders the counter | ✅ gui › dragging_a_file_up_the_list_changes_the_number_the_counter_gives_it |
+| 117 | ~~Row drag reorders the counter~~ | — removed (**D256**) |
 | 118 | Row menu: right-click selects | ✅ gui › right_clicking_an_unselected_row_selects_it |
 | 119 | Row menu: Rename… | ✅ e2e › the_row_menus_rename_opens_the_inline_editor |
 | 120 | Row menu: Show in file manager | ✅ e2e › show_in_file_manager_reveals_the_row_and_the_problem_solver_its_folders |

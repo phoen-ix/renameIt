@@ -2641,7 +2641,7 @@ fn a_swap_reports_two_renames_not_three() {
     );
 
     // **The pairs, not only the count.** A front end reads `renamed` as an
-    // old → new map — to carry a hand-set order across the relist (D157), to
+    // old → new map — to follow the Free Select set across the relist, to
     // rekey a thumbnail, to write the log — so the file that was parked under
     // a temp name has to be reported from the name it started under, not
     // from `__renameit-tmp-0`.

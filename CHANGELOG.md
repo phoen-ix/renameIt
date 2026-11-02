@@ -6,6 +6,13 @@ Two things this file does **not** track. Engine and UI decisions live in
 `docs/DECISIONS.md`, which is the authority on why anything behaves as it does;
 and the reasoning behind each default lives beside the code it governs.
 
+## [Unreleased]
+
+### Removed
+
+- Dragging rows in the file list to reorder them. Click the *New name* header
+  to order the list by the names a run will write (**D256**).
+
 ## [1.9.0] - 2026-11-02
 
 A tidier window: one drop-down per card, settings where they apply, and a

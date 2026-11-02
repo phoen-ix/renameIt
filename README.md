@@ -24,7 +24,7 @@ operations produced it.
 - **Scripts:** when none of the seventeen built-in operations fits, the
   eighteenth — a **script** — can do it: sandboxed, with nine worked examples
   shipped.
-- **Keyboard:** the full hotkey set, including list navigation and row dragging.
+- **Keyboard:** the full hotkey set, including list navigation.
 - **Thumbnails** as both a grid and a column.
 - **Visual Assist** on the four pattern fields.
 - **Screen-reader support.**

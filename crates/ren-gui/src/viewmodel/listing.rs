@@ -27,7 +27,7 @@
 //!
 //! **Dropped even when it finished first.** A walk can complete and be queued
 //! in the gap before a newer request is made; installing it then would
-//! hand whatever was waiting for *the newer* listing — the hand-set order a
+//! hand whatever was waiting for *the newer* listing — the Free Select set a
 //! run left behind, the row F2 jumps to — to rows that are not the ones it
 //! was waiting for. Only the answer to the newest request is ever installed.
 //!

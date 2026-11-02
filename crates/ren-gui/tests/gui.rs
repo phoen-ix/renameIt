@@ -4293,76 +4293,7 @@ fn the_last_row_has_nowhere_to_jump_to() {
     );
 }
 
-/// Dragging a file up or down the list changes the number a counter gives it,
-/// end to end: the order **is** the run order, so a dragged row is numbered
-/// where it was dropped.
-#[test]
-fn dragging_a_file_up_the_list_changes_the_number_the_counter_gives_it() {
-    use ren_core::ops::AddCounter;
-
-    let fixture = Fixture::new(&["a.txt", "b.txt", "c.txt"]);
-    let mut app = fixture.app();
-    *app.operation_mut() = OpKind::AddCounter(AddCounter::default());
-    let mut harness = harness(app);
-
-    assert_eq!(
-        new_names(&harness),
-        ["1-a.txt", "2-b.txt", "3-c.txt"],
-        "list order is the numbering"
-    );
-
-    // The drop index is an **entry** index: put `c.txt` in front of `a.txt`.
-    harness.state_mut().session_mut().move_rows(&[2], 0);
-    settle(&mut harness);
-
-    assert_eq!(new_names(&harness), ["1-c.txt", "2-a.txt", "3-b.txt"]);
-}
-
-/// **The only test that can catch a drop index taken from the visible row.**
-///
-/// With the Changed chip narrowing the table, the entry index and the row
-/// number are different — and with the chip off they are equal, so every other
-/// test passes against the wrong one.
-#[test]
-fn a_row_dropped_while_the_filter_hides_others_lands_where_it_looks_like_it_lands() {
-    let fixture = Fixture::new(&["a.txt", "skip.txt", "c.txt"]);
-    let mut app = fixture.app();
-    // Touches `a.txt` and `c.txt`, leaves `skip.txt` alone.
-    *app.operation_mut() = OpKind::Replace(ren_core::ops::Replace::new(".", "_"));
-    let mut harness = harness(app);
-
-    // Entries are a, c, skip in name order: a=0, c=1, skip=2.
-    let names: Vec<String> = harness
-        .state()
-        .session()
-        .entries()
-        .iter()
-        .map(|e| e.file_name.clone())
-        .collect();
-    let c_at = names.iter().position(|n| n == "c.txt").unwrap();
-    let a_at = names.iter().position(|n| n == "a.txt").unwrap();
-
-    harness.state_mut().session_mut().settings.row_filter = ren_gui::viewmodel::RowFilter::Changed;
-    settle(&mut harness);
-
-    harness.state_mut().session_mut().move_rows(&[c_at], a_at);
-    settle(&mut harness);
-
-    let after: Vec<String> = harness
-        .state()
-        .session()
-        .entries()
-        .iter()
-        .map(|e| e.file_name.clone())
-        .collect();
-    assert_eq!(
-        after[0], "c.txt",
-        "the file the user dropped, not its neighbour"
-    );
-}
-
-/// After a drag the listing is in nobody's column order, so no header may claim
-/// it — the New name header's arrow is for the order **it** made.
+/// The New name header's arrow is for the order **it** made.
 #[test]
 fn the_new_name_header_keeps_its_arrow_to_itself() {
     let fixture = Fixture::new(&["a.txt", "b.txt"]);
@@ -4381,52 +4312,6 @@ fn the_new_name_header_keeps_its_arrow_to_itself() {
             + h.query_all_by_label_contains("New name ▼").count()
     };
     assert!(arrows(&harness) > 0, "its own order gets the arrow");
-
-    harness.state_mut().session_mut().move_rows(&[1], 0);
-    settle(&mut harness);
-    assert_eq!(
-        arrows(&harness),
-        0,
-        "a dragged order is not the New name column's"
-    );
-}
-
-/// A hand-set order survives the run that used it, always — not a setting:
-/// the hand-set order **is** the run order, so losing it on
-/// the run that used it would make dragging half a feature. A rename is not a
-/// re-listing — it is a set of known old→new paths, which is what **D139**
-/// already uses to rekey the pictures one line earlier.
-#[test]
-fn a_dragged_order_survives_the_run_that_used_it() {
-    use ren_core::ops::AddCounter;
-
-    let fixture = Fixture::new(&["a.txt", "b.txt", "c.txt"]);
-    let mut app = fixture.app();
-    *app.operation_mut() = OpKind::AddCounter(AddCounter::default());
-    let mut harness = harness(app);
-
-    // Put `c.txt` first by hand.
-    harness.state_mut().session_mut().move_rows(&[2], 0);
-    settle(&mut harness);
-    assert_eq!(new_names(&harness), ["1-c.txt", "2-a.txt", "3-b.txt"]);
-
-    harness.state_mut().run_now();
-    settle(&mut harness);
-    assert_eq!(fixture.names(), ["1-c.txt", "2-a.txt", "3-b.txt"]);
-
-    let order: Vec<String> = harness
-        .state()
-        .session()
-        .entries()
-        .iter()
-        .map(|e| e.file_name.clone())
-        .collect();
-    assert_eq!(
-        order,
-        ["1-c.txt", "2-a.txt", "3-b.txt"],
-        "the order the user set, not the name order a relist would give"
-    );
-    assert!(harness.state().session().settings.sort.manual);
 }
 
 /// The Free Format box is a drop-down holding the patterns run before.
@@ -6139,43 +6024,6 @@ fn a_batch_undone_elsewhere_leaves_the_undo_stack() {
         ["one.txt", "two.txt"],
         "the older batch is reachable"
     );
-}
-
-/// A hand-set order survives a run whose renames form a cycle — the files
-/// swap names through a temporary one — and survives the undo of it.
-#[test]
-fn a_dragged_order_survives_a_swap_and_its_undo() {
-    let fixture = Fixture::new(&["a.txt", "b.txt", "c.txt"]);
-    let mut app = fixture.app();
-    *app.operation_mut() = OpKind::Replace(Replace::new("a", "X"));
-    app.add_operation(OpKind::Replace(Replace::new("b", "a")));
-    app.add_operation(OpKind::Replace(Replace::new("X", "b")));
-    let mut harness = harness(app);
-    assert_eq!(new_names(&harness), ["b.txt", "a.txt", "c.txt"]);
-
-    // c first by hand.
-    harness.state_mut().session_mut().move_rows(&[2], 0);
-    settle(&mut harness);
-    let order = |h: &Harness<'_, RenameItApp>| -> Vec<String> {
-        h.state()
-            .session()
-            .entries()
-            .iter()
-            .map(|e| e.file_name.clone())
-            .collect()
-    };
-    assert_eq!(order(&harness), ["c.txt", "a.txt", "b.txt"]);
-
-    harness.state_mut().run_now();
-    settle(&mut harness);
-    // The file that was a.txt is b.txt now, and it kept its slot.
-    assert_eq!(order(&harness), ["c.txt", "b.txt", "a.txt"]);
-    assert!(harness.state().session().settings.sort.manual);
-
-    harness.state_mut().undo_now();
-    settle(&mut harness);
-    assert_eq!(order(&harness), ["c.txt", "a.txt", "b.txt"], "and back");
-    assert!(harness.state().session().settings.sort.manual);
 }
 
 // --- Cards edited in place, and the widgets inside them ---------------------

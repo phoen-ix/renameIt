@@ -201,7 +201,7 @@ fn op_paths(op: &PlannedOp) -> impl Iterator<Item = &std::path::Path> {
 /// A broken cycle moves its victim twice — `a → tmp`, then `tmp → b` — and
 /// only the second hop is a rename the user asked for. Reported as
 /// `tmp → b`, it was a pair nobody could use: a front end reads `renamed` as
-/// an old → new map, to carry a hand-set order across the relist (D157), to
+/// an old → new map, to follow the Free Select set across the relist, to
 /// rekey a picture, to write the log. Remembering where each temp name came
 /// from reports it as `a → b`.
 #[derive(Debug, Default)]

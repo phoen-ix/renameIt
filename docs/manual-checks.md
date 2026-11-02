@@ -274,31 +274,19 @@ large, and one text file renamed to `.jpg`.
 ## M8 — the file list's pointer and caret
 
 **Why it is here.** Everything the accessibility tree can reach is tested —
-which row the keyboard is on, what a drag *does* once its indices are known,
-what Enter and Backspace change. What it cannot reach is **the pointer**: a
-synthetic click lands at a node's rect, and a drag is a press, a move and a
-release across two rows. So the model half is CI's and the gesture half is
-yours.
-
-One line in particular has **no test at all and the suite stays green without
-it**: `FileTable::row_ui` translates the dropped row to an *entry* index, and
-with a row filter off the two numbers are equal. Check 4 is the only thing
-standing between that and a drag that moves the wrong file.
+which row the keyboard is on, what Enter and Backspace change. What it
+cannot reach is **the pointer**: a synthetic click lands at a node's rect. So
+the model half is CI's and the gesture half is yours.
 
 | # | Do this | Expect |
 |---|---|---|
 | 1 | Press **F2** on `song.mp3` | The stem `song` is selected and the caret sits before the dot. Type `track` and press Enter: `track.mp3`, and the editor opens on the **next** row |
 | 2 | Rename `a.txt` to `zz.txt` with F2 in a folder of `a b c` | The list re-sorts, and the editor opens on `b.txt` — the file that *was* next, wherever it landed |
-| 3 | Drag a row by its middle, over another row's top half, then its bottom half | A line above and below respectively; dropping puts the file there, and an Add Counter card renumbers it in place |
-| 4 | **Narrow the chip to Changed, then drag the last visible row onto the first** | The file you dragged moves. If a *different* one moves, the drop index is being taken from the visible row rather than the entry |
-| 5 | Drag one of three selected rows | All three move, together and in order. Drag an **un**selected row: it moves alone and the selection is untouched |
-| 6 | After a drag, look at the column headers | **No** header shows an arrow — the listing is in nobody's column order. Click *New name* instead and that header alone gets one |
-| 7 | Drag a row, then press Rename | The order you set is the order that runs, and the list is still in it afterwards |
-| 8 | Click a row, then Shift-click three rows down | Four rows selected, not two. Ctrl-click one of them: it drops out and the rest stay |
-| 9 | Arrow up and down the list | A ring follows the keyboard, one row at a time, and scrolls into view at the ends. Hold Ctrl: the ring moves and the highlight does not |
-| 10 | Click into a position spinner on a card, then press Down | The **number** changes and the list does not move. Then `Ctrl+A`: it selects the spinner's text, not every file |
-| 11 | With **Folders** on, put the keyboard on a folder and press Enter, then Backspace | Down into it, then back out — landing on the folder you left |
-| 12 | Press Backspace with **Folders off**, at a drive root, and in Free Select | Up one level; nothing at the root; nothing in Free Select |
+| 3 | Click a row, then Shift-click three rows down | Four rows selected, not two. Ctrl-click one of them: it drops out and the rest stay |
+| 4 | Arrow up and down the list | A ring follows the keyboard, one row at a time, and scrolls into view at the ends. Hold Ctrl: the ring moves and the highlight does not |
+| 5 | Click into a position spinner on a card, then press Down | The **number** changes and the list does not move. Then `Ctrl+A`: it selects the spinner's text, not every file |
+| 6 | With **Folders** on, put the keyboard on a folder and press Enter, then Backspace | Down into it, then back out — landing on the folder you left |
+| 7 | Press Backspace with **Folders off**, at a drive root, and in Free Select | Up one level; nothing at the root; nothing in Free Select |
 
 **Results:** *not yet recorded.*
 

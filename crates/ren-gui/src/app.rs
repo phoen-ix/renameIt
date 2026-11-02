@@ -804,7 +804,7 @@ impl RenameItApp {
     /// thread), and several things in one frame asking for one relist should
     /// cost one. Drained **in the frame that asked**, straight after the job
     /// poll and again at the end of the frame, because whatever waits for
-    /// the listing — a run's hand-set order, the row F2 jumps to — waits for
+    /// the listing — a run's Free Select paths, the row F2 jumps to — waits for
     /// *this* request's answer: the worker drops any listing older than the
     /// newest request, so an older walk that happened to finish first can no
     /// longer take what was left for this one.
@@ -2331,9 +2331,9 @@ impl RenameItApp {
                     // Renaming four hundred photographs must not look like
                     // opening the folder for the first time (D139).
                     self.thumbs.renamed(&report.renamed);
-                    // Through the rename report, so a hand-set row order
-                    // survives the run that used it — the same trick D139
-                    // plays for the pictures one line above.
+                    // Through the rename report, so the Free Select set
+                    // follows the run — the same trick D139 plays for the
+                    // pictures one line above.
                     self.session.refresh_after_run(&report.renamed);
                 }
             }
@@ -2442,8 +2442,8 @@ impl RenameItApp {
                 self.show_log = true;
                 // The same as a run, for the same reason.
                 self.close_visual_assist();
-                // The same move a run makes, in reverse: the pictures, the
-                // Free Select set and a hand-set order all follow it.
+                // The same move a run makes, in reverse: the pictures and the
+                // Free Select set both follow it.
                 self.thumbs.renamed(&report.restored);
                 self.session.refresh_after_run(&report.restored);
             }
@@ -2684,7 +2684,7 @@ impl RenameItApp {
                 self.status = Some(format!("Renamed to {new_name}"));
                 self.thumbs.renamed(&report.renamed);
                 // Through the report, like a run's: Free Select follows the
-                // file, and a hand-set order keeps its place.
+                // file.
                 self.session.refresh_after_run(&report.renamed);
                 // Once the rows exist again: the successor is looked up by
                 // path in the listing that has not landed yet.
@@ -3568,8 +3568,7 @@ impl RenameItApp {
         // for a relist, and the request goes out straight away (in `show`) —
         // before any listing is installed — so an older walk that finished
         // in the meantime is dropped rather than handed what the job left
-        // waiting for this one (a hand-set order, the Free Select set's new
-        // paths).
+        // waiting for this one (the Free Select set's new paths).
         self.poll_jobs();
         self.close_if_idle(Some(ctx));
         self.poll_updates(ctx);
@@ -4055,7 +4054,6 @@ impl RenameItApp {
             let go_up;
             // Not in Free Select, which has no folder, nor above a root.
             let parent_row = !free_select && self.session.settings.dir.parent().is_some();
-            let mut move_request = None;
             let row_action;
             let rename_confirmed;
 
@@ -4082,7 +4080,6 @@ impl RenameItApp {
                     go_up = table.go_up;
                     sort_request = table.sort_request;
                     reorder_request = table.reorder_request;
-                    move_request = table.move_request.take();
                     row_action = table.row_action.take();
                     rename_confirmed = table.rename_confirmed.take();
                 }
@@ -4124,13 +4121,6 @@ impl RenameItApp {
 
             if let Some(column) = sort_request {
                 self.session.set_sort(column);
-                self.needs_preview = true;
-            }
-            // A drag that landed. The order is the run order, so a moved row
-            // is numbered where it was dropped.
-            if let Some((rows, before)) = move_request
-                && self.session.move_rows(&rows, before)
-            {
                 self.needs_preview = true;
             }
             // A command, not a mode (D119): it needs the plan whose names it
