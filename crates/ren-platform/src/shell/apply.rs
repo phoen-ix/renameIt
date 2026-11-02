@@ -399,11 +399,20 @@ mod tests {
             apply(&plan, under).unwrap();
             assert!(installed_under(under));
 
-            let root = format!(r"{under}Software\Classes\Drive\shell\RenameIt");
-            reg::set_dword(&root, VERSION_VALUE, MENU_VERSION + 1).unwrap();
+            // Both verbs on drives carry a marker since P122 hoisted Open in
+            // Free Select; either alone reads as installed.
+            let roots = [
+                format!(r"{under}Software\Classes\Drive\shell\RenameIt"),
+                format!(r"{under}Software\Classes\Drive\shell\RenameIt.FreeSelect"),
+            ];
+            for root in &roots {
+                reg::set_dword(root, VERSION_VALUE, MENU_VERSION + 1).unwrap();
+            }
             assert!(!installed_under(under), "a layout we did not write");
 
-            reg::set_string(&root, VERSION_VALUE, "1").unwrap();
+            for root in &roots {
+                reg::set_string(root, VERSION_VALUE, "1").unwrap();
+            }
             assert!(!installed_under(under), "the right number, the wrong type");
         });
     }
