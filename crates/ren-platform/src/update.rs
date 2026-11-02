@@ -428,8 +428,12 @@ pub(crate) mod imp {
     /// So the uninstaller removes it only when it points at the copy being
     /// uninstalled, and a portable copy that owns it keeps it.
     pub fn release_context_menu() -> Result<()> {
-        let root = &crate::shell::ShellPlan::verb_roots()[0];
-        let Some(icon) = reg_string(HKEY_CURRENT_USER, root, "Icon") else {
+        use crate::shell::ShellPlan;
+        // The RenameIt verb, or only the hoisted Free Select one (P122).
+        let Some(icon) = [&ShellPlan::verb_roots()[0], &ShellPlan::hoisted_roots()[0]]
+            .into_iter()
+            .find_map(|root| reg_string(HKEY_CURRENT_USER, root, "Icon"))
+        else {
             return Ok(());
         };
         let Some(menu_exe) = crate::shell::plan::exe_from_icon(&icon) else {

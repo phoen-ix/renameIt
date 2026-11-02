@@ -79,7 +79,7 @@ fn main() -> eframe::Result {
         let (entries, _) = store.list();
         let _ = ren_platform::host().set_context_menu(
             true,
-            &ren_gui::app::shell_menu(&entries, &Default::default()),
+            &ren_gui::app::shell_menu(&entries, &Default::default(), true),
         );
         return Ok(());
     }

@@ -584,7 +584,7 @@ fn scope_ui(ui: &mut egui::Ui, card: &mut Card) -> bool {
     changed
 }
 
-/// D32: the source bar's filter is the default; a card may override it.
+/// Which listed files this card renames. Off, it renames every one (P121).
 fn filter_ui(ui: &mut egui::Ui, card: &mut Card) -> bool {
     let mut changed = false;
 
@@ -592,8 +592,8 @@ fn filter_ui(ui: &mut egui::Ui, card: &mut Card) -> bool {
     if ui
         .checkbox(&mut own, "Use a filter for this operation only")
         .on_hover_text(
-            "Otherwise this operation uses the include filter in the source bar, \
-             like every other card that has none of its own.",
+            "Off, this operation applies to every file in the list. The Filter box above \
+             the list decides what is listed.",
         )
         .changed()
     {
@@ -601,15 +601,8 @@ fn filter_ui(ui: &mut egui::Ui, card: &mut Card) -> bool {
         changed = true;
     }
 
-    match &mut card.filter {
-        Some(filter) => changed |= filter.ui(ui),
-        None => {
-            ui.label(
-                egui::RichText::new("Using the include filter from the source bar.")
-                    .weak()
-                    .small(),
-            );
-        }
+    if let Some(filter) = &mut card.filter {
+        changed |= filter.ui(ui);
     }
 
     changed

@@ -291,6 +291,110 @@ fn simulate_reports_the_plan_without_touching_the_disk() {
     );
 }
 
+/// P123: a simulated run opens a window with every change, old against new.
+#[test]
+fn a_simulation_opens_a_window_with_every_change() {
+    use ren_gui::panels::simulation::{Kind, Show};
+
+    let fixture = Fixture::new(&["a_1.txt", "b_2.txt", "keep.txt"]);
+    let mut harness = harness(fixture.app());
+    *harness.state_mut().operation_mut() = OpKind::Replace(Replace::new("_", "-"));
+    harness.state_mut().set_simulate(true);
+    settle(&mut harness);
+    harness.state_mut().run_now();
+    settle(&mut harness);
+
+    let result = harness.state().simulation().expect("the window is open");
+    assert_eq!(result.count(Kind::Renamed), 2, "keep.txt does not change");
+    assert_eq!(result.count(Kind::Failed), 0);
+    harness.get_by_label("Simulation result");
+    harness.get_by_label_contains("2 renamed");
+
+    // The chips, the search and the path switch narrow what is shown — and
+    // Copy list copies exactly that.
+    let result = harness.state_mut().simulation_mut().unwrap();
+    result.search = "b_".into();
+    assert_eq!(result.text(), "Renamed\tb_2.txt\tb-2.txt\n");
+    result.search.clear();
+    result.show = Show::Only(Kind::Failed);
+    assert!(result.shown().is_empty());
+    result.show = Show::All;
+    result.full_paths = true;
+    assert!(
+        result.shown()[0]
+            .1
+            .contains(&*fixture.dir.path().to_string_lossy())
+    );
+
+    assert_eq!(
+        fixture.names(),
+        ["a_1.txt", "b_2.txt", "keep.txt"],
+        "nothing written"
+    );
+}
+
+/// A date change is a row of its own, before against after, with the
+/// before taken from the listing.
+#[test]
+fn a_simulated_date_change_shows_before_and_after() {
+    use ren_gui::panels::simulation::Kind;
+
+    let fixture = Fixture::new(&["a.txt"]);
+    let mut harness = harness(fixture.app());
+    *harness.state_mut().operation_mut() = OpKind::SetDate(Default::default());
+    harness.state_mut().set_simulate(true);
+    settle(&mut harness);
+    harness.state_mut().run_now();
+    settle(&mut harness);
+
+    let result = harness.state().simulation().expect("the window is open");
+    let row = result
+        .rows
+        .iter()
+        .find(|r| r.kind == Kind::Changed)
+        .expect("a date row");
+    assert!(row.before.starts_with("Modified "), "{:?}", row.before);
+    assert!(!row.after.is_empty());
+    assert_eq!(result.count(Kind::Renamed), 0);
+}
+
+/// *Rename now* runs the same plan for real and closes the window; the
+/// Simulate box stays as it was.
+#[test]
+fn rename_now_from_the_simulation_renames_for_real() {
+    let fixture = Fixture::new(&["a_1.txt"]);
+    let mut harness = harness(fixture.app());
+    *harness.state_mut().operation_mut() = OpKind::Replace(Replace::new("_", "-"));
+    harness.state_mut().set_simulate(true);
+    settle(&mut harness);
+    harness.state_mut().run_now();
+    settle(&mut harness);
+
+    harness.get_by_label("Rename now").click();
+    settle(&mut harness);
+    assert_eq!(fixture.names(), ["a-1.txt"]);
+    assert!(harness.state().simulation().is_none(), "closed");
+    assert!(harness.state().history().can_undo(), "a real batch");
+
+    // Simulate is still on: the next run is a simulation again.
+    harness.state_mut().run_now();
+    settle(&mut harness);
+    assert_eq!(fixture.names(), ["a-1.txt"]);
+}
+
+/// A real run opens no window.
+#[test]
+fn a_real_run_opens_no_simulation_window() {
+    let fixture = Fixture::new(&["a_1.txt"]);
+    let mut harness = harness(fixture.app());
+    *harness.state_mut().operation_mut() = OpKind::Replace(Replace::new("_", "-"));
+    settle(&mut harness);
+    harness.state_mut().run_now();
+    settle(&mut harness);
+    assert!(harness.state().simulation().is_none());
+    assert!(harness.query_by_label("Simulation result").is_none());
+}
+
 #[test]
 fn f2_renames_a_single_row_and_undo_covers_it() {
     let fixture = Fixture::new(&["before.txt"]);
@@ -386,20 +490,26 @@ fn a_manual_rename_onto_an_existing_name_is_refused() {
     );
 }
 
+/// The Filter box hides what does not match, and the run covers what is
+/// listed (P121).
 #[test]
-fn the_include_filter_narrows_which_files_change() {
+fn the_filter_box_narrows_the_list_and_so_the_run() {
     let fixture = Fixture::new(&["live_set.mp3", "studio_take.mp3"]);
     let mut harness = harness(fixture.app());
 
     *harness.state_mut().operation_mut() = OpKind::Replace(Replace::new("_", "-"));
-    harness
-        .state_mut()
-        .set_filter(ren_gui::widgets::filter_editor::FilterForm {
-            include: "live".into(),
-            ..Default::default()
-        });
+    harness.state_mut().session_mut().settings.pattern = "live".into();
+    harness.state_mut().session_mut().request_refresh();
     settle(&mut harness);
 
+    let listed: Vec<_> = harness
+        .state()
+        .session()
+        .entries()
+        .iter()
+        .map(|e| e.file_name.clone())
+        .collect();
+    assert_eq!(listed, ["live_set.mp3"]);
     let plan = harness.state().plan().expect("a plan");
     assert_eq!(plan.changed(), 1, "{:?}", plan.items);
 }
@@ -1629,17 +1739,15 @@ fn a_popover_opens_on_a_click_and_its_contents_reach_the_accessibility_tree() {
 
     // Closed: the popover's contents are not in the tree at all.
     assert!(
-        harness
-            .query_by_label_contains("Include only files matching")
-            .is_none(),
+        harness.query_by_label_contains("Exclude:").is_none(),
         "the popover should start closed"
     );
 
-    harness.get_by_label_contains("Include filter").click();
+    harness.get_by_label("Filter options").click();
     settle(&mut harness);
 
-    harness.get_by_label_contains("Include only files matching");
-    harness.get_by_label_contains("Also test the extension");
+    harness.get_by_label_contains("Exclude:");
+    harness.get_by_label_contains("Test the whole path");
 }
 
 /// The other primitive: a menu button. The card's ⋮ overflow (duplicate,
@@ -2012,10 +2120,10 @@ fn a_per_card_filter_narrows_only_that_card() {
     assert_eq!(names, ["! [live] concert one.txt", "! studio two.txt"]);
 }
 
-/// The other half of D32: the source bar's filter is what a card without one
-/// inherits, which is why the M2 filter test still passes unchanged.
+/// A card's own filter picks which listed files it renames; a card without
+/// one renames them all (P121: there is no run-wide filter to inherit).
 #[test]
-fn the_source_bar_filter_is_the_default_for_a_card_that_has_none() {
+fn a_card_filter_narrows_only_that_card() {
     use ren_gui::widgets::filter_editor::FilterForm;
 
     let fixture = Fixture::new(&["concert one.txt", "studio two.txt"]);
@@ -2025,21 +2133,6 @@ fn the_source_bar_filter_is_the_default_for_a_card_that_has_none() {
     harness
         .state_mut()
         .add_operation(OpKind::AddRemove(AddRemove::add("? ", 0)));
-    harness.state_mut().set_filter(FilterForm {
-        include: "concert".into(),
-        ..Default::default()
-    });
-    settle(&mut harness);
-
-    let plan = harness.state().plan().expect("a plan");
-    let names: Vec<_> = plan.items.iter().map(|i| i.new_name.clone()).collect();
-    assert_eq!(
-        names,
-        ["? ! concert one.txt", "studio two.txt"],
-        "both cards inherited it"
-    );
-
-    // A card with its own filter escapes the inherited one.
     harness.state_mut().set_card_filter(
         1,
         Some(FilterForm {
@@ -2050,7 +2143,7 @@ fn the_source_bar_filter_is_the_default_for_a_card_that_has_none() {
     settle(&mut harness);
     let plan = harness.state().plan().expect("a plan");
     let names: Vec<_> = plan.items.iter().map(|i| i.new_name.clone()).collect();
-    assert_eq!(names, ["! concert one.txt", "? studio two.txt"]);
+    assert_eq!(names, ["! concert one.txt", "? ! studio two.txt"]);
 }
 
 /// The card stack is what gets persisted, so it has to come back.
@@ -6722,15 +6815,16 @@ fn a_selection_holding_a_wildcard_character_says_what_it_will_mean() {
 
 // --- Wave 2: names a screen reader was not given ------------------------------
 
-/// The pattern box is named by its label. "Pattern:" was drawn beside it and
-/// attached to nothing, so a screen reader read out the hint, "*.*".
+/// The Filter box (once "Pattern:", P121) is named by its label. The label was
+/// drawn beside it and attached to nothing, so a screen reader read out the
+/// hint, "*.*".
 #[test]
-fn the_pattern_box_is_named_by_its_label() {
+fn the_filter_box_is_named_by_its_label() {
     let fixture = Fixture::new(&["a.txt", "b.mp3", "c.mp3"]);
     let mut harness = harness(fixture.app());
 
     harness
-        .get_by_role_and_label(egui::accesskit::Role::TextInput, "Pattern:")
+        .get_by_role_and_label(egui::accesskit::Role::TextInput, "Filter:")
         .focus();
     harness.run();
     focused_text_box(&harness).type_text("*.mp3");
@@ -6821,27 +6915,24 @@ fn the_counters_boxes_tick_in_the_add_counter_card() {
     assert!(counter.reset_each_folder && counter.reset_on_base_name && counter.running);
 }
 
-/// The click that puts the caret in the include box used to close the popover
-/// before a key could reach it.
+/// The click that puts the caret in the Exclude box must not close the
+/// popover before a key reaches it — and what it excludes leaves the list.
 #[test]
-fn the_include_filter_popover_takes_a_click_and_then_typing() {
+fn the_filter_popover_takes_a_click_and_then_typing() {
     let fixture = Fixture::new(&["x_1.txt", "y_1.mp3"]);
     let mut harness = harness(fixture.app());
     *harness.state_mut().operation_mut() = OpKind::Replace(Replace::new("_", " "));
     settle(&mut harness);
-    harness.get_by_label("Include filter…").click();
+    harness.get_by_label("Filter options").click();
     settle(&mut harness);
 
     harness
-        .get_by_role_and_label(
-            egui::accesskit::Role::TextInput,
-            "Include only files matching:",
-        )
+        .get_by_role_and_label(egui::accesskit::Role::TextInput, "Exclude:")
         .click();
     settle(&mut harness);
     focused_text_box(&harness).type_text("y*");
     settle(&mut harness);
-    assert_eq!(new_names(&harness), ["x_1.txt", "y 1.mp3"]);
+    assert_eq!(new_names(&harness), ["x 1.txt"]);
 }
 
 /// ✨ in Music Tagger's Filename parts fills the pattern and shows what it

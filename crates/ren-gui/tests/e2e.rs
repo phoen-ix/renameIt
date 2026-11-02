@@ -358,13 +358,13 @@ fn sweep_every_window_and_popover_opens_and_closes() {
     click(&mut harness, "✖");
     assert!(!present(&harness, "No presets saved yet."));
 
-    // The include filter opens a popover.
-    harness.get_by_label("Include filter…").click();
+    // The Filter box's ▾ opens a popover (P121).
+    harness.get_by_label("Filter options").click();
     settle(&mut harness);
-    assert!(present(&harness, "Include only files matching"));
+    assert!(present(&harness, "Exclude:"));
     harness.key_press(egui::Key::Escape);
     settle(&mut harness);
-    assert!(!present(&harness, "Include only files matching"));
+    assert!(!present(&harness, "Exclude:"));
 
     // The row menu.
     harness.get_by_label_contains("one.txt").click_secondary();
@@ -500,6 +500,10 @@ fn the_run_controls_simulate_rename_fold_the_log_and_undo() {
         ["one.txt", "two.txt"],
         "a simulation writes nothing"
     );
+    // P123: and shows what it would have done, in a window of its own.
+    assert!(present(&harness, "Simulation result"));
+    click(&mut harness, "Close");
+    assert!(!present(&harness, "Simulation result"));
     assert!(
         harness
             .state()
@@ -1473,7 +1477,7 @@ fn the_file_system_page_changes_what_is_listed() {
     settle(&mut harness);
     click(&mut harness, "Close");
     click(&mut harness, "Folders");
-    type_into(&mut harness, "Pattern:", "*.txt");
+    type_into(&mut harness, "Filter:", "*.txt");
     assert_eq!(listed(&harness), ["folder", "seen.txt"]);
     set_readonly(false);
 }

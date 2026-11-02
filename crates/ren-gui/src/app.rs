@@ -91,6 +91,11 @@ struct Persisted {
     /// [`menu_entry_id`]. What is not here is on it, so a new preset arrives
     /// on the menu as it always did.
     menu_hidden: std::collections::BTreeSet<String>,
+    /// P122: several items selected in Explorer get only *Open in Free
+    /// Select*. On by default.
+    menu_multi_free_select: bool,
+    /// P122: what a folder in an Explorer selection becomes in Free Select.
+    free_select_folders: FolderIntake,
     /// The updater's own bookkeeping, kept so a restart neither checks again
     /// at once nor retries an install that did not take: when a check last
     /// went out, and which version the Automatic mode last tried and when.
@@ -140,6 +145,8 @@ impl Default for Persisted {
             update_mode: UpdateMode::default(),
             context_menu: None,
             menu_hidden: Default::default(),
+            menu_multi_free_select: true,
+            free_select_folders: FolderIntake::default(),
             last_update_check: None,
             update_attempt: None,
             operation: OpKind::default(),
@@ -277,6 +284,8 @@ struct Hotkeys {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RunInFlight {
     simulate: bool,
+    /// The plan a simulation ran, for its result window (P123).
+    simulated_plan: Option<Plan>,
     /// How many rows the plan would touch, for "N of M" when it stops
     /// short.
     affected: usize,
@@ -326,6 +335,10 @@ pub struct RenameItApp {
     context_menu: Option<bool>,
     /// See `Persisted::menu_hidden`.
     menu_hidden: std::collections::BTreeSet<String>,
+    /// See `Persisted::menu_multi_free_select`.
+    menu_multi_free_select: bool,
+    /// See `Persisted::free_select_folders`.
+    free_select_folders: FolderIntake,
     /// The decode threads and the texture cache. Owned here rather than by the
     /// table or the grid because both views draw from the one cache, and
     /// because a run, an undo and F9 all have to reach it.
@@ -336,7 +349,6 @@ pub struct RenameItApp {
     /// survives reorder and delete.
     expanded: Option<CardId>,
     settings: RunSettings,
-    filter: FilterForm,
     theme: Theme,
     simulate: bool,
 
@@ -437,6 +449,12 @@ pub struct RenameItApp {
     consented_for: Option<u64>,
     /// The confirmation, while it is up.
     confirming: Option<confirm::Confirm>,
+    /// What the last simulated run would have done, while its window is up
+    /// (P123).
+    simulation: Option<crate::panels::simulation::SimulationResult>,
+    /// *Rename now* from that window: the next run is for real, whatever the
+    /// Simulate box says, and the box is left as the user set it.
+    real_once: bool,
     status: Option<String>,
     /// The native file pickers, or stubs that answer nothing.
     ///
@@ -685,6 +703,8 @@ impl RenameItApp {
             close_when_idle: false,
             context_menu: persisted.context_menu,
             menu_hidden: persisted.menu_hidden.clone(),
+            menu_multi_free_select: persisted.menu_multi_free_select,
+            free_select_folders: persisted.free_select_folders,
             updates: {
                 let mut updates = Updates::spawn(platform.clone(), update_temp, {
                     let repaint = repaint.clone();
@@ -702,7 +722,6 @@ impl RenameItApp {
             history,
             expanded: None,
             settings: persisted.settings,
-            filter: FilterForm::default(),
             answers: Answers::default(),
             asking: None,
             settings_page: None,
@@ -746,6 +765,8 @@ impl RenameItApp {
             selection_caveat: None,
             consented_for: None,
             confirming: None,
+            simulation: None,
+            real_once: false,
             status: None,
             instant: false,
             unstyled: true,
@@ -874,12 +895,6 @@ impl RenameItApp {
         &self.thumbs
     }
 
-    /// Sets the source-bar include filter, as the popover would.
-    pub fn set_filter(&mut self, filter: FilterForm) {
-        self.filter = filter;
-        self.needs_preview = true;
-    }
-
     /// Simulate mode, as the status-bar checkbox would set it.
     pub fn set_simulate(&mut self, simulate: bool) {
         self.simulate = simulate;
@@ -892,6 +907,24 @@ impl RenameItApp {
     /// Runs the current plan, as the Rename button would.
     pub fn run_now(&mut self) {
         self.run();
+    }
+
+    /// The simulation window's *Rename now* (P123): the same plan, for real,
+    /// through P2's confirmation like any run. The window closes.
+    pub fn rename_now(&mut self) {
+        self.simulation = None;
+        self.real_once = true;
+        self.run();
+    }
+
+    /// The simulation window's contents, while it is open.
+    pub fn simulation(&self) -> Option<&crate::panels::simulation::SimulationResult> {
+        self.simulation.as_ref()
+    }
+
+    /// The window's chips, search and path switch, as a click would set them.
+    pub fn simulation_mut(&mut self) -> Option<&mut crate::panels::simulation::SimulationResult> {
+        self.simulation.as_mut()
     }
 
     /// Runs it with P2's consent already given, skipping the dialog.
@@ -959,6 +992,26 @@ impl RenameItApp {
     /// was started in: every later step — the listing, the plan, the journal,
     /// the D127 guard's prefix match — needs a full path, and nothing later
     /// knows what the working directory was.
+    /// Explorer's *Open in Free Select* (P122): Free Select whatever the
+    /// selection is, even one folder, with folders taken as the setting says.
+    pub fn open_in_free_select(&mut self, paths: Vec<std::path::PathBuf>) {
+        let real: Vec<_> = paths
+            .into_iter()
+            .filter(|p| p.exists())
+            .map(|p| std::path::absolute(&p).unwrap_or(p))
+            .collect();
+        let had = !real.is_empty();
+        let paths = self.free_select_folders.expand(real);
+        if paths.is_empty() {
+            if had {
+                self.status = Some("The selected folders have no files in them.".to_owned());
+            }
+            return;
+        }
+        self.session.add_to_free_select(paths);
+        self.needs_preview = true;
+    }
+
     pub fn start_at(&mut self, paths: Vec<std::path::PathBuf>) {
         let real: Vec<_> = paths
             .into_iter()
@@ -1005,6 +1058,8 @@ impl RenameItApp {
                 self.session.settings.mode = crate::viewmodel::SourceMode::Browser;
                 self.set_dir(dir);
             }
+        } else if launch.free_select {
+            self.open_in_free_select(launch.paths.clone());
         } else {
             self.start_at(launch.paths.clone());
         }
@@ -1053,10 +1108,10 @@ impl RenameItApp {
             return;
         }
         let (entries, _) = self.presets.list();
-        match self
-            .platform
-            .set_context_menu(true, &shell_menu(&entries, &self.menu_hidden))
-        {
+        match self.platform.set_context_menu(
+            true,
+            &shell_menu(&entries, &self.menu_hidden, self.menu_multi_free_select),
+        ) {
             Ok(()) => self.context_menu = Some(true),
             Err(error) => {
                 self.status = Some(format!("Could not set up the right-click menu: {error}"));
@@ -1429,6 +1484,8 @@ impl RenameItApp {
             update_mode: self.updates.mode,
             context_menu: self.context_menu,
             menu_hidden: self.menu_hidden.clone(),
+            menu_multi_free_select: self.menu_multi_free_select,
+            free_select_folders: self.free_select_folders,
             last_update_check: self.updates.last_check,
             update_attempt: self.updates.auto_attempt.clone(),
             operation: OpKind::default(),
@@ -1488,11 +1545,8 @@ impl RenameItApp {
         live.view = fresh.session.view;
         live.thumb_size = fresh.session.thumb_size;
         live.thumb_border = fresh.session.thumb_border;
-
-        // Not in `Persisted` and never saved, but a stray filter is the
-        // commonest reason files are missing from the list, which is the
-        // question the page above this button answers.
-        self.filter = FilterForm::default();
+        // The Filter box and its extras stay, as the pattern always did: what
+        // you filtered to is not a setting (P121).
 
         ctx.set_theme(egui::ThemePreference::from(self.theme));
         // The interface size lives in egui's own `Memory`, not in `Persisted`
@@ -1520,7 +1574,7 @@ impl RenameItApp {
             return;
         }
         let (entries, _) = self.presets.list();
-        let menu = shell_menu(&entries, &self.menu_hidden);
+        let menu = shell_menu(&entries, &self.menu_hidden, self.menu_multi_free_select);
         if let Err(error) = self.platform.set_context_menu(true, &menu) {
             self.status = Some(format!("Could not update the file manager menu: {error}"));
         }
@@ -1781,9 +1835,7 @@ impl RenameItApp {
 
     /// The pipeline the card stack describes.
     fn pipeline(&self) -> Pipeline {
-        let inherited = self.filter.is_active().then_some(&self.filter);
-        self.stack
-            .to_pipeline(inherited, &self.settings, &self.answers)
+        self.stack.to_pipeline(&self.settings, &self.answers)
     }
 
     pub fn settings(&self) -> &RunSettings {
@@ -2174,6 +2226,10 @@ impl RenameItApp {
     /// preset's Run, a run deferred until the preview caught up — so every
     /// refusal is made here, not only on the button.
     fn run(&mut self) {
+        // *Rename now* (P123) is for this run only. Taken here and put back
+        // only where the run is deferred rather than refused, so a refused
+        // one can never leave the next Simulate press running for real.
+        let real = std::mem::take(&mut self.real_once);
         // One dialog at a time. Without this, a held F5 or a stuck
         // `run_when_ready` rebuilds the confirmation every frame — cheap and
         // invisible in the paint, and exactly the never-settling loop D26
@@ -2208,6 +2264,7 @@ impl RenameItApp {
         // pipeline's plan.
         if self.needs_preview || self.preview.is_stale() {
             self.run_when_ready = true;
+            self.real_once = real;
             return;
         }
 
@@ -2215,6 +2272,7 @@ impl RenameItApp {
         // asked is asked here, before a plan is built from the answers.
         if let Some(form) = self.unanswered() {
             self.asking = Some(form);
+            self.real_once = real;
             return;
         }
         // The button's own reasons, for the paths that have no button:
@@ -2242,15 +2300,18 @@ impl RenameItApp {
         // syscall, so there is nothing to consent to, and a dialog headed
         // "cannot be undone" would be false there.
         let consented = self.consented_for == Some(generation);
-        if !self.simulate && !consented && confirm::needed(&plan) {
+        let simulate = self.simulate && !real;
+        if !simulate && !consented && confirm::needed(&plan) {
             self.confirming = Some(confirm::Confirm::new(&plan, generation));
+            self.real_once = real;
             return;
         }
         // One-shot, whatever happens below.
         self.consented_for = None;
 
         let in_flight = RunInFlight {
-            simulate: self.simulate,
+            simulate,
+            simulated_plan: simulate.then(|| plan.clone()),
             affected: plan.affected(),
             next_start: self.next_counter_start(&scoped),
             fields: self.fields_to_remember(),
@@ -2259,7 +2320,7 @@ impl RenameItApp {
         // is refused here rather than queued behind a batch that changes the
         // listing it was planned over — and the button is disabled while
         // one is out, so this is the keyboard's path.
-        let options = self.history.run_options(self.simulate, consented);
+        let options = self.history.run_options(simulate, consented);
         if self.jobs.run(plan, options).is_err() {
             self.status = Some("A run is still going".to_owned());
             return;
@@ -2275,6 +2336,7 @@ impl RenameItApp {
     ) {
         let Some(RunInFlight {
             simulate,
+            simulated_plan,
             affected,
             next_start,
             fields,
@@ -2316,6 +2378,13 @@ impl RenameItApp {
                     )
                 });
                 self.show_log = true;
+                if let Some(plan) = &simulated_plan {
+                    self.simulation = Some(crate::panels::simulation::SimulationResult::new(
+                        plan,
+                        &report,
+                        self.session.entries(),
+                    ));
+                }
                 // Outside the `!simulate` branch below: a simulation is still
                 // the user saying they meant that pattern.
                 self.remember_fields(fields);
@@ -3528,6 +3597,7 @@ fn history_entries(op: &OpKind) -> Vec<(&'static str, String)> {
 pub fn shell_menu<'a>(
     entries: &'a [ren_core::PresetEntry],
     hidden: &std::collections::BTreeSet<String>,
+    hoist_free_select: bool,
 ) -> ren_platform::shell::Menu<'a> {
     use ren_platform::shell::{Fixed, Menu, MenuPreset};
     Menu {
@@ -3543,6 +3613,43 @@ pub fn shell_menu<'a>(
                 file: &entry.path,
             })
             .collect(),
+        hoist_free_select,
+    }
+}
+
+/// What a folder in an Explorer selection becomes in Free Select (P122).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FolderIntake {
+    /// A row of its own, so the folder itself is renamed.
+    #[default]
+    Itself,
+    /// The files directly inside it, one level, in name order.
+    Contents,
+}
+
+impl FolderIntake {
+    /// The paths Free Select gets for `paths`.
+    pub fn expand(self, paths: Vec<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
+        if self == Self::Itself {
+            return paths;
+        }
+        paths
+            .into_iter()
+            .flat_map(|path| {
+                if !path.is_dir() {
+                    return vec![path];
+                }
+                let mut files: Vec<_> = std::fs::read_dir(&path)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .map(|entry| entry.path())
+                    .filter(|p| p.is_file())
+                    .collect();
+                files.sort();
+                files
+            })
+            .collect()
     }
 }
 
@@ -3732,6 +3839,8 @@ impl RenameItApp {
                 busy: self.jobs.is_busy(),
                 context_menu: &mut self.context_menu,
                 menu_hidden: &mut self.menu_hidden,
+                menu_multi_free_select: &mut self.menu_multi_free_select,
+                free_select_folders: &mut self.free_select_folders,
             };
             let out = settings::ui(&ctx, &mut page, defaults, self.theme);
             if let Some(theme) = out.theme {
@@ -3797,10 +3906,20 @@ impl RenameItApp {
                 }
                 AskOutcome::Cancelled => {
                     self.asking = None;
+                    self.real_once = false;
                     // Not "Rename cancelled": for a tag-write run that is the
                     // same wrong noun the post-run status used to carry.
                     self.status = Some("Cancelled — nothing was changed".to_owned());
                 }
+            }
+        }
+
+        if let Some(mut state) = self.simulation.take() {
+            use crate::panels::simulation::{Outcome, ui as simulation_ui};
+            match simulation_ui(&ctx, &mut state) {
+                Outcome::Open => self.simulation = Some(state),
+                Outcome::Close => {}
+                Outcome::RenameNow => self.rename_now(),
             }
         }
 
@@ -3821,6 +3940,7 @@ impl RenameItApp {
                 confirm::Outcome::Cancelled => {
                     self.consented_for = None;
                     self.run_when_ready = false;
+                    self.real_once = false;
                     self.status = Some("Cancelled — nothing was changed".to_owned());
                 }
             }
@@ -3832,7 +3952,6 @@ impl RenameItApp {
             let out = source_bar::ui(
                 ui,
                 &mut self.session,
-                &mut self.filter,
                 self.dialogs.as_ref(),
                 self.listing.is_listing(),
                 self.platform.file_manager(),
@@ -3842,9 +3961,6 @@ impl RenameItApp {
             }
             if out.hard_refresh {
                 self.forget_and_relist();
-            }
-            if out.refilter {
-                self.needs_preview = true;
             }
             if out.open_settings {
                 self.open_settings();
@@ -4594,6 +4710,8 @@ mod tests {
             update_mode: UpdateMode::Automatic,
             context_menu: Some(false),
             menu_hidden: ["copy-names".to_owned()].into(),
+            menu_multi_free_select: false,
+            free_select_folders: FolderIntake::Contents,
             last_update_check: Some(1_800_000_000),
             update_attempt: Some(("1.7.0".to_owned(), 1_800_000_000)),
             operation: OpKind::default(),
@@ -4622,6 +4740,8 @@ mod tests {
         assert_eq!(back.clicks, original.clicks);
         assert_eq!(back.context_menu, original.context_menu);
         assert_eq!(back.menu_hidden, original.menu_hidden);
+        assert_eq!(back.menu_multi_free_select, original.menu_multi_free_select);
+        assert_eq!(back.free_select_folders, original.free_select_folders);
         assert_eq!(back.update_mode, original.update_mode);
         assert_eq!(back.last_update_check, original.last_update_check);
         assert_eq!(back.update_attempt, original.update_attempt);
@@ -4774,6 +4894,53 @@ mod tests {
     /// The survivor list lives in one place, so a field added to `Persisted`
     /// later is **reset by default** rather than silently kept — the safe
     /// direction for a button whose whole job is putting things back.
+    /// P122: *Open in Free Select* is Free Select even for one folder, and a
+    /// folder is a row of its own unless the setting takes the files inside.
+    #[test]
+    fn open_in_free_select_takes_a_folder_as_the_setting_says() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let journal = tempfile::TempDir::new().unwrap();
+        let folder = dir.path().join("trip");
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::write(folder.join("b.jpg"), b"x").unwrap();
+        std::fs::write(folder.join("a.jpg"), b"x").unwrap();
+        std::fs::create_dir(folder.join("nested")).unwrap();
+
+        let mut app = RenameItApp::headless(dir.path().to_path_buf(), journal.path().to_path_buf());
+        app.open_in_free_select(vec![folder.clone()]);
+        assert_eq!(
+            app.session.settings.mode,
+            crate::viewmodel::SourceMode::FreeSelect
+        );
+        assert_eq!(
+            app.session.free_select,
+            std::slice::from_ref(&folder),
+            "the folder itself"
+        );
+
+        let mut app = RenameItApp::headless(dir.path().to_path_buf(), journal.path().to_path_buf());
+        app.free_select_folders = FolderIntake::Contents;
+        app.open_in_free_select(vec![folder.clone()]);
+        assert_eq!(
+            app.session.free_select,
+            [folder.join("a.jpg"), folder.join("b.jpg")],
+            "the files inside, one level, sorted"
+        );
+
+        let empty = dir.path().join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        let mut app = RenameItApp::headless(dir.path().to_path_buf(), journal.path().to_path_buf());
+        app.free_select_folders = FolderIntake::Contents;
+        app.open_in_free_select(vec![empty]);
+        assert!(app.session.free_select.is_empty());
+        assert!(
+            app.status
+                .as_deref()
+                .unwrap_or_default()
+                .contains("no files")
+        );
+    }
+
     #[test]
     fn a_reset_keeps_the_folder_and_the_pipeline_and_puts_the_rest_back() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -5902,7 +6069,7 @@ mod menu_tests {
                 steps: 1,
             },
         ];
-        let menu = shell_menu(&entries, &Default::default()).presets;
+        let menu = shell_menu(&entries, &Default::default(), true).presets;
         assert_eq!(menu.len(), 2, "two items, not one");
         assert_eq!(menu[0].name, "Tidy");
         assert_eq!(menu[0].file, Path::new("/p/a.toml"));
@@ -5910,7 +6077,7 @@ mod menu_tests {
 
         // Hidden by file, so hiding one "Tidy" keeps the other (P119).
         let hidden = ["preset:a.toml".to_owned(), "copy-names".to_owned()].into();
-        let menu = shell_menu(&entries, &hidden);
+        let menu = shell_menu(&entries, &hidden, true);
         assert_eq!(menu.presets.len(), 1);
         assert_eq!(menu.presets[0].file, Path::new("/p/b.toml"));
         assert_eq!(

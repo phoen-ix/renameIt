@@ -48,9 +48,9 @@ pub struct Card {
     pub op: OpKind,
     pub scope: Scope,
     pub enabled: bool,
-    /// `None` means *inherit the source bar's filter* (D32). The distinction is
-    /// the whole point: a preset stores what the card shows, and a card that
-    /// shows "using the source bar's" stores nothing.
+    /// `None` means the card applies to every listed file. There is no
+    /// run-wide filter to inherit any more (P121): the Filter box decides what
+    /// is listed, and this decides which listed files the card renames.
     pub filter: Option<FilterForm>,
     pub preproc: Option<PreProcessor>,
 }
@@ -81,30 +81,12 @@ impl Card {
         }
     }
 
-    /// What the engine runs: this card's filter, or the run-wide one it
-    /// inherits when it has none of its own.
-    pub fn runtime_config(&self, inherited: Option<&FilterForm>) -> StepConfig {
-        let form = self.filter.as_ref().or(inherited);
-        StepConfig {
-            filter: form.filter(|f| f.is_active()).map(FilterForm::to_filter),
-            ..self.stored_config()
-        }
-    }
-
     pub fn title(&self) -> &'static str {
         self.op.label()
     }
 
     pub fn summary(&self) -> String {
         self.op.summary()
-    }
-
-    /// Whether this card is using the run-wide filter rather than one of
-    /// its own — which the card says out loud, so inheritance is never a
-    /// surprise.
-    #[cfg(test)]
-    pub fn inherits_filter(&self) -> bool {
-        self.filter.is_none()
     }
 }
 
@@ -231,15 +213,10 @@ impl CardStack {
     /// a partial rebuild that reuses transforms across edits. (The card's own
     /// copy is reset separately, by `OpKind::refresh` after each edit, for the
     /// summary and the problem line it draws.)
-    pub fn to_pipeline(
-        &self,
-        inherited: Option<&FilterForm>,
-        settings: &RunSettings,
-        answers: &Answers,
-    ) -> Pipeline {
+    pub fn to_pipeline(&self, settings: &RunSettings, answers: &Answers) -> Pipeline {
         let mut pipeline = Pipeline::new();
         for card in &self.cards {
-            pipeline.push(card.op.to_step(), card.runtime_config(inherited));
+            pipeline.push(card.op.to_step(), card.stored_config());
         }
         pipeline.settings = settings.clone();
         pipeline.answers = answers.clone();
@@ -251,7 +228,6 @@ impl CardStack {
 mod tests {
     use super::*;
     use ren_core::ops::{Casing, Replace};
-    use ren_core::{IncludeFilter, MatchSpec};
 
     fn stack_of(count: usize) -> CardStack {
         let mut stack = CardStack::default();
@@ -362,42 +338,7 @@ mod tests {
             back.get(0).unwrap().filter.as_ref().unwrap().include,
             "live"
         );
-        assert!(back.get(1).unwrap().inherits_filter());
-    }
-
-    /// D32: the source bar's filter is the default for a card that has none of
-    /// its own, and a card with its own uses only its own.
-    #[test]
-    fn a_card_without_a_filter_inherits_the_run_wide_one() {
-        let mut stack = stack_of(2);
-        stack.get_mut(1).unwrap().filter = Some(FilterForm {
-            include: "mine".into(),
-            ..Default::default()
-        });
-
-        let inherited = FilterForm {
-            include: "global".into(),
-            ..Default::default()
-        };
-
-        let borrowed = stack.get(0).unwrap().runtime_config(Some(&inherited));
-        assert_eq!(
-            borrowed.filter.unwrap().include,
-            Some(MatchSpec::Substring("global".into()))
-        );
-
-        let own = stack.get(1).unwrap().runtime_config(Some(&inherited));
-        assert_eq!(
-            own.filter.unwrap().include,
-            Some(MatchSpec::Substring("mine".into()))
-        );
-
-        // And what a preset stores is the card's own, never the inherited one.
-        assert_eq!(stack.to_steps()[0].1.filter, None);
-        assert_eq!(
-            stack.to_steps()[1].1.filter,
-            Some(IncludeFilter::new().including(MatchSpec::Substring("mine".into())))
-        );
+        assert!(back.get(1).unwrap().filter.is_none());
     }
 
     /// Order is meaning: the same two cards the other way round give a
@@ -410,7 +351,7 @@ mod tests {
 
         let entry = ren_core::FileEntry::synthetic("/music/a_b.txt");
         let run = |stack: &CardStack| {
-            let pipeline = stack.to_pipeline(None, &RunSettings::default(), &Answers::default());
+            let pipeline = stack.to_pipeline(&RunSettings::default(), &Answers::default());
             ren_core::evaluate_all(std::slice::from_ref(&entry), &pipeline)[0]
                 .clone()
                 .unwrap()
@@ -433,7 +374,7 @@ mod tests {
 
         assert_eq!(stack.to_steps().len(), 1, "kept, so it can be re-enabled");
         let entry = ren_core::FileEntry::synthetic("/music/my_song.mp3");
-        let pipeline = stack.to_pipeline(None, &RunSettings::default(), &Answers::default());
+        let pipeline = stack.to_pipeline(&RunSettings::default(), &Answers::default());
         let out = ren_core::evaluate_all(std::slice::from_ref(&entry), &pipeline);
         assert_eq!(out[0].as_ref().unwrap().name, "my_song.mp3");
     }

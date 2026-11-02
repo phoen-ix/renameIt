@@ -115,7 +115,12 @@ impl Default for Sort {
 pub struct SessionSettings {
     pub mode: SourceMode,
     pub dir: PathBuf,
+    /// The Filter box (P121): what is listed. Its ▾ extras follow.
     pub pattern: String,
+    pub filter_exclude: String,
+    pub filter_regex: bool,
+    pub filter_whole_path: bool,
+    pub filter_case: bool,
     pub files: bool,
     pub folders: bool,
     pub subfolders: bool,
@@ -146,6 +151,46 @@ pub struct SessionSettings {
     /// A thin border around each thumbnail, so a picture with a white edge
     /// does not dissolve into the background.
     pub thumb_border: bool,
+    /// Folders above files in every sort, either direction (P120). On by
+    /// default, as in Explorer.
+    pub folders_first: bool,
+    /// Digits in a name compare by value — `file2` before `file10` — as in
+    /// Explorer (P120).
+    pub natural_sort: bool,
+}
+
+/// How a name sorts (P120): lowercased, and with `natural` its runs of digits
+/// compare by value. Explorer puts digits before letters, so `Num < Text`.
+/// A number compares by its length without leading zeros and then by its
+/// digits, which orders any length without parsing it into an integer.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Chunk {
+    Num(usize, String),
+    Text(String),
+}
+
+fn name_key(name: &str, natural: bool) -> Vec<Chunk> {
+    let lower = name.to_lowercase();
+    if !natural {
+        return vec![Chunk::Text(lower)];
+    }
+    let mut chunks = Vec::new();
+    let mut rest = lower.as_str();
+    while let Some(first) = rest.chars().next() {
+        let digit = first.is_ascii_digit();
+        let end = rest
+            .find(|c: char| c.is_ascii_digit() != digit)
+            .unwrap_or(rest.len());
+        let (run, tail) = rest.split_at(end);
+        chunks.push(if digit {
+            let value = run.trim_start_matches('0');
+            Chunk::Num(value.len(), value.to_owned())
+        } else {
+            Chunk::Text(run.to_owned())
+        });
+        rest = tail;
+    }
+    chunks
 }
 
 /// Whether the listing is drawn as rows or as tiles.
@@ -184,6 +229,10 @@ impl Default for SessionSettings {
             mode: SourceMode::default(),
             dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             pattern: String::new(),
+            filter_exclude: String::new(),
+            filter_regex: false,
+            filter_whole_path: false,
+            filter_case: false,
             files: true,
             folders: false,
             subfolders: false,
@@ -197,6 +246,8 @@ impl Default for SessionSettings {
             view: ViewMode::default(),
             thumb_size: THUMB_DEFAULT,
             thumb_border: false,
+            folders_first: true,
+            natural_sort: true,
         }
     }
 }
@@ -468,17 +519,27 @@ impl Session {
     }
 
     pub fn list_options(&self) -> ListOptions {
-        ListOptions {
-            files: self.settings.files,
-            folders: self.settings.folders,
-            subfolders: self.settings.subfolders,
-            hidden: self.settings.show_hidden,
-            system: self.settings.show_system,
-            read_only: self.settings.show_read_only,
-            pattern_applies: self.settings.pattern_applies,
+        let f = &self.settings;
+        let options = ListOptions {
+            files: f.files,
+            folders: f.folders,
+            subfolders: f.subfolders,
+            hidden: f.show_hidden,
+            system: f.show_system,
+            read_only: f.show_read_only,
+            pattern_applies: f.pattern_applies,
             ..Default::default()
-        }
-        .with_pattern(&self.settings.pattern)
+        };
+        // The Filter box and its ▾ extras (P121).
+        let options = if f.filter_regex {
+            options.with_regex_pattern(&f.pattern)
+        } else {
+            options.with_pattern(&f.pattern)
+        };
+        options
+            .excluding(&f.filter_exclude, f.filter_regex)
+            .testing_whole_path(f.filter_whole_path)
+            .matching_case(f.filter_case)
     }
 
     /// What the listing should be built from right now.
@@ -744,15 +805,16 @@ impl Session {
             .iter()
             .map(|item| (item.source.as_path(), item.new_name.as_str()))
             .collect();
-        let keys: Vec<String> = self
+        let natural = self.settings.natural_sort;
+        let keys: Vec<Vec<Chunk>> = self
             .entries
             .iter()
             .map(|e| {
-                new_names
+                let name = new_names
                     .get(e.path.as_path())
                     .copied()
-                    .unwrap_or(&e.file_name)
-                    .to_lowercase()
+                    .unwrap_or(&e.file_name);
+                name_key(name, natural)
             })
             .collect();
 
@@ -766,6 +828,7 @@ impl Session {
             }
             .then(a.cmp(&b))
         });
+        self.folders_first(&mut order);
 
         self.apply_order(&order);
         self.settings.sort.manual = true;
@@ -838,12 +901,13 @@ impl Session {
         // order vector is exactly `entries.reverse()`, stability included.
         let mut order: Vec<usize> = (0..self.entries.len()).collect();
         let entries = &self.entries;
+        let natural = self.settings.natural_sort;
         match sort.column {
             // `NewName` only ever arrives here from a settings file written
             // before it stopped being a sort mode (D119). Reading it as Name is
             // what that setting always actually did.
             SortColumn::Name | SortColumn::NewName => {
-                order.sort_by_cached_key(|&i| entries[i].file_name.to_lowercase());
+                order.sort_by_cached_key(|&i| name_key(&entries[i].file_name, natural));
             }
             SortColumn::Size => order.sort_by_key(|&i| entries[i].size),
             SortColumn::Modified => order.sort_by_key(|&i| entries[i].modified),
@@ -852,8 +916,9 @@ impl Session {
             // user means by "sorted by extension".
             // A folder has no extension (`FileEntry::split`), so `2019.06`
             // sorts with the folders rather than among the `.06` files.
-            SortColumn::Extension => order
-                .sort_by_cached_key(|&i| entries[i].split().1.unwrap_or_default().to_lowercase()),
+            SortColumn::Extension => order.sort_by_cached_key(|&i| {
+                name_key(entries[i].split().1.unwrap_or_default(), natural)
+            }),
             // By folder, then by name inside it, or the rows of one folder
             // arrive in whatever order the walk found them.
             SortColumn::Folder => order.sort_by_cached_key(|&i| {
@@ -861,16 +926,25 @@ impl Session {
                     entries[i]
                         .path
                         .parent()
-                        .map(|p| p.to_string_lossy().to_lowercase())
+                        .map(|p| name_key(&p.to_string_lossy(), natural))
                         .unwrap_or_default(),
-                    entries[i].file_name.to_lowercase(),
+                    name_key(&entries[i].file_name, natural),
                 )
             }),
         }
         if !sort.ascending {
             order.reverse();
         }
+        self.folders_first(&mut order);
         self.apply_order(&order);
+    }
+
+    /// Folders above files, each group keeping the order it had (P120).
+    /// After any reverse, so a descending sort keeps folders on top too.
+    fn folders_first(&self, order: &mut [usize]) {
+        if self.settings.folders_first {
+            order.sort_by_key(|&i| !self.entries[i].is_dir);
+        }
     }
 
     /// Which rows the run applies to: the selection, or every row when
@@ -1033,6 +1107,102 @@ mod tests {
             .iter()
             .map(|e| e.file_name.clone())
             .collect()
+    }
+
+    /// Folders and files in one folder, for the P120 sorts.
+    fn mixed() -> (TempDir, Session) {
+        let dir = TempDir::new().unwrap();
+        for name in ["file10.txt", "file2.txt", "b.txt"] {
+            std::fs::write(dir.path().join(name), b"xx").unwrap();
+        }
+        for name in ["zeta", "alpha", "dir10", "dir9"] {
+            std::fs::create_dir(dir.path().join(name)).unwrap();
+        }
+        let mut session = Session {
+            settings: SessionSettings {
+                dir: dir.path().to_path_buf(),
+                folders: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        session.refresh_now();
+        (dir, session)
+    }
+
+    /// Explorer's order by default: folders first, numbers by value (P120).
+    #[test]
+    fn folders_come_first_and_numbers_sort_by_value() {
+        let (_dir, mut session) = mixed();
+        assert_eq!(
+            names_of(&session),
+            [
+                "alpha",
+                "dir9",
+                "dir10",
+                "zeta",
+                "b.txt",
+                "file2.txt",
+                "file10.txt"
+            ]
+        );
+
+        // Descending flips each group, and folders stay on top.
+        session.set_sort(SortColumn::Name);
+        assert!(!session.settings.sort.ascending);
+        assert_eq!(
+            names_of(&session),
+            [
+                "zeta",
+                "dir10",
+                "dir9",
+                "alpha",
+                "file10.txt",
+                "file2.txt",
+                "b.txt"
+            ]
+        );
+
+        // Any column: a folder has no size worth sorting among the files.
+        session.set_sort(SortColumn::Size);
+        let first_file = names_of(&session)
+            .iter()
+            .position(|n| n.contains('.'))
+            .unwrap();
+        assert!(session.entries()[..first_file].iter().all(|e| e.is_dir));
+        assert!(session.entries()[first_file..].iter().all(|e| !e.is_dir));
+    }
+
+    /// Both off is the order before P120: one list, character by character.
+    #[test]
+    fn both_switches_off_give_the_plain_order() {
+        let (_dir, mut session) = mixed();
+        session.settings.folders_first = false;
+        session.settings.natural_sort = false;
+        session.sort_entries();
+        assert_eq!(
+            names_of(&session),
+            [
+                "alpha",
+                "b.txt",
+                "dir10",
+                "dir9",
+                "file10.txt",
+                "file2.txt",
+                "zeta"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_number_compares_by_value_whatever_its_length() {
+        let key = |s| name_key(s, true);
+        assert!(key("a2") < key("a10"));
+        assert!(key("a9") < key("a0010"));
+        assert_eq!(key("a01"), key("a1"), "leading zeros do not count");
+        assert!(key("a99999999999999999999999") < key("a100000000000000000000000"));
+        assert!(key("1a") < key("aa"), "digits before letters");
+        assert!(key("B2") < key("b10"), "case folded");
     }
 
     /// The header used to sort by the *old* name, which is the one column the

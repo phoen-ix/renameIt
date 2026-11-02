@@ -41,7 +41,7 @@ Roles: none. This is a single-user desktop app and a CLI, with no accounts.
 |---|---|
 | All 18 operation editors, added by button and by Ctrl+K and picked from the card's drop-down | ✅ e2e › sweep_every_operation_in_the_drop_down_opens_its_editor |
 | All 14 Settings pages, from the rail | ✅ e2e › sweep_every_settings_page_is_reachable_from_the_rail |
-| Settings ▸ About, presets drawer, Include filter, row menu, Grid/List | ✅ e2e › sweep_every_window_and_popover_opens_and_closes |
+| Settings ▸ About, presets drawer, Filter ▾, row menu, Grid/List | ✅ e2e › sweep_every_window_and_popover_opens_and_closes |
 
 ## Source bar (`panels/source_bar.rs`)
 
@@ -54,8 +54,8 @@ Roles: none. This is a single-user desktop app and a CLI, with no accounts.
 | 5 | Pattern box | ✅ gui › the_pattern_box_is_named_by_its_label |
 | 6 | ⟳ Refresh button | ✅ gui › the_refresh_button_reads_the_files_again_as_f9_does |
 | 7 | Include chips Files / Folders / Subfolders | ✅ e2e › the_include_chips_decide_what_is_listed |
-| 8 | Include filter popover (include, typed) | ✅ gui › the_include_filter_popover_takes_a_click_and_then_typing |
-| 9 | Include filter: what it narrows | ✅ gui › the_include_filter_narrows_which_files_change |
+| 8 | Filter ▾ popover (exclude, typed) (P121) | ✅ gui › the_filter_popover_takes_a_click_and_then_typing |
+| 9 | Filter box: what it narrows (P121) | ✅ gui › the_filter_box_narrows_the_list_and_so_the_run; `listing.rs` › the_filter_box_takes_an_exclude_a_regex_and_case, the_whole_path_reaches_the_folder_names, the_exclude_respects_what_the_filter_applies_to |
 | 10 | List ⇄ Grid switch | ✅ e2e › sweep_every_window_and_popover_opens_and_closes |
 | 11 | ⚙ ▸ Settings | ✅ e2e › the_gear_opens_settings_and_about_is_its_last_page, sweep_every_settings_page_is_reachable_from_the_rail |
 | 12 | Settings ▸ About, the last page | ✅ gui › about_opens_and_reports_what_the_session_did |
@@ -394,3 +394,8 @@ the rows in the sections above. F1 is deliberately unbound (P64).
 | 260 | Drag across rows selects them; moving back deselects; Ctrl-drag adds (P117) | ✅ e2e › dragging_over_rows_selects_them_and_moving_back_deselects, a_ctrl_drag_adds_to_the_selection |
 | 261 | Right-click menu: choose its entries; the last stays (P119) | ✅ `panels/settings.rs` › the_entries_are_chosen_one_by_one_and_the_last_stays, `app.rs` › the shell_menu test |
 | 262 | Right-click menu: one entry goes straight on the menu; a place with none gets no item (P119) | ✅ `shell/plan.rs` › one_entry_needs_no_submenu_and_a_place_it_does_not_apply_gets_none, each_place_is_shaped_by_what_applies_there |
+| 263 | Folders above files, numbers by value, both switchable (P120) | ✅ `viewmodel/session.rs` › folders_come_first_and_numbers_sort_by_value, both_switches_off_give_the_plain_order, a_number_compares_by_value_whatever_its_length |
+| 264 | Explorer: Open in Free Select hoisted for several items; same-menu option (P122) | ✅ `shell/plan.rs` › a_multi_selection_gets_only_open_in_free_select, nothing_is_hoisted_without_the_entry_or_the_setting, free_select_alone_is_just_the_hoisted_verb; `panels/settings.rs` › the_multi_selection_choice_writes_the_menu |
+| 265 | `--free-select`: Free Select even for one folder; folder or its files (P122) | ✅ `launch.rs` › free_select_is_understood; `app.rs` › open_in_free_select_takes_a_folder_as_the_setting_says |
+| 266 | Simulation result window: rows, chips, search, full paths, Copy list (P123) | ✅ gui › a_simulation_opens_a_window_with_every_change, a_simulated_date_change_shows_before_and_after; e2e › the_run_controls_simulate_rename_fold_the_log_and_undo |
+| 267 | Simulation: Rename now runs for real; a real run opens no window (P123) | ✅ gui › rename_now_from_the_simulation_renames_for_real, a_real_run_opens_no_simulation_window |

@@ -57,7 +57,7 @@ impl Fixed {
     pub fn label(self) -> &'static str {
         match self {
             Self::StartHere => "Start from this folder",
-            Self::LoadSelection => "Start and load selected files",
+            Self::LoadSelection => "Open in Free Select",
             Self::CopyNames => "Copy filenames to clipboard",
         }
     }
@@ -84,7 +84,7 @@ impl Fixed {
     fn args(self) -> &'static str {
         match self {
             Self::StartHere => " --start-in",
-            Self::LoadSelection => "",
+            Self::LoadSelection => " --free-select",
             Self::CopyNames => " --copy-names",
         }
     }
@@ -96,6 +96,13 @@ pub struct Menu<'a> {
     /// In menu order.
     pub fixed: Vec<Fixed>,
     pub presets: Vec<MenuPreset<'a>>,
+    /// P122: *Open in Free Select* gets a verb of its own beside the RenameIt
+    /// menu, and the RenameIt menu is shown for a single item only — so a
+    /// multi-selection's right-click offers just that one entry. Windows can
+    /// hide a verb for several items (`MultiSelectModel=Single`) but cannot
+    /// show one only for several, which is why the hoisted verb is there for
+    /// one item too, and the submenu leaves the entry out.
+    pub hoist_free_select: bool,
 }
 
 impl<'a> Menu<'a> {
@@ -104,6 +111,7 @@ impl<'a> Menu<'a> {
         Self {
             fixed: Fixed::ALL.to_vec(),
             presets,
+            hoist_free_select: true,
         }
     }
 }
@@ -137,6 +145,9 @@ pub enum Step {
 
 /// The verb key name under each class, and the only key name we own.
 pub const VERB: &str = "RenameIt";
+
+/// The hoisted *Open in Free Select* verb's key (P122), on files and drives.
+pub const VERB_FREE_SELECT: &str = "RenameIt.FreeSelect";
 
 /// A `DWORD` on each verb root saying which layout wrote it.
 ///
@@ -257,15 +268,27 @@ impl ShellPlan {
             .iter()
             .map(|class| format!(r"{CLASSES_ROOT}\{}\{VERB}", class.shell_path))
             .collect();
+        keys.extend(Self::hoisted_roots());
         keys.push(format!(r"{CLASSES_ROOT}\{ITEMS_CONTAINER}"));
         keys.push(format!(r"{CLASSES_ROOT}\{BACKGROUND_CONTAINER}"));
         keys
     }
 
+    /// Where the hoisted *Open in Free Select* verb lives, one per selection
+    /// class, in the order of [`Self::verb_roots`] (P122).
+    pub fn hoisted_roots() -> Vec<String> {
+        CLASSES
+            .iter()
+            .filter(|class| class.has_selection)
+            .map(|class| format!(r"{CLASSES_ROOT}\{}\{VERB_FREE_SELECT}", class.shell_path))
+            .collect()
+    }
+
     /// The keys whose existence means "the menu is installed": the roots on
-    /// files and drives. Every entry applies to a selection, so these are
-    /// written whenever anything is; the background's root is left out when
-    /// nothing chosen applies there (P119).
+    /// files and drives — this or, when only *Open in Free Select* is left and
+    /// hoisted, [`Self::hoisted_roots`] (P122). Every entry applies to a
+    /// selection, so one of the two is written whenever anything is; the
+    /// background's root is left out when nothing chosen applies there (P119).
     pub fn verb_roots() -> Vec<String> {
         CLASSES
             .iter()
@@ -302,6 +325,7 @@ impl ShellPlan {
         let mut steps = Self::uninstall().steps;
 
         let presets = &menu.presets[..menu.presets.len().min(MAX_PRESETS)];
+        let hoist = menu.hoist_free_select && menu.fixed.contains(&Fixed::LoadSelection);
 
         // What each container ended up as: nothing, one entry hung straight
         // on the verb root (P119), or a cascade.
@@ -321,6 +345,7 @@ impl ShellPlan {
                 .fixed
                 .iter()
                 .filter(|f| selection || !f.needs_selection())
+                .filter(|f| !(hoist && **f == Fixed::LoadSelection))
                 .map(|f| Item {
                     key: f.key(),
                     label: f.label().to_owned(),
@@ -392,7 +417,10 @@ impl ShellPlan {
                 }
             }
             if class.has_selection {
-                steps.push(Step::sz(&key, "MultiSelectModel", "Player"));
+                // Hoisted, the RenameIt menu is for one item; several get only
+                // the Free Select verb below (P122).
+                let model = if hoist { "Single" } else { "Player" };
+                steps.push(Step::sz(&key, "MultiSelectModel", model));
             }
             // Insurance: the shell falls back to the first `shell` subkey when
             // a class has no default verb, and ours becoming what a
@@ -408,6 +436,32 @@ impl ShellPlan {
                 name: VERSION_VALUE.to_owned(),
                 value: Value::Dword(MENU_VERSION),
             });
+        }
+
+        if hoist {
+            for key in Self::hoisted_roots() {
+                steps.push(Step::sz(
+                    &key,
+                    "MUIVerb",
+                    &format!("{MENU_LABEL}: {}", Fixed::LoadSelection.label()),
+                ));
+                steps.push(Step::sz(&key, "Icon", &icon));
+                steps.push(Step::sz(&key, "MultiSelectModel", "Player"));
+                steps.push(Step::sz(&key, "NeverDefault", ""));
+                steps.push(Step::sz(
+                    &format!(r"{key}\command"),
+                    "",
+                    &format!(
+                        "\"{exe}\" --from-shell{} {SELECTION_TOKEN}",
+                        Fixed::LoadSelection.args()
+                    ),
+                ));
+                steps.push(Step::Set {
+                    key,
+                    name: VERSION_VALUE.to_owned(),
+                    value: Value::Dword(MENU_VERSION),
+                });
+            }
         }
 
         Self { steps }
@@ -613,7 +667,16 @@ mod tests {
             .iter()
             .map(|(name, file)| MenuPreset { name, file })
             .collect();
-        ShellPlan::build(&exe(), &Menu::everything(presets))
+        // Not hoisted (P122), so the cascade holds all three fixed items and
+        // the tests below can speak about one store; the hoisted layout has
+        // tests of its own.
+        ShellPlan::build(
+            &exe(),
+            &Menu {
+                hoist_free_select: false,
+                ..Menu::everything(presets)
+            },
+        )
     }
 
     /// The one input the snapshot is taken from.
@@ -769,18 +832,19 @@ mod tests {
             &Menu {
                 fixed: vec![Fixed::LoadSelection],
                 presets: vec![],
+                hoist_free_select: false,
             },
         );
         let root = r"AllFilesystemObjects\shell\RenameIt";
         assert_eq!(
             value(&plan, root, "MUIVerb"),
-            Some(&Value::Sz("RenameIt: Start and load selected files".into()))
+            Some(&Value::Sz("RenameIt: Open in Free Select".into()))
         );
         assert_eq!(value(&plan, root, "ExtendedSubCommandsKey"), None);
         assert_eq!(
             value(&plan, &format!(r"{root}\command"), ""),
             Some(&Value::Sz(format!(
-                "\"{}\" --from-shell %1",
+                "\"{}\" --from-shell --free-select %1",
                 exe().display()
             )))
         );
@@ -806,6 +870,7 @@ mod tests {
             &Menu {
                 fixed: vec![Fixed::StartHere, Fixed::CopyNames],
                 presets: vec![],
+                hoist_free_select: true,
             },
         );
         assert_eq!(
@@ -825,6 +890,88 @@ mod tests {
             ["Start from this folder", "Copy filenames to clipboard"],
             "the submenu holds the two chosen, and no separator is owed"
         );
+    }
+
+    /// P122, the default: several items get only *Open in Free Select*. The
+    /// RenameIt menu is for one item, and leaves the entry out.
+    #[test]
+    fn a_multi_selection_gets_only_open_in_free_select() {
+        let plan = ShellPlan::build(&exe(), &Menu::everything(vec![]));
+        let files = r"AllFilesystemObjects\shell\RenameIt";
+        let hoisted = r"AllFilesystemObjects\shell\RenameIt.FreeSelect";
+        assert_eq!(
+            value(&plan, files, "MultiSelectModel"),
+            Some(&Value::Sz("Single".into()))
+        );
+        assert_eq!(
+            value(&plan, hoisted, "MultiSelectModel"),
+            Some(&Value::Sz("Player".into()))
+        );
+        assert_eq!(
+            value(&plan, hoisted, "MUIVerb"),
+            Some(&Value::Sz("RenameIt: Open in Free Select".into()))
+        );
+        assert!(value(&plan, hoisted, VERSION_VALUE).is_some());
+        assert!(value(&plan, r"Drive\shell\RenameIt.FreeSelect", "MUIVerb").is_some());
+        assert!(
+            !plan.menu_labels().contains(&"Open in Free Select"),
+            "not twice: the submenu leaves it out"
+        );
+        assert!(ShellPlan::owned_keys().iter().any(|k| k.ends_with(hoisted)));
+    }
+
+    /// Without the entry there is nothing to hoist, and without hoisting the
+    /// menu is what it was before P122.
+    #[test]
+    fn nothing_is_hoisted_without_the_entry_or_the_setting() {
+        for menu in [
+            Menu {
+                fixed: vec![Fixed::StartHere, Fixed::CopyNames],
+                ..Menu::everything(vec![])
+            },
+            Menu {
+                hoist_free_select: false,
+                ..Menu::everything(vec![])
+            },
+        ] {
+            let plan = ShellPlan::build(&exe(), &menu);
+            assert!(
+                sets(&plan)
+                    .iter()
+                    .all(|(key, _, _)| !key.contains("RenameIt.FreeSelect")),
+                "{menu:?}"
+            );
+            assert_eq!(
+                value(
+                    &plan,
+                    r"AllFilesystemObjects\shell\RenameIt",
+                    "MultiSelectModel"
+                ),
+                Some(&Value::Sz("Player".into()))
+            );
+        }
+    }
+
+    /// Only *Open in Free Select* ticked and hoisted: the hoisted verb is the
+    /// whole menu, and still reads as installed.
+    #[test]
+    fn free_select_alone_is_just_the_hoisted_verb() {
+        let plan = ShellPlan::build(
+            &exe(),
+            &Menu {
+                fixed: vec![Fixed::LoadSelection],
+                presets: vec![],
+                hoist_free_select: true,
+            },
+        );
+        for (key, _, _) in sets(&plan) {
+            assert!(
+                key.ends_with("RenameIt.FreeSelect")
+                    || key.ends_with(r"RenameIt.FreeSelect\command"),
+                "{key}"
+            );
+        }
+        assert!(value(&plan, r"Drive\shell\RenameIt.FreeSelect", VERSION_VALUE).is_some());
     }
 
     /// A fresh install has presets, but a user who deleted them all still gets
@@ -969,7 +1116,7 @@ mod tests {
         assert_eq!(
             labels
                 .iter()
-                .filter(|l| **l == "Start and load selected files")
+                .filter(|l| **l == "Open in Free Select")
                 .count(),
             1,
             "the item container only"
@@ -1126,6 +1273,10 @@ mod tests {
 
 [-HKEY_CURRENT_USER\Software\Classes\Directory\Background\shell\RenameIt]
 
+[-HKEY_CURRENT_USER\Software\Classes\AllFilesystemObjects\shell\RenameIt.FreeSelect]
+
+[-HKEY_CURRENT_USER\Software\Classes\Drive\shell\RenameIt.FreeSelect]
+
 [-HKEY_CURRENT_USER\Software\Classes\RenameIt.ContextMenu]
 
 [-HKEY_CURRENT_USER\Software\Classes\RenameIt.ContextMenu.Background]
@@ -1137,14 +1288,6 @@ mod tests {
 
 [HKEY_CURRENT_USER\Software\Classes\RenameIt.ContextMenu\shell\010_start-here\command]
 @="\"C:\\Apps\\RenameIt\\renameit.exe\" --from-shell --start-in %1"
-
-[HKEY_CURRENT_USER\Software\Classes\RenameIt.ContextMenu\shell\020_load-selection]
-"MUIVerb"="Start and load selected files"
-"Icon"="\"C:\\Apps\\RenameIt\\renameit.exe\",0"
-"MultiSelectModel"="Player"
-
-[HKEY_CURRENT_USER\Software\Classes\RenameIt.ContextMenu\shell\020_load-selection\command]
-@="\"C:\\Apps\\RenameIt\\renameit.exe\" --from-shell %1"
 
 [HKEY_CURRENT_USER\Software\Classes\RenameIt.ContextMenu\shell\030_copy-names]
 "MUIVerb"="Copy filenames to clipboard"
@@ -1197,7 +1340,7 @@ mod tests {
 "MUIVerb"="RenameIt"
 "Icon"="\"C:\\Apps\\RenameIt\\renameit.exe\",0"
 "ExtendedSubCommandsKey"="RenameIt.ContextMenu"
-"MultiSelectModel"="Player"
+"MultiSelectModel"="Single"
 "NeverDefault"=""
 "RenameItMenuVersion"=dword:00000001
 
@@ -1205,7 +1348,7 @@ mod tests {
 "MUIVerb"="RenameIt"
 "Icon"="\"C:\\Apps\\RenameIt\\renameit.exe\",0"
 "ExtendedSubCommandsKey"="RenameIt.ContextMenu"
-"MultiSelectModel"="Player"
+"MultiSelectModel"="Single"
 "NeverDefault"=""
 "RenameItMenuVersion"=dword:00000001
 
@@ -1214,6 +1357,30 @@ mod tests {
 "Icon"="\"C:\\Apps\\RenameIt\\renameit.exe\",0"
 "ExtendedSubCommandsKey"="RenameIt.ContextMenu.Background"
 "NeverDefault"=""
+"RenameItMenuVersion"=dword:00000001
+
+[HKEY_CURRENT_USER\Software\Classes\AllFilesystemObjects\shell\RenameIt.FreeSelect]
+"MUIVerb"="RenameIt: Open in Free Select"
+"Icon"="\"C:\\Apps\\RenameIt\\renameit.exe\",0"
+"MultiSelectModel"="Player"
+"NeverDefault"=""
+
+[HKEY_CURRENT_USER\Software\Classes\AllFilesystemObjects\shell\RenameIt.FreeSelect\command]
+@="\"C:\\Apps\\RenameIt\\renameit.exe\" --from-shell --free-select %1"
+
+[HKEY_CURRENT_USER\Software\Classes\AllFilesystemObjects\shell\RenameIt.FreeSelect]
+"RenameItMenuVersion"=dword:00000001
+
+[HKEY_CURRENT_USER\Software\Classes\Drive\shell\RenameIt.FreeSelect]
+"MUIVerb"="RenameIt: Open in Free Select"
+"Icon"="\"C:\\Apps\\RenameIt\\renameit.exe\",0"
+"MultiSelectModel"="Player"
+"NeverDefault"=""
+
+[HKEY_CURRENT_USER\Software\Classes\Drive\shell\RenameIt.FreeSelect\command]
+@="\"C:\\Apps\\RenameIt\\renameit.exe\" --from-shell --free-select %1"
+
+[HKEY_CURRENT_USER\Software\Classes\Drive\shell\RenameIt.FreeSelect]
 "RenameItMenuVersion"=dword:00000001
 "#
         );

@@ -148,6 +148,10 @@ pub struct Defaults<'a> {
     pub context_menu: &'a mut Option<bool>,
     /// Entries the user took off that menu (P119).
     pub menu_hidden: &'a mut std::collections::BTreeSet<String>,
+    /// P122: several selected items get only *Open in Free Select*.
+    pub menu_multi_free_select: &'a mut bool,
+    /// P122: what a folder in that selection becomes.
+    pub free_select_folders: &'a mut crate::app::FolderIntake,
     /// The Updates page's.
     pub updates: &'a mut Updates,
     /// A run or an undo is out, so *Update* must wait: the installer cannot
@@ -347,7 +351,15 @@ fn page_ui(
         }
         Page::Startup => startup_ui(ui, defaults.startup),
         Page::Updates => updates_ui(ui, defaults.updates, defaults.platform, defaults.busy),
-        Page::Columns => display_ui(ui, defaults.columns, defaults.table_style, defaults.clicks),
+        Page::Columns => {
+            out.relist |= display_ui(
+                ui,
+                defaults.columns,
+                defaults.table_style,
+                defaults.clicks,
+                defaults.session,
+            );
+        }
         Page::Thumbnails => thumbnails_ui(ui, defaults.session),
         Page::FileSystem => out.relist |= file_system_ui(ui, defaults.session),
         Page::DefaultOp => default_op_ui(ui, defaults.default_op),
@@ -360,6 +372,8 @@ fn page_ui(
             defaults.presets,
             defaults.context_menu,
             defaults.menu_hidden,
+            defaults.menu_multi_free_select,
+            defaults.free_select_folders,
         ),
         Page::Storage => {
             out.reset = storage_ui(
@@ -706,12 +720,14 @@ fn casing_ui(ui: &mut egui::Ui, rules: &mut CasingRules) {
 
 /// The Display page: which columns the file table shows and in what order,
 /// the two row switches, and the thumbnails.
+/// Returns true when a sort switch changed, which only a fresh listing shows.
 fn display_ui(
     ui: &mut egui::Ui,
     columns: &mut Columns,
     style: &mut crate::viewmodel::TableStyle,
     clicks: &mut ClickActions,
-) {
+    session: &mut SessionSettings,
+) -> bool {
     ui.label(
         egui::RichText::new(
             "Columns in the file list. Drag a column edge in the table itself to resize it.",
@@ -786,6 +802,16 @@ fn display_ui(
     ui.add_space(6.0);
 
     ui.checkbox(&mut style.stripes, "Shade every other row");
+    // P120: Explorer's order by default.
+    let mut resort = ui
+        .checkbox(&mut session.folders_first, "Folders above files")
+        .changed();
+    resort |= ui
+        .checkbox(
+            &mut session.natural_sort,
+            "Numbers in names sort by value (2 before 10)",
+        )
+        .changed();
 
     // P115: a folder opens on a double-click and a slow second click renames,
     // as in Explorer. What is left to choose is what has no folder to open.
@@ -838,6 +864,7 @@ fn display_ui(
             });
             ui.end_row();
         });
+    resort
 }
 
 /// How big thumbnails are drawn, and whether they get a border.
@@ -1149,7 +1176,10 @@ fn shell_ui(
     presets: &[ren_core::PresetEntry],
     choice: &mut Option<bool>,
     hidden: &mut std::collections::BTreeSet<String>,
+    hoist: &mut bool,
+    folders: &mut crate::app::FolderIntake,
 ) {
+    use crate::app::FolderIntake;
     use ren_platform::shell::{Fixed, plan::MAX_PRESETS};
 
     let Some(installed) = platform.context_menu_installed() else {
@@ -1168,8 +1198,8 @@ fn shell_ui(
     // the next write that succeeds.
     let failure_id = ui.scope_id().with("shell_menu_failure");
     let mut failure: Option<String> = ui.data(|d| d.get_temp(failure_id));
-    let mut write = |want: bool, hidden: &std::collections::BTreeSet<String>| {
-        let menu = crate::app::shell_menu(presets, hidden);
+    let mut write = |want: bool, hidden: &std::collections::BTreeSet<String>, hoist: bool| {
+        let menu = crate::app::shell_menu(presets, hidden, hoist);
         failure = platform
             .set_context_menu(want, &menu)
             .err()
@@ -1188,7 +1218,7 @@ fn shell_ui(
         )
         .changed()
     {
-        write(want, hidden);
+        write(want, hidden, *hoist);
         *choice = Some(want);
     }
 
@@ -1228,9 +1258,32 @@ fn shell_ui(
                 changed = true;
             }
         }
+        // P122. Hoisting needs the entry it hoists.
+        ui.add_space(8.0);
+        ui.strong("Several items selected");
+        let free_select_on = !hidden.contains(Fixed::LoadSelection.id());
+        ui.add_enabled_ui(free_select_on, |ui| {
+            changed |= ui
+                .radio_value(hoist, true, "Show only \"Open in Free Select\"")
+                .on_hover_text(
+                    "Windows cannot show an entry only for several items, so with one \
+                     item selected it also sits beside the RenameIt menu.",
+                )
+                .changed();
+            changed |= ui
+                .radio_value(hoist, false, "Show the same menu as for one item")
+                .changed();
+        })
+        .response
+        .on_disabled_hover_text("Tick \"Open in Free Select\" above first");
         if changed {
-            write(true, hidden);
+            write(true, hidden, *hoist);
         }
+
+        ui.add_space(8.0);
+        ui.strong("A folder in the selection opens in Free Select as");
+        ui.radio_value(folders, FolderIntake::Itself, "The folder itself");
+        ui.radio_value(folders, FolderIntake::Contents, "The files inside it");
 
         let presets_on = presets
             .iter()
@@ -1293,6 +1346,7 @@ mod tests {
     struct LockedMenu {
         installed: bool,
         written: std::sync::Mutex<Vec<String>>,
+        hoisted: std::sync::Mutex<Option<bool>>,
     }
 
     impl ren_platform::Platform for LockedMenu {
@@ -1348,6 +1402,7 @@ mod tests {
                     platform: "Locked",
                 });
             }
+            *self.hoisted.lock().unwrap() = Some(menu.hoist_free_select);
             *self.written.lock().unwrap() = menu
                 .fixed
                 .iter()
@@ -1368,6 +1423,8 @@ mod tests {
                 &LockedMenu::default(),
                 &[],
                 &mut None,
+                &mut Default::default(),
+                &mut true,
                 &mut Default::default(),
             )
         });
@@ -1392,6 +1449,8 @@ mod tests {
                     &LockedMenu::default(),
                     &[],
                     choice,
+                    &mut Default::default(),
+                    &mut true,
                     &mut Default::default(),
                 )
             },
@@ -1421,14 +1480,22 @@ mod tests {
         }];
         let mut harness = egui_kittest::Harness::new_ui_state(
             |ui, hidden: &mut std::collections::BTreeSet<String>| {
-                shell_ui(ui, &platform, &presets, &mut None, hidden)
+                shell_ui(
+                    ui,
+                    &platform,
+                    &presets,
+                    &mut None,
+                    hidden,
+                    &mut true,
+                    &mut Default::default(),
+                )
             },
             Default::default(),
         );
         harness.run();
         for label in [
             "Copy filenames to clipboard",
-            "Start and load selected files",
+            "Open in Free Select",
             "Preset: Tidy",
         ] {
             harness.get_by_label(label).click();
@@ -1445,6 +1512,47 @@ mod tests {
         assert!(
             !harness.state().contains("start-here"),
             "the last entry stays"
+        );
+    }
+
+    /// P122: the multi-selection choice rewrites the menu, and needs the
+    /// entry it hoists.
+    #[test]
+    fn the_multi_selection_choice_writes_the_menu() {
+        let platform = LockedMenu {
+            installed: true,
+            ..Default::default()
+        };
+        let mut harness = egui_kittest::Harness::new_ui_state(
+            |ui, (hidden, hoist): &mut (std::collections::BTreeSet<String>, bool)| {
+                shell_ui(
+                    ui,
+                    &platform,
+                    &[],
+                    &mut None,
+                    hidden,
+                    hoist,
+                    &mut Default::default(),
+                )
+            },
+            (Default::default(), true),
+        );
+        harness.run();
+        harness
+            .get_by_label("Show the same menu as for one item")
+            .click();
+        harness.run();
+        assert!(!harness.state().1);
+        assert_eq!(*platform.hoisted.lock().unwrap(), Some(false));
+
+        harness.get_by_label("Open in Free Select").click();
+        harness.run();
+        harness.run();
+        assert!(
+            harness
+                .query_by_label("Show the same menu as for one item")
+                .is_some(),
+            "still shown, only disabled"
         );
     }
 }

@@ -55,6 +55,11 @@ struct Cli {
     #[arg(long)]
     from_shell: bool,
 
+    /// Open the paths in Free Select, even one folder (P122). Written by the
+    /// menu's *Open in Free Select*.
+    #[arg(long, hide = true)]
+    free_select: bool,
+
     /// Run by the uninstaller: remove the Explorer menu if it launches this
     /// copy, and exit with no window (D249).
     #[arg(long, hide = true, conflicts_with_all = ["paths", "preset", "start_in", "copy_names"])]
@@ -82,6 +87,8 @@ pub struct Launch {
     /// caveat — a drag of two hundred files must not be told about a limit that
     /// did not apply to it.
     pub from_shell: bool,
+    /// Free Select whatever the paths are, never the one-folder browse (P122).
+    pub free_select: bool,
     /// What could not be made sense of, for the status line.
     pub complaint: Option<String>,
     /// How many characters the OS handed this process, before anything split
@@ -114,6 +121,7 @@ pub fn parse(argv: impl IntoIterator<Item = OsString>) -> Launch {
             uninstall_cleanup: cli.uninstall_cleanup,
             install_menu: cli.install_menu,
             from_shell: cli.from_shell,
+            free_select: cli.free_select,
             complaint: None,
             command_line_chars: chars,
         },
@@ -228,6 +236,21 @@ mod tests {
         assert!(!launch.from_shell);
         assert!(launch.preset.is_none());
         assert!(launch.complaint.is_none());
+    }
+
+    /// P122's *Open in Free Select*.
+    #[test]
+    fn free_select_is_understood() {
+        let launch = parse(argv(&[
+            "--from-shell",
+            "--free-select",
+            "/tmp/a",
+            "/tmp/b.txt",
+        ]));
+        assert!(launch.from_shell && launch.free_select && !launch.start_in);
+        assert_eq!(launch.paths.len(), 2);
+        assert!(launch.complaint.is_none());
+        assert!(!parse(argv(&["/tmp/a"])).free_select);
     }
 
     #[test]
@@ -486,7 +509,8 @@ mod tests {
                     assert!(launch.start_in, "{line}");
                     assert!(!launch.copy_names && launch.preset.is_none(), "{line}");
                 }
-                "Start and load selected files" => {
+                "Open in Free Select" | "RenameIt: Open in Free Select" => {
+                    assert!(launch.free_select, "{line}");
                     assert!(!launch.start_in && !launch.copy_names, "{line}");
                     assert!(launch.preset.is_none(), "{line}");
                     assert_eq!(launch.paths.len(), 2, "the whole selection, {line}");
@@ -511,11 +535,12 @@ mod tests {
             checked += 1;
         }
 
-        // Three fixed items and two presets on the item side, one and two on
+        // Two fixed items and two presets in the item submenu plus *Open in
+        // Free Select* hoisted onto files and drives (P122), one and two on
         // the background side. Without this, an extractor that matched nothing
         // would pass in silence — which is the usual way a test like this
         // stops testing anything.
-        assert_eq!(checked, 8, "every command in the plan, and no fewer");
+        assert_eq!(checked, 9, "every command in the plan, and no fewer");
     }
     /// A drive root is the one path a menu line cannot carry through the C
     /// runtime's splitter: `"E:\"` reads as `E:"` with the quote still open,
@@ -559,8 +584,9 @@ mod tests {
             );
             checked += 1;
         }
-        // Three fixed items and the preset on the item side; one fixed item
-        // and the preset on the background side.
-        assert_eq!(checked, 6, "every command in the plan, and no fewer");
+        // Two fixed items and the preset in the submenu, *Open in Free Select*
+        // hoisted onto files and onto drives (P122); one fixed item and the
+        // preset on the background side.
+        assert_eq!(checked, 7, "every command in the plan, and no fewer");
     }
 }

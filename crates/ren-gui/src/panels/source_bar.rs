@@ -7,7 +7,6 @@ use std::path::PathBuf;
 
 use crate::dialogs::FileDialogs;
 use crate::viewmodel::{Session, SourceMode, ViewMode};
-use crate::widgets::filter_editor::FilterForm;
 
 /// The address box's widget id, so F6 can focus it from outside this panel.
 ///
@@ -27,8 +26,6 @@ pub struct SourceBarOutput {
     /// that kept its length and mtime went on showing its old tags, and the
     /// button that says "Refresh (F9)" confirmed the stale value.
     pub hard_refresh: bool,
-    /// The filter changed, so the preview must be recomputed.
-    pub refilter: bool,
     /// The ⚙ was pressed.
     pub open_settings: bool,
     /// "Open in Explorer": show the folder being browsed in the file manager.
@@ -39,7 +36,6 @@ impl SourceBarOutput {
     fn merge(&mut self, other: Self) {
         self.relist |= other.relist;
         self.hard_refresh |= other.hard_refresh;
-        self.refilter |= other.refilter;
         self.open_settings |= other.open_settings;
         self.reveal_dir |= other.reveal_dir;
     }
@@ -48,7 +44,6 @@ impl SourceBarOutput {
 pub fn ui(
     ui: &mut egui::Ui,
     session: &mut Session,
-    filter: &mut FilterForm,
     dialogs: &dyn FileDialogs,
     listing: bool,
     file_manager: &str,
@@ -107,25 +102,6 @@ pub fn ui(
                 out.relist = true;
             }
         }
-
-        ui.separator();
-
-        // The include filter, as a chip that opens a popover.
-        let chip = ui
-            .selectable_label(filter.is_active(), "Include filter…")
-            .on_hover_ui(|ui| {
-                ui.label(filter.summary());
-            });
-        // Open until a click lands outside it: egui's default closes a popup on
-        // any click, so clicking into the include box shut the popover before
-        // a key could reach it.
-        egui::Popup::from_toggle_button_response(&chip)
-            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-            .show(|ui| {
-                if filter.ui(ui) {
-                    out.refilter = true;
-                }
-            });
 
         if listing {
             // The walk is on its own thread and the rows on screen are the
@@ -219,18 +195,24 @@ fn browser_controls(
         out.relist = true;
     }
 
-    // Named by its label, or a screen reader announces a bare "edit text".
-    let label = ui.label("Pattern:");
+    // The one filter (P121): it hides what does not match. Named by its
+    // label, or a screen reader announces a bare "edit text".
+    let label = ui.label("Filter:");
     let pattern = ui
         .add(
             egui::TextEdit::singleline(&mut session.settings.pattern)
                 .desired_width(90.0)
                 .hint_text("*.*"),
         )
-        .labelled_by(label.id);
+        .labelled_by(label.id)
+        .on_hover_text(
+            "Show only names that match, e.g. *.jpg. Plain text matches anywhere in the name; \
+             * is any run of characters, ? exactly one.",
+        );
     if pattern.changed() {
         out.relist = true;
     }
+    out.relist |= filter_extras(ui, &mut session.settings);
 
     if ui.button("⟳").on_hover_text("Refresh (F9)").clicked() {
         out.hard_refresh = true;
@@ -280,4 +262,53 @@ fn free_select_controls(
     }
 
     out
+}
+
+/// The ▾ beside the Filter box: exclude, regex, whole path, case (P121).
+/// Lit while any of them is set, so a hidden exclude is never invisible.
+fn filter_extras(ui: &mut egui::Ui, settings: &mut crate::viewmodel::SessionSettings) -> bool {
+    let active = !settings.filter_exclude.trim().is_empty()
+        || settings.filter_regex
+        || settings.filter_whole_path
+        || settings.filter_case;
+    let toggle = ui
+        .add(egui::Button::selectable(active, "▾"))
+        .on_hover_text("Exclude, regular expression, whole path, case");
+    // The glyph is not a name (P92).
+    toggle.widget_info(|| {
+        egui::WidgetInfo::selected(egui::Role::Button, true, active, "Filter options")
+    });
+    let mut changed = false;
+    // Open until a click lands outside it, so a click into the Exclude box
+    // does not shut it before a key arrives.
+    egui::Popup::from_toggle_button_response(&toggle)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            ui.horizontal(|ui| {
+                let label = ui.label("Exclude:");
+                changed |= ui
+                    .add(
+                        egui::TextEdit::singleline(&mut settings.filter_exclude)
+                            .desired_width(140.0)
+                            .hint_text("*_old*"),
+                    )
+                    .labelled_by(label.id)
+                    .changed();
+            });
+            ui.horizontal(|ui| {
+                changed |= ui
+                    .radio_value(&mut settings.filter_regex, false, "Wildcards")
+                    .changed();
+                changed |= ui
+                    .radio_value(&mut settings.filter_regex, true, "Regular expression")
+                    .changed();
+            });
+            changed |= ui
+                .checkbox(&mut settings.filter_whole_path, "Test the whole path")
+                .changed();
+            changed |= ui
+                .checkbox(&mut settings.filter_case, "Match case")
+                .changed();
+        });
+    changed
 }

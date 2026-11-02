@@ -178,16 +178,16 @@ refused. Folders, drives and backgrounds are unaffected and stay either way.
 
 | # | Do this | Expect |
 |---|---|---|
-| 1 | Settings ▸ Right-click menu, tick the box, then right-click a file, a folder, and a **mixed** selection of one of each | A **RenameIt** submenu with the app's icon: *Start from this folder*, *Start and load selected files*, *Copy filenames to clipboard*, a separator, then one item per preset in the order the drawer lists them. The mixed selection shows the same menu — that is what `AllFilesystemObjects` is for |
+| 1 | Settings ▸ Right-click menu, tick the box, set *Several items selected* to *the same menu* (P122), then right-click a file, a folder, and a **mixed** selection of one of each | A **RenameIt** submenu with the app's icon: *Start from this folder*, *Open in Free Select*, *Copy filenames to clipboard*, a separator, then one item per preset in the order the drawer lists them. The mixed selection shows the same menu — that is what `AllFilesystemObjects` is for |
 | 2 | Right-click the **empty space** inside a folder, and a **drive** in This PC | The background menu has *Start from this folder* and the presets, and **not** the two selection items. The drive has the full menu |
-| 3 | **Select three files, choose *Start and load selected files*** | **One** window, listing all three. If it is three windows, stop and apply **P82**: the file tier is withdrawn |
+| 3 | **Select three files, choose *Open in Free Select*** | **One** window, listing all three. If it is three windows, stop and apply **P82**: the file tier is withdrawn |
 | 4 | Select two files whose names contain spaces and use a preset item | Both arrive, unsplit — this is the bare `%1` under `Player`, the one formulation that cannot be safe under both readings of an undocumented behaviour |
 | 5 | Save a preset called `Rock & Roll`, then open the menu | It reads *Rock & Roll*, with no underline and no missing character. Delete it and open the menu again without re-ticking anything: the item is gone |
 | 6 | Move the program to another folder and start it once, then use the entry | It launches the *new* path. The startup rewrite is what retires the old "tick the box again" instruction — confirm it needed nothing from the user |
 | 7 | Untick the box, and check `HKCU\Software\Classes` in `regedit` | `AllFilesystemObjects\shell\RenameIt`, `Drive\shell\RenameIt`, `Directory\Background\shell\RenameIt`, `RenameIt.ContextMenu` and `RenameIt.ContextMenu.Background` are all gone. Nothing needed an administrator either way |
 | 8 | On **Windows 11**: right-click a file, then Shift+F10 | The entry is under *"Show more options"* on the short menu, and directly on the long one. This is what the Settings page warns about |
 | 9 | Select ~30, then ~90, then ~150 files and open the menu each time | Note where the entry stops appearing. Windows hides it rather than shortening the selection — record the number in this file, because it is the only measurement of the 2000-character cap we will ever have |
-| 10 | Select enough files to get near that number and use *Start and load selected files* | The banner appears, gives a character count, and *List the whole folder* relists the folder. Then select three files and confirm **no** banner |
+| 10 | Select enough files to get near that number and use *Open in Free Select* | The banner appears, gives a character count, and *List the whole folder* relists the folder. Then select three files and confirm **no** banner |
 | 11 | Use *Copy filenames to clipboard* on three files and paste into a text editor | Three names, one per line, sorted — no paths, and no window ever opened |
 | 12 | Extract the release zip to a stick, run it, save a preset, then run it from another machine | The preset is there. `RenameIt-data` sits beside the executable and nothing was written to `%APPDATA%` |
 | 13 | Extract the same zip into `C:\Program Files\` and run it | It starts, and Settings ▸ Where files are kept reports a **normal** install — the portable path is declined when the folder is not writable, rather than taken and then failing |
@@ -330,7 +330,7 @@ about the machine around the code.
 | 1 | Tag an MP3 that has a created date, the **Hidden** attribute and an alternate data stream (download one, so it carries `Zone.Identifier`), with Music Tagger | All three survive, the modified date is unchanged, and no `__renameit-tags-*` file is left beside it (D203, D217). CI's `replace_file_keeps_the_created_date_on_windows` covers the created date only |
 | 2 | The same on a **read-only** MP3 | Refused with *this file cannot be written*; the file is untouched and no copy is left |
 | 3 | `attrib +P` a file (OneDrive *Always keep on this device*), then Set Attributes → Hidden, then Undo | `attrib` still shows `P` after both (D215) |
-| 4 | Explorer menu on a **drive root** (`E:\`): *Start from this folder* on the drive's background, and *Start and load selected files* on a selection spanning two drives | The app opens on `E:\` and lists the selection — not on nothing (D211) |
+| 4 | Explorer menu on a **drive root** (`E:\`): *Start from this folder* on the drive's background, and *Open in Free Select* on a selection spanning two drives | The app opens on `E:\` and lists the selection — not on nothing (D211) |
 | 5 | A `.bat` beside some files containing `ren-cli /p "%~dp0" /r "Photo cleanup"` | It renames them: the switches after the quoted folder are kept (D211) |
 | 6 | In Windows PowerShell 5.1: `Get-ChildItem *.jpg \| % FullName > list.txt`, then `ren-cli /l list.txt` | The files are listed. The file is UTF-16 with a byte-order mark; `Set-Content` (ANSI) must work as well (D212) |
 | 7 | With **Narrator** and then **NVDA** running, Tab through a card, a file row and a ⌖ button | Each is read with its name, not as *button* or silence (D218) |
@@ -418,8 +418,22 @@ release and a person at the screen.
 | # | Do this | Expect |
 |---|---|---|
 | 1 | Settings ▸ Right-click menu: untick *Copy filenames to clipboard* and one preset, then right-click a file | The RenameIt submenu holds the rest, without those two |
-| 2 | Untick everything but *Start and load selected files*; right-click a file, then a folder's empty background | On the file, **RenameIt: Start and load selected files** directly, no submenu, and it opens RenameIt with the file loaded. On the background, no RenameIt item at all |
+| 2 | Untick everything but *Open in Free Select*; right-click a file, then a folder's empty background | On the file, **RenameIt: Open in Free Select** directly, no submenu, and it opens RenameIt with the file loaded. On the background, no RenameIt item at all |
 | 3 | Leave only *Start from this folder*; right-click a file and a folder background | Both show **RenameIt: Start from this folder** directly |
 | 4 | Try to untick the last ticked entry | It is greyed out; hovering says to untick the box above instead |
+
+**Results:** *not yet recorded.*
+
+## P122 — Open in Free Select, and several items selected
+
+Defaults: *Several items selected* is *Show only "Open in Free Select"*, a folder opens as *the folder itself*. These rows also decide whether Windows honours `MultiSelectModel=Single` on a **cascade** parent, which nothing off Windows can check.
+
+| # | Do this | Expect |
+|---|---|---|
+| 1 | Right-click **one** file | The RenameIt submenu (without *Open in Free Select*) **and**, beside it, **RenameIt: Open in Free Select** |
+| 2 | Select **three** files, or a file and a folder, and right-click | Only **RenameIt: Open in Free Select** — no submenu. Choosing it opens one window in Free Select with all of them |
+| 3 | Right-click **one folder**, choose *RenameIt: Open in Free Select* | Free Select with that folder as one row (not browsing into it) |
+| 4 | Settings ▸ Right-click menu: *A folder … opens as* → *The files inside it*; repeat 3 | Free Select with the folder's files, one level, and not the folder |
+| 5 | *Several items selected* → *Show the same menu as for one item*; repeat 2 | The full RenameIt submenu, *Open in Free Select* back inside it, and no separate item |
 
 **Results:** *not yet recorded.*

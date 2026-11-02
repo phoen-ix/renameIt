@@ -24,6 +24,12 @@ pub struct ListOptions {
     /// reading P19 settled for wildcards in the include filter. `None` lists
     /// everything.
     pub pattern: Option<MatchSpec>,
+    /// Hidden even when `pattern` lets it through — the Filter box's
+    /// *Exclude* (P121).
+    pub exclude: Option<MatchSpec>,
+    /// Test the full path as well as the name, for both masks.
+    pub filter_whole_path: bool,
+    pub filter_case: bool,
     /// Whether write-protected, hidden and system entries are listed.
     ///
     /// All three default to **true**. See D126: a renamer that silently
@@ -68,6 +74,9 @@ impl Default for ListOptions {
             folders: false,
             subfolders: false,
             pattern: None,
+            exclude: None,
+            filter_whole_path: false,
+            filter_case: false,
             hidden: true,
             system: true,
             read_only: true,
@@ -120,6 +129,35 @@ impl ListOptions {
             "" | "*" | "*.*" => None,
             other => Some(MatchSpec::auto(other)),
         };
+        self
+    }
+
+    /// The Filter box read as a regular expression; empty lists everything.
+    pub fn with_regex_pattern(mut self, text: &str) -> Self {
+        self.pattern = (!text.trim().is_empty()).then(|| MatchSpec::Regex(text.to_owned()));
+        self
+    }
+
+    /// Hides what this matches; empty hides nothing (P121).
+    pub fn excluding(mut self, text: &str, regex: bool) -> Self {
+        let trimmed = text.trim();
+        self.exclude = (!trimmed.is_empty()).then(|| {
+            if regex {
+                MatchSpec::Regex(text.to_owned())
+            } else {
+                MatchSpec::auto(trimmed)
+            }
+        });
+        self
+    }
+
+    pub fn testing_whole_path(mut self, yes: bool) -> Self {
+        self.filter_whole_path = yes;
+        self
+    }
+
+    pub fn matching_case(mut self, yes: bool) -> Self {
+        self.filter_case = yes;
         self
     }
 }
@@ -183,12 +221,28 @@ pub fn list_reporting_with(
         .max_depth(if options.subfolders { usize::MAX } else { 1 })
         .sort_by_file_name();
 
-    let pattern = options
-        .pattern
-        .as_ref()
-        .map(|spec| spec.compile_for_filter(false))
-        .transpose()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
+    let invalid = |e: crate::regex_flavor::RegexError| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string())
+    };
+    let compile = |spec: &Option<MatchSpec>| {
+        spec.as_ref()
+            .map(|spec| spec.compile_for_filter(options.filter_case))
+            .transpose()
+            .map_err(invalid)
+    };
+    let pattern = compile(&options.pattern)?;
+    let exclude = compile(&options.exclude)?;
+    // The name, and with *whole path* the full path too (P121).
+    let hits = |matcher: &crate::matcher::Matcher, entry: &walkdir::DirEntry| {
+        let name = entry.file_name().to_string_lossy();
+        Ok::<bool, std::io::Error>(
+            matcher.is_match(&name).map_err(invalid)?
+                || (options.filter_whole_path
+                    && matcher
+                        .is_match(&entry.path().to_string_lossy())
+                        .map_err(invalid)?),
+        )
+    };
 
     let mut entries = Vec::new();
     let mut problems = Vec::new();
@@ -220,14 +274,15 @@ pub fn list_reporting_with(
         if (is_dir && !options.folders) || (!is_dir && !options.files) {
             continue;
         }
-        if let Some(pattern) = &pattern
-            && options.pattern_applies.applies_to(is_dir)
-        {
-            let name = entry.file_name().to_string_lossy();
-            let matched = pattern.is_match(&name).map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string())
-            })?;
-            if !matched {
+        if options.pattern_applies.applies_to(is_dir) {
+            if let Some(pattern) = &pattern
+                && !hits(pattern, &entry)?
+            {
+                continue;
+            }
+            if let Some(exclude) = &exclude
+                && hits(exclude, &entry)?
+            {
                 continue;
             }
         }
@@ -597,6 +652,85 @@ mod tests {
             .map(|e| e.file_name)
             .collect();
         assert_eq!(names, ["SONG.MP3"]);
+    }
+
+    /// The Filter box and its ▾ extras (P121), over one folder.
+    fn filtered(options: ListOptions) -> Vec<String> {
+        let dir = TempDir::new().unwrap();
+        for name in ["a.jpg", "a_old.jpg", "B.JPG", "c.png"] {
+            std::fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        std::fs::create_dir(dir.path().join("old")).unwrap();
+        let mut names: Vec<_> = list(dir.path(), options.clone())
+            .unwrap()
+            .into_iter()
+            .map(|e| e.file_name)
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn the_filter_box_takes_an_exclude_a_regex_and_case() {
+        let jpg = || ListOptions::default().with_pattern("*.jpg");
+        assert_eq!(filtered(jpg()), ["B.JPG", "a.jpg", "a_old.jpg"]);
+        assert_eq!(
+            filtered(jpg().excluding("*_old*", false)),
+            ["B.JPG", "a.jpg"]
+        );
+        assert_eq!(filtered(jpg().matching_case(true)), ["a.jpg", "a_old.jpg"]);
+        assert_eq!(
+            filtered(ListOptions::default().with_regex_pattern(r"^a.*\.jpg$")),
+            ["a.jpg", "a_old.jpg"]
+        );
+        assert_eq!(
+            filtered(ListOptions::default().excluding(r"\.png$", true)),
+            ["B.JPG", "a.jpg", "a_old.jpg"]
+        );
+        assert_eq!(
+            filtered(ListOptions::default().excluding("  ", false)).len(),
+            4
+        );
+    }
+
+    /// With *whole path* the folder a file sits in counts too.
+    #[test]
+    fn the_whole_path_reaches_the_folder_names() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir(dir.path().join("keep")).unwrap();
+        std::fs::create_dir(dir.path().join("skip")).unwrap();
+        std::fs::write(dir.path().join("keep/x.txt"), b"x").unwrap();
+        std::fs::write(dir.path().join("skip/y.txt"), b"x").unwrap();
+        let options = ListOptions {
+            subfolders: true,
+            ..Default::default()
+        }
+        .excluding("skip", false);
+        let names = |o: ListOptions| -> Vec<String> {
+            list(dir.path(), o)
+                .unwrap()
+                .into_iter()
+                .map(|e| e.file_name)
+                .collect()
+        };
+        assert_eq!(
+            names(options.clone()).len(),
+            2,
+            "the name alone: nothing excluded"
+        );
+        assert_eq!(names(options.testing_whole_path(true)), ["x.txt"]);
+    }
+
+    /// The exclude follows *the pattern applies to* like the include does.
+    #[test]
+    fn the_exclude_respects_what_the_filter_applies_to() {
+        let options = ListOptions {
+            folders: true,
+            pattern_applies: PatternScope::Files,
+            ..Default::default()
+        }
+        .excluding("*old*", false);
+        assert_eq!(filtered(options), ["B.JPG", "a.jpg", "c.png", "old"]);
     }
 
     #[test]

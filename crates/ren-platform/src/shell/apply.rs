@@ -46,9 +46,12 @@ pub fn is_registered() -> bool {
 }
 
 fn installed_under(under: Under<'_>) -> bool {
+    let marked =
+        |root: &str| reg::dword(&format!("{under}{root}"), VERSION_VALUE) == Some(MENU_VERSION);
     ShellPlan::verb_roots()
         .iter()
-        .all(|root| reg::dword(&format!("{under}{root}"), VERSION_VALUE) == Some(MENU_VERSION))
+        .zip(ShellPlan::hoisted_roots())
+        .all(|(root, hoisted)| marked(root) || marked(&hoisted))
 }
 
 /// Writes the whole menu, pointing at `exe`, with the entries chosen.

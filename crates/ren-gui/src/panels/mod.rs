@@ -12,6 +12,7 @@ pub mod rows;
 pub mod run_controls;
 pub mod run_settings;
 pub mod settings;
+pub mod simulation;
 pub mod source_bar;
 pub mod tile;
 pub mod visual_assist;

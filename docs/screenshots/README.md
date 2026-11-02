@@ -104,6 +104,14 @@ every file.
 
 <img src="dialog-irreversible.png" alt="The confirmation dialog: This run cannot be undone, with Leave everything alone and Change 2 item(s)" width="800">
 
+## A simulation
+
+With Simulate ticked, a run writes nothing and shows what it would have done:
+every change, old against new, with chips, a search box, full paths, Copy list
+and Rename now.
+
+<img src="dialog-simulation.png" alt="The Simulation result window: nine renames listed with their old and new names, the changed parts highlighted" width="800">
+
 ## `<Ask>`
 
 A pipeline with `<Ask>` in it asks for the text when you press Rename.

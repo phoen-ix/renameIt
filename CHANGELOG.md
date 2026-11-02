@@ -6,6 +6,28 @@ Two things this file does **not** track. Engine and UI decisions live in
 `docs/DECISIONS.md`, which is the authority on why anything behaves as it does;
 and the reasoning behind each default lives beside the code it governs.
 
+## [Unreleased]
+
+### Changed
+
+- The file list sorts as Explorer does: folders above files, and numbers in
+  names by value, so `file2` comes before `file10`. Both can be switched off
+  in Settings ▸ Columns & rows (**P120**).
+- *Pattern* and *Include filter…* are one **Filter** box above the list. It
+  hides what does not match; its **▾** adds an exclude, regular expressions,
+  whole-path matching and case. A card's own filter under Scope still picks
+  which listed files that card renames (**P121**).
+- Explorer's *Start and load selected files* is now **Open in Free Select**,
+  and opens Free Select even for a single folder. With several items
+  selected, the right-click menu shows just **RenameIt: Open in Free Select**;
+  Settings ▸ Right-click menu can switch that off and choose whether a
+  selected folder comes in as itself or as the files inside it (**P122**).
+- A run with **Simulate** ticked opens a *Simulation result* window: every
+  rename, old against new with the change highlighted, every date or tag
+  change before against after, and anything that would fail. Filter by kind,
+  search, show full paths, copy the list, or **Rename now** to run it for real
+  (**P123**).
+
 ## [1.9.4] - 2026-11-02
 
 No change to the app. Development builds are about a third the size, and a

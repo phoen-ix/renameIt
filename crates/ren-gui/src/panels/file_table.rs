@@ -689,7 +689,7 @@ fn human_size(bytes: u64) -> String {
 /// A stamp outside the calendar chrono can represent — a filesystem that
 /// stores one hundred thousand years from now will — shows as `—` rather
 /// than a date.
-fn human_time(time: std::time::SystemTime) -> String {
+pub(crate) fn human_time(time: std::time::SystemTime) -> String {
     human_time_in(&chrono::Local, time).unwrap_or_else(|| "—".to_owned())
 }
 

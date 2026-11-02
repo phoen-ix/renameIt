@@ -483,6 +483,20 @@ fn dialog_irreversible() {
     shoot(&mut harness, "dialog-irreversible");
 }
 
+/// P123: what a simulated run would have done.
+#[test]
+fn dialog_simulation() {
+    let demo = holiday();
+    let mut harness = light(demo.app());
+    tidy_up(&mut harness);
+    harness.state_mut().set_simulate(true);
+    settle(&mut harness);
+    harness.state_mut().run_now();
+    settle(&mut harness);
+    harness.get_by_label("Simulation result");
+    shoot(&mut harness, "dialog-simulation");
+}
+
 #[test]
 fn dialog_ask() {
     let demo = holiday();
