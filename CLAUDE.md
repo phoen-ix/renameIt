@@ -78,7 +78,8 @@ ships first. MIT-licensed.
 
 ## The quality gate
 
-Everything below must be green before a session ends:
+Everything below must be green before a session ends. `scripts/release.sh`
+runs all of it as part of a release (D257).
 
 ```sh
 cargo fmt --all -- --check

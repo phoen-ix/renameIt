@@ -6,6 +6,11 @@ Two things this file does **not** track. Engine and UI decisions live in
 `docs/DECISIONS.md`, which is the authority on why anything behaves as it does;
 and the reasoning behind each default lives beside the code it governs.
 
+## [1.9.4] - 2026-11-02
+
+No change to the app. Development builds are about a third the size, and a
+release now deletes the previous version's build output (**D257**).
+
 ## [1.9.3] - 2026-11-02
 
 ### Added

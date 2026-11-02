@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.9.3"
+version = "1.9.4"
 edition = "2024"
 rust-version = "1.99"
 license = "MIT"
@@ -24,8 +24,8 @@ ron = "0.12.2"
 # Clipboard access for the <Clipboard> tag. Already in the tree under
 # egui-winit; named here so the version is ours to pin.
 arboard = { version = "3.7.0", default-features = false }
-ren-core = { path = "crates/ren-core", version = "1.9.3" }
-ren-platform = { path = "crates/ren-platform", version = "1.9.3" }
+ren-core = { path = "crates/ren-core", version = "1.9.4" }
+ren-platform = { path = "crates/ren-platform", version = "1.9.4" }
 
 chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
 clap = { version = "4.6.7", features = ["derive"] }
@@ -187,6 +187,12 @@ strip = true
 # window with a journal open. `panic = "abort"` would trim the binary and
 # silently turn every one of those into a crash.
 panic = "unwind"
+
+# Line tables only: a backtrace still names file and line, and each test binary
+# is a fraction of the ~700 MB full debug info made it — five of them per
+# version bump is what filled the disk (D257).
+[profile.dev]
+debug = "line-tables-only"
 
 # Spikes and tests are unbearable in a debug build of the dependency tree.
 [profile.dev.package."*"]
