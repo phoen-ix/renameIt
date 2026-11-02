@@ -5,7 +5,7 @@ ships first. MIT licensed.
 
 <img src="docs/screenshots/main-preview.png" alt="The RenameIt window: a folder of holiday photos, a Find &amp; Replace card and a Set Casing card on the left, and the file list showing each old name beside its new one with the changed part highlighted" width="800">
 
-**Status:** 1.9.2, [released](https://github.com/phoen-ix/renameIt/releases/latest) for Windows and Linux (x64).
+**Status:** 1.9.3, [released](https://github.com/phoen-ix/renameIt/releases/latest) for Windows and Linux (x64).
 
 Every screen, with a sentence each: [screenshot gallery](docs/screenshots/README.md).
 
@@ -478,7 +478,7 @@ feature and every CLI flag to its test. CI runs the suite as its `e2e` job.
 ## Releases
 
 - **Push `main` first and let CI go green**, then tag:
-  `git tag -a v1.9.2 -m "1.9.2" && git push origin v1.9.2`.
+  `git tag -a v1.9.3 -m "1.9.3" && git push origin v1.9.3`.
 - **The tag runs** [`.github/workflows/release.yml`](.github/workflows/release.yml), which builds, packages
   `RenameIt-Setup-<version>.exe`, `RenameIt-windows-x64.zip` **and**
   `RenameIt-linux-x64.tar.gz`, writes `SHA256SUMS.txt` over all three, and drafts a

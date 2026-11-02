@@ -34,19 +34,14 @@ pub struct TableStyle {
     /// take the window's spare width instead of collapsing to their content,
     /// every row is a wide row.
     pub stripes: bool,
-    /// A click anywhere on a row selects it, not only a click on the name.
-    ///
-    /// Off by default — and it was the only behaviour until now, since only
-    /// the Name cell ever sensed a click.
-    pub full_row_select: bool,
+    // `full_row_select` lived here until P118 made a click anywhere on a row
+    // select it, always. An old settings file still parses: unknown fields
+    // are ignored.
 }
 
 impl Default for TableStyle {
     fn default() -> Self {
-        Self {
-            stripes: true,
-            full_row_select: false,
-        }
+        Self { stripes: true }
     }
 }
 
@@ -351,18 +346,16 @@ mod tests {
 mod style_tests {
     use super::*;
 
-    /// Shading on, full-row select off.
+    /// Shading on.
     ///
-    /// Both shipped off until the name columns stopped collapsing to their
+    /// Shipped off until the name columns stopped collapsing to their
     /// content and started taking the window's spare width. P70 declined a
     /// grid-lines option on the grounds that row
     /// shading is "the thing that actually makes a wide row readable"; P91
-    /// finishes that thought by having it on. Full-row select stays off —
-    /// it changes what a click *does*, which is not a legibility default.
+    /// finishes that thought by having it on.
     #[test]
     fn the_table_style_ships_with_shading_on() {
         let style = TableStyle::default();
         assert!(style.stripes);
-        assert!(!style.full_row_select);
     }
 }

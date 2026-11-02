@@ -6,6 +6,19 @@ Two things this file does **not** track. Engine and UI decisions live in
 `docs/DECISIONS.md`, which is the authority on why anything behaves as it does;
 and the reasoning behind each default lives beside the code it governs.
 
+## [1.9.3] - 2026-11-02
+
+### Fixed
+
+- After selecting rows by dragging, clicking another row beside its name did
+  not clear the old selection. A click anywhere on a row now selects it
+  (**P118**).
+
+### Removed
+
+- The *Click anywhere on a row to select it* setting: that is now what a click
+  always does.
+
 ## [1.9.2] - 2026-11-02
 
 ### Added

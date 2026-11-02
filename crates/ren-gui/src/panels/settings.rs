@@ -783,14 +783,6 @@ fn display_ui(
     ui.add_space(6.0);
 
     ui.checkbox(&mut style.stripes, "Shade every other row");
-    ui.checkbox(
-        &mut style.full_row_select,
-        "Click anywhere on a row to select it",
-    )
-    .on_hover_text(
-        "Off, you must click the name — which is what this app has always done. \
-         The name still takes the double-click and the slow second click either way.",
-    );
 
     // P115: a folder opens on a double-click and a slow second click renames,
     // as in Explorer. What is left to choose is what has no folder to open.

@@ -199,13 +199,11 @@ measurement of the selection cap: record both outcomes here, with the number of
 files check 9 reached, and append a row to `docs/DECISIONS.md` closing P82
 either way.
 
-## M8 — Full Row Select
+## M8 — Clicking a row
 
-`egui_kittest` drives widgets through the accessibility tree, and this setting
-is about clicking a cell that is deliberately **not** a widget — a plain size or
-date label, with the row's click target behind it. There is no node to aim at,
-so the test can only show that the setting reaches the table. Same class of gap
-as the file dialogs and the clipboard.
+A click anywhere on a row selects it (**P118**); `e2e.rs` drives that with
+real pointer events. What is left for a person is the feel of it beside the
+name's own clicks, and the shading.
 
 ```sh
 xvfb-run -a cargo run -p ren-gui     # or just `cargo run -p ren-gui`
@@ -213,12 +211,10 @@ xvfb-run -a cargo run -p ren-gui     # or just `cargo run -p ren-gui`
 
 | # | Do this | Expect |
 |---|---|---|
-| 1 | Settings ▸ Columns & rows, tick *Click anywhere on a row to select it*, close | — |
-| 2 | Click a row's **Size** or **Modified** cell | The row is selected, and the count at the bottom follows |
-| 3 | Ctrl-click the same cell again | It is deselected — the same rule the name cell follows |
-| 4 | Click a selected row's **name** again, slowly | The inline editor opens (P115). The row target behind it must not have swallowed this |
-| 5 | Untick it, click a Size cell again | Nothing is selected: only the name senses a click, which is the default |
-| 6 | Tick *Shade every other row* | Alternate rows are faintly shaded, and a selected row still reads as selected |
+| 1 | Click a row's **Size** or **Modified** cell, or the space right of a short name | The row is selected, and the count at the bottom follows |
+| 2 | Ctrl-click the same cell again | It is deselected — the same rule the name cell follows |
+| 3 | Click a selected row's **name** again, slowly | The inline editor opens (P115). The row target behind it must not have swallowed this |
+| 4 | Tick *Shade every other row* | Alternate rows are faintly shaded, and a selected row still reads as selected |
 
 **Results:** *not yet recorded.*
 

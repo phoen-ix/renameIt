@@ -361,8 +361,7 @@ impl egui_table::TableDelegate for FileTable<'_> {
         // next row paints afterwards and would cover a line drawn on the shared
         // edge. It has no accessible node of its own — a focus ring is paint —
         // so the tests assert `selection.lead` and `docs/manual-checks.md`
-        // carries the ring itself, beside Full Row Select which is there for
-        // the same reason.
+        // carries the ring itself.
         if self.selection.lead == Some(index) {
             ui.painter().rect_stroke(
                 rect.shrink(1.0),
@@ -415,22 +414,6 @@ impl egui_table::TableDelegate for FileTable<'_> {
             self.selection
                 .sweep(sweep.anchor, index, &sweep.base, &self.visible);
         }
-
-        // Full Row Select: a click anywhere on the row selects it. The name
-        // cell is drawn after this and sits on top, so it still wins where the
-        // two overlap — which is what keeps its double-click and its slow
-        // second click working (P115).
-        if self.style.full_row_select {
-            let response = ui.interact(
-                rect,
-                ui.scope_id().with(("row", index)),
-                egui::Sense::click(),
-            );
-            if response.clicked() {
-                let (ctrl, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
-                self.selection.click(index, ctrl, shift, &self.visible);
-            }
-        }
     }
 
     fn cell_ui(&mut self, ui: &mut egui::Ui, cell: &egui_table::CellInfo) {
@@ -464,13 +447,15 @@ impl egui_table::TableDelegate for FileTable<'_> {
         ui.style_mut().interaction.selectable_labels = false;
         ui.add_space(CELL_GUTTER);
 
-        // Full Row Select, again: registered per **cell** rather than once over
-        // the whole row, because the row
-        // is painted before the cells, so an interact there is covered by them
-        // and never sees a click.
-        // The Name and Thumb cells are skipped because each already senses its
-        // own click — and their double-click and slow second click (P115).
-        if self.style.full_row_select && !matches!(kind, ColumnKind::Name | ColumnKind::Thumbnail) {
+        // A click anywhere on a row selects it (P118), as a sweep starts
+        // anywhere on it. Registered per **cell** rather than once over the
+        // whole row, because the row is painted before the cells, so an
+        // interact there is covered by them and never sees a click. In the
+        // Name cell the label is drawn after this and sits on top, so it keeps
+        // its own click, double-click and slow second click (P115) and this
+        // only takes the space beside it. The Thumb cell is all picture, which
+        // takes its own.
+        if kind != ColumnKind::Thumbnail {
             let response = ui.interact(
                 ui.max_rect(),
                 ui.scope_id().with(("row", index, cell.col_nr)),

@@ -1676,3 +1676,55 @@ fn a_ctrl_drag_adds_to_the_selection() {
 
     assert_eq!(selected(&harness), ["a.txt", "c.txt", "d.txt"]);
 }
+
+/// After a sweep, a click on a blank part of another row — not on its name —
+/// selects only that row (P118).
+#[test]
+fn a_click_anywhere_on_a_row_after_a_sweep_selects_only_that_row() {
+    let fixture = Fixture::new(&["a.txt", "b.txt", "c.txt", "d.txt", "e.txt"]);
+    let mut harness = harness(fixture.app());
+    let (a, c) = (row_at(&harness, "a.txt"), row_at(&harness, "c.txt"));
+    harness.drag_at(a);
+    harness.run();
+    harness.hover_at(a + egui::vec2(0.0, 12.0));
+    harness.run();
+    harness.hover_at(c);
+    harness.run();
+    harness.drop_at(c);
+    settle(&mut harness);
+    assert_eq!(selected(&harness), ["a.txt", "b.txt", "c.txt"]);
+
+    // Well to the right of the name, in the same row.
+    let e = row_at(&harness, "e.txt") + egui::vec2(300.0, 0.0);
+    harness.hover_at(e);
+    harness.run();
+    harness.event(egui::Event::PointerButton {
+        pos: e,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.event(egui::Event::PointerButton {
+        pos: e,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    settle(&mut harness);
+    assert_eq!(selected(&harness), ["e.txt"]);
+
+    // And just right of a short name, still inside the Name column.
+    let d = row_at(&harness, "d.txt") + egui::vec2(60.0, 0.0);
+    harness.hover_at(d);
+    harness.run();
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: d,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+    }
+    settle(&mut harness);
+    assert_eq!(selected(&harness), ["d.txt"]);
+}

@@ -175,7 +175,7 @@ Roles: none. This is a single-user desktop app and a CLI, with no accounts.
 | 101 | Columns fill the pane | ✅ gui › the_columns_fill_the_pane_rather_than_hugging_their_contents |
 | 102 | Sort by header, the arrow on its header | ✅ gui › the_new_name_header_keeps_its_arrow_to_itself |
 | 103 | Click to select scopes the run | ✅ gui › selecting_rows_scopes_the_run |
-| 104 | Full-row select | ✅ gui › full_row_select_makes_the_whole_row_a_click_target |
+| 104 | A click anywhere on a row selects it (P118; was the Full-row select setting) | ✅ e2e › a_click_anywhere_on_a_row_after_a_sweep_selects_only_that_row |
 | 105 | Ctrl+A | ✅ gui › ctrl_a_selects_every_row_the_list_is_showing |
 | 106 | Arrow keys | ✅ gui › the_arrow_keys_walk_the_file_list |
 | 107 | Home / End | ✅ e2e › home_and_end_jump_to_the_ends_of_the_list |

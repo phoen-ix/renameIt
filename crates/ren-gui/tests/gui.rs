@@ -4483,24 +4483,18 @@ fn the_shell_page_says_what_this_platform_can_do() {
     }
 }
 
-/// *Full row select* — click anywhere on the row — and *draw a grey background
-/// on every other row*.
+/// *Draw a grey background on every other row*.
 ///
 /// What this covers is that the page changes real state and the table is built
 /// from it.
 ///
-/// **What it does not cover**, and cannot: the pointer behaviour, and the two
-/// lines that hand the style to the table. This harness drives widgets through
-/// the accessibility tree, and both halves of this setting are about pixels —
-/// a click on a plain size label with the row's target behind it, and a shaded
-/// rectangle. Neither has a node to aim at or to read. `docs/manual-checks.md`
-/// walks the whole path instead, beside the file dialogs and the clipboard,
-/// which are out of reach for the same kind of reason.
+/// **What it does not cover**, and cannot: the shaded rectangle itself, which
+/// has no node to read. `docs/manual-checks.md` checks it by eye. A click
+/// anywhere on a row (P118) is driven by real pointer events in `e2e.rs`.
 #[test]
-fn full_row_select_makes_the_whole_row_a_click_target() {
+fn the_shading_switch_reaches_the_table() {
     let fixture = Fixture::new(&["one.txt", "two.txt"]);
     let mut harness = harness(fixture.app());
-    assert!(!harness.state().table_style().full_row_select);
     // Shading ships on (P91), so this one is checked by switching it off and
     // back on rather than only on.
     assert!(harness.state().table_style().stripes);
@@ -4508,10 +4502,6 @@ fn full_row_select_makes_the_whole_row_a_click_target() {
     harness.key_press(egui::Key::F8);
     settle(&mut harness);
     harness.get_by_label("Columns & rows").click();
-    settle(&mut harness);
-    harness
-        .get_by_label_contains("Click anywhere on a row to select it")
-        .click();
     settle(&mut harness);
     harness
         .get_by_label_contains("Shade every other row")
@@ -4528,10 +4518,9 @@ fn full_row_select_makes_the_whole_row_a_click_target() {
     harness.get_by_label("Close").click();
     settle(&mut harness);
 
-    assert!(harness.state().table_style().full_row_select);
     assert!(harness.state().table_style().stripes);
 
-    // The name cell still takes its own clicks with both switched on, which is
+    // The name cell still takes its own clicks with the row's behind it, which is
     // what keeps its double-click and slow second click working (P115) — and
     // is the half of this the harness *can* see.
     harness.get_by_label_contains("one.txt").click();

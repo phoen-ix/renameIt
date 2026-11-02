@@ -4550,10 +4550,7 @@ mod tests {
                 casing.exceptions.words = vec!["CD".to_owned()];
                 casing
             },
-            table_style: crate::viewmodel::TableStyle {
-                stripes: true,
-                full_row_select: true,
-            },
+            table_style: crate::viewmodel::TableStyle { stripes: true },
             clicks: ClickActions {
                 file: FileDoubleClick::Open,
                 free_select_folder: FolderDoubleClick::Browse,
