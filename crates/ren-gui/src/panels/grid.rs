@@ -69,6 +69,10 @@ pub struct Grid<'a> {
     pub free_select: bool,
     /// Whether a listing is still out, so an empty grid is not yet empty.
     pub listing: bool,
+    /// Whether to show the `..` row above the tiles; as in the list.
+    pub parent_row: bool,
+    /// Set when `..` was double-clicked.
+    pub go_up: bool,
     /// Tiles actually laid out on the last frame, for the performance harness.
     pub laid_out: usize,
 }
@@ -103,6 +107,8 @@ impl<'a> Grid<'a> {
             row_action: None,
             free_select: false,
             listing: false,
+            parent_row: false,
+            go_up: false,
             laid_out: 0,
         }
     }
@@ -132,6 +138,13 @@ impl<'a> Grid<'a> {
         self.caption_text = Self::caption_height(ui);
         let cell = self.cell();
         let count = self.visible.len();
+
+        if self.parent_row {
+            ui.horizontal(|ui| {
+                ui.add_space(PADDING / 2.0);
+                self.go_up |= super::file_table::up_row(ui);
+            });
+        }
 
         egui::ScrollArea::vertical()
             .id_salt("renameit_grid")

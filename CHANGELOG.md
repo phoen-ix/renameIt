@@ -6,6 +6,37 @@ Two things this file does **not** track. Engine and UI decisions live in
 `docs/DECISIONS.md`, which is the authority on why anything behaves as it does;
 and the reasoning behind each default lives beside the code it governs.
 
+## [1.9.0] - 2026-11-02
+
+A tidier window: one drop-down per card, settings where they apply, and a
+Settings window you can find your way around.
+
+### Added
+
+- `..` above the file list and the grid: double-click it to go up a folder,
+  as Backspace does (**P116**).
+- Settings ▸ Startup ▸ *New cards start as*: the operation *+ Add operation*
+  and Ctrl+K add (Replace unless you change it).
+
+### Changed
+
+- Each pipeline card has an operation drop-down at its top; pick another
+  operation there to switch the card. *+ Add operation* no longer opens a
+  searchable popup — it adds a card of the default operation (**D253**).
+- An empty pipeline — cleared at startup, or every card deleted — starts with
+  one card of the default operation instead of none.
+- *Run settings* is gone from under the pipeline. Its three settings now appear
+  inside the cards that use them: the counter in Add Counter (and any card
+  using `<Counter>`), the filename parts in Music Tagger (and any card using
+  `<%1>`…`<%9>`), and *Only rename if all tags are available* in Music Rename
+  (and any card using file tags) (**D254**).
+- Settings is reorganised into five groups: General, File list, New cards,
+  This computer, and RenameIt. Display and Problem Solver are each split in two,
+  and the default operation has its own page. The lists show how many entries
+  they hold (**D255**).
+- A ⚙ at the top right opens Settings, replacing the ⋯ menu. About is now the
+  last page of Settings, and the menu's *Right-click menu…* shortcut is gone.
+
 ## [1.8.0] - 2026-11-01
 
 RenameIt on Explorer's right-click menu from the installer, and the way back

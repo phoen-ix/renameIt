@@ -1,4 +1,4 @@
-//! The About window.
+//! Settings ▸ About.
 //!
 //! It shows the version, the licence and where the code lives, because this
 //! is an MIT program shipping a binary and those are the three things somebody
@@ -39,76 +39,56 @@ impl SessionTally {
     }
 }
 
-/// Draws the window. Returns true when the user closed it.
+/// Settings ▸ About, the last page of the rail (D255).
 ///
 /// `newer` is a release the updater found, said beside the version so the
-/// window that answers "which version is this" also answers "is it the
-/// latest" when that is known.
-pub fn ui(
-    ctx: &egui::Context,
-    batches: &[Batch],
-    newer: Option<crate::viewmodel::Version>,
-) -> bool {
-    let mut close = false;
-
-    egui::Modal::new(egui::Id::unique("about")).show(ctx, |ui| {
-        ui.set_width(460.0);
-
-        ui.horizontal(|ui| {
-            ui.heading("RenameIt");
-            ui.label(
-                egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
-                    .weak()
-                    .monospace(),
-            );
-            if let Some(version) = newer {
-                ui.label(
-                    egui::RichText::new(format!("{version} is available — Settings ▸ Updates"))
-                        .small(),
-                );
-            }
-        });
-        ui.label("A batch file renamer.");
-        ui.add_space(8.0);
-
-        ui.label(SessionTally::of(batches).summary());
+/// page that answers "which version is this" also answers "is it the latest"
+/// when that is known.
+pub fn body(ui: &mut egui::Ui, batches: &[Batch], newer: Option<crate::viewmodel::Version>) {
+    ui.horizontal(|ui| {
+        ui.heading("RenameIt");
         ui.label(
-            egui::RichText::new(
-                "No lifetime total is kept: it would count one machine and one install, and \
-                 reset without saying so.",
-            )
-            .weak()
-            .small(),
+            egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+                .weak()
+                .monospace(),
         );
-
-        ui.add_space(10.0);
-        ui.separator();
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("MIT licensed").small());
-            ui.label(egui::RichText::new("·").weak().small());
-            ui.hyperlink_to(
-                egui::RichText::new(env!("CARGO_PKG_REPOSITORY")).small(),
-                env!("CARGO_PKG_REPOSITORY"),
-            );
-        });
-        ui.add_space(4.0);
-        ui.label(
-            egui::RichText::new(
-                "Built with egui, lofty, kamadak-exif, image, koto, regex and clap — all under \
-                 permissive licences.",
-            )
-            .weak()
-            .small(),
-        );
-
-        ui.add_space(10.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            close |= ui.button("Close").clicked();
-        });
+        if let Some(version) = newer {
+            ui.label(egui::RichText::new(format!("{version} is available — see Updates")).small());
+        }
     });
+    ui.label("A batch file renamer.");
+    ui.add_space(8.0);
 
-    close
+    ui.label(SessionTally::of(batches).summary());
+    ui.label(
+        egui::RichText::new(
+            "No lifetime total is kept: it would count one machine and one install, and \
+             reset without saying so.",
+        )
+        .weak()
+        .small(),
+    );
+
+    ui.add_space(10.0);
+    ui.separator();
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("MIT licensed").small());
+        ui.label(egui::RichText::new("·").weak().small());
+        ui.hyperlink_to(
+            egui::RichText::new(env!("CARGO_PKG_REPOSITORY")).small(),
+            env!("CARGO_PKG_REPOSITORY"),
+        );
+    });
+    ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new(
+            "Built with egui, lofty, kamadak-exif, image, koto, regex and clap — all under \
+             permissive licences.",
+        )
+        .weak()
+        .small(),
+    );
 }
 
 #[cfg(test)]

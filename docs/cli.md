@@ -89,6 +89,6 @@ for everyone, and the installer leaves the portable marker out (D249). The
 updater downloads into `%TEMP%\RenameIt-update-*`; folders older than a day are
 swept on the next download, and the uninstaller removes the rest.
 
-Settings ▸ Problem Solver shows which of these this copy uses, with buttons to
+Settings ▸ Where files are kept shows which of these this copy uses, with buttons to
 open them. `ren-cli` uses the same folders, so `ren-cli undo` can undo a batch
 the app ran.

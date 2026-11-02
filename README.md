@@ -5,7 +5,7 @@ ships first. MIT licensed.
 
 <img src="docs/screenshots/main-preview.png" alt="The RenameIt window: a folder of holiday photos, a Find &amp; Replace card and a Set Casing card on the left, and the file list showing each old name beside its new one with the changed part highlighted" width="800">
 
-**Status:** 1.8.0, [released](https://github.com/phoen-ix/renameIt/releases/latest) for Windows and Linux (x64).
+**Status:** 1.9.0, [released](https://github.com/phoen-ix/renameIt/releases/latest) for Windows and Linux (x64).
 
 Every screen, with a sentence each: [screenshot gallery](docs/screenshots/README.md).
 
@@ -49,7 +49,7 @@ From the [latest release](https://github.com/phoen-ix/renameIt/releases/latest):
   *Right-click menu in Explorer* box (ticked) puts RenameIt on Explorer's
   right-click menu. On a computer several people use, each person gets it at
   their first start and can turn it off for themselves (Settings ▸
-  Right-click menu, also under ⋯). For scripted installs, `/S` is silent,
+  Right-click menu). For scripted installs, `/S` is silent,
   `/CurrentUser` or `/AllUsers` picks the scope and `/NOMENU` leaves the
   menu out: [packaging/README.md](packaging/README.md).
 - **Windows zip**, `RenameIt-windows-x64.zip`: a [portable](#portable-mode)
@@ -139,7 +139,7 @@ mode = "title"
 lowercase_exceptions = true
 ```
 
-The operations, grouped as the add-operation palette groups them:
+The operations, grouped as a card's operation drop-down groups them:
 
 | Group | `op` values |
 |---|---|
@@ -187,7 +187,7 @@ The same six formats get **thumbnails**, and you choose how:
   - A tile carries the picture, the name on disk and the name the run is about
     to write, so the grid is somewhere you can work rather than only somewhere
     you can look.
-- **Thumb column:** in Settings ▸ Display, it puts a small one beside each row
+- **Thumb column:** in Settings ▸ Columns & rows, it puts a small one beside each row
   instead.
 - **Upright:** photographs come back upright whatever your phone wrote in their
   Exif.
@@ -303,11 +303,11 @@ xvfb-run -a cargo run -p ren-gui                       # on a headless box
 
 The window:
 
-- **Source bar** on top, with Settings and About in the ⋯ menu at its right.
-  *Open in Explorer* opens the folder you are browsing, and ⋯ ▸ *Right-click
-  menu…* turns RenameIt's entry on Explorer's right-click menu on or off.
-- **Pipeline** on the left: the operations as numbered steps, *Run settings*
-  under them, and at its foot Undo, Simulate and **Rename N files**. The
+- **Source bar** on top, with ⚙ Settings at its right. *Open in Explorer*
+  opens the folder you are browsing.
+- **Pipeline** on the left: the operations as numbered steps, and at its foot
+  Undo, Simulate and **Rename N files**. A card that uses the counter, the
+  filename parts or file tags shows those shared settings inside it. The
   button says how many files it will touch, and when it cannot run it says
   why underneath — a conflict blocks the whole run rather than skipping a
   file.
@@ -345,10 +345,10 @@ documented places.
 | **F8** | Settings. |
 | **F9** | Forget everything read from inside the files, then list the folder again — the same as the ⟳ button. |
 | **F12** | Pick a folder (Browser mode). |
-| **Ctrl+K** | The add-operation palette. |
+| **Ctrl+K** | Add a card of the default operation (Settings ▸ Default operation). |
 | **↑ ↓ Home End** | Move through the list. **Shift** extends the selection; **Ctrl** moves the keyboard and leaves the selection alone. |
 | **Ctrl+A** | Select every row on screen. |
-| **Enter** / **Backspace** | Into the folder under the keyboard / up to the parent (Browser mode; Enter needs the Folders chip). |
+| **Enter** / **Backspace** | Into the folder under the keyboard / up to the parent (Browser mode; Enter needs the Folders chip). Double-clicking `..` above the list goes up too. |
 | **Delete** | Free Select only: take the selected rows out of the list. The files are untouched; nothing in the app deletes from disk. |
 | **Ctrl +** / **Ctrl −** / **Ctrl 0** | Interface size (also in Settings ▸ Appearance). |
 | **Enter** in the `<Ask>` prompt | Answer and rename. |
@@ -358,7 +358,7 @@ Three rules decide when a key acts:
 - **Exact modifiers:** Ctrl+Shift+Z is not undo, and Alt+F4 is not F4.
 - **Not while you type:** in a text box the keys are the box's own — except F3,
   and except the F-keys in a number box (Ctrl+Z there undoes the digit).
-- **Not behind a dialog:** with Settings, About, the palette, the `<Ask>`
+- **Not behind a dialog:** with Settings, About, the `<Ask>`
   prompt or a confirmation open, no shortcut acts.
 
 F1 is not bound. Closing the window while a run, an undo or a rollback is going
@@ -400,7 +400,7 @@ or a killed process leaves a record of exactly what was under way.
 
 The undo journal, presets, scripts and settings live in a per-user folder (on
 Windows under `%APPDATA%\RenameIt`), or in `RenameIt-data` beside a portable
-copy. Settings ▸ Problem Solver shows which this copy uses; `ren-cli` uses the
+copy. Settings ▸ Where files are kept shows which this copy uses; `ren-cli` uses the
 same folders, so `ren-cli undo` can undo a batch the app ran. The table for
 each OS: [docs/cli.md](docs/cli.md#where-renameit-keeps-its-files).
 
@@ -416,7 +416,7 @@ leaves it out.
 Two conditions, both required: the marker has to be there, and its folder has to
 be **writable**. A copy in `Program Files` or on a read-only share declines the
 portable path rather than taking it and failing on every write. Settings ▸
-Problem Solver says which mode you are in and where the files actually are.
+Where files are kept says which mode you are in and where the files actually are.
 
 ## Workspace
 
@@ -478,7 +478,7 @@ feature and every CLI flag to its test. CI runs the suite as its `e2e` job.
 ## Releases
 
 - **Push `main` first and let CI go green**, then tag:
-  `git tag -a v1.8.0 -m "1.8.0" && git push origin v1.8.0`.
+  `git tag -a v1.9.0 -m "1.9.0" && git push origin v1.9.0`.
 - **The tag runs** [`.github/workflows/release.yml`](.github/workflows/release.yml), which builds, packages
   `RenameIt-Setup-<version>.exe`, `RenameIt-windows-x64.zip` **and**
   `RenameIt-linux-x64.tar.gz`, writes `SHA256SUMS.txt` over all three, and drafts a

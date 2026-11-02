@@ -1,12 +1,13 @@
-//! The Settings window.
+//! The Settings window, opened by the ⚙ at the window's top right or F8.
 //!
-//! Ten pages: Batch Replace, Music Styles, Casing Exceptions, Display, File
-//! System, Startup, Right-click menu, Appearance, Updates and Problem Solver
-//! (`docs/DESIGN.md` §S9 as amended; there is no Renaming, Scripting or
-//! Advanced page, P71 and P88). Appearance is where the theme control lives,
-//! so the left panel can be purely the pipeline.
+//! Fourteen pages in five groups (D255): **General** — Appearance, When
+//! RenameIt starts, Updates; **File list** — Columns & rows, Thumbnails, Which
+//! files show; **New cards** — Default operation and the three lists a new
+//! card copies; **This computer** — Right-click menu, Where files are kept;
+//! **RenameIt** — Help, About. There is no Renaming, Scripting or Advanced page
+//! (P71, P88).
 //!
-//! The window is a page list plus a body; a page is one function.
+//! The window is a grouped page list plus a body; a page is one function.
 
 use ren_core::ops::Replace;
 use ren_core::ops::music_rename::SHIPPED_STYLES;
@@ -24,54 +25,81 @@ use crate::widgets::string_list::StringList;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Page {
     #[default]
+    Appearance,
+    /// What a fresh start deliberately forgets.
+    Startup,
+    /// Whether and how RenameIt looks for a newer release (D250).
+    Updates,
+    /// Which columns the file table shows, the rows, and double-click.
+    Columns,
+    Thumbnails,
+    /// The three visibility switches, the pattern scope and the guard.
+    FileSystem,
+    /// What `+ Add operation` makes (D253).
+    DefaultOp,
     BatchReplace,
     MusicStyles,
     /// The exception lists a **new** Set Casing card copies. Not run-wide:
     /// each card keeps its own.
     CasingExceptions,
-    /// Which columns the file table shows, in what order.
-    Display,
-    /// What a fresh start deliberately forgets.
-    Startup,
     /// The file manager's RenameIt menu.
     ShellIntegration,
-    /// The three visibility switches and the system-folder guard.
-    FileSystem,
-    Appearance,
-    /// Whether and how RenameIt looks for a newer release (D250).
-    Updates,
-    /// Answers to the questions a confused user actually has, plus the
-    /// shortcuts to where the app keeps its files and the reset.
-    ProblemSolver,
+    /// Shortcuts to where the app keeps its files, and the reset.
+    Storage,
+    /// Answers to the questions a confused user actually has.
+    Help,
+    About,
 }
 
 impl Page {
-    const ALL: [Self; 10] = [
+    /// In rail order. A heading is drawn where [`Self::group`] changes.
+    pub const ALL: [Self; 14] = [
+        Self::Appearance,
+        Self::Startup,
+        Self::Updates,
+        Self::Columns,
+        Self::Thumbnails,
+        Self::FileSystem,
+        Self::DefaultOp,
         Self::BatchReplace,
         Self::MusicStyles,
         Self::CasingExceptions,
-        Self::Display,
-        Self::FileSystem,
-        Self::Startup,
         Self::ShellIntegration,
-        Self::Appearance,
-        Self::Updates,
-        Self::ProblemSolver,
+        Self::Storage,
+        Self::Help,
+        Self::About,
     ];
 
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
-            Self::BatchReplace => "Batch Replace",
-            Self::MusicStyles => "Music Styles",
-            Self::CasingExceptions => "Casing Exceptions",
-            Self::Display => "Display",
-            Self::Startup => "Startup",
+            Self::Appearance => "Appearance",
+            Self::Startup => "When RenameIt starts",
+            Self::Updates => "Updates",
+            Self::Columns => "Columns & rows",
+            Self::Thumbnails => "Thumbnails",
+            Self::FileSystem => "Which files show",
+            Self::DefaultOp => "Default operation",
+            Self::BatchReplace => "Batch Replace list",
+            Self::MusicStyles => "Music styles",
+            Self::CasingExceptions => "Casing words",
             // What people call it, not the platform's term for it (D252).
             Self::ShellIntegration => "Right-click menu",
-            Self::ProblemSolver => "Problem Solver",
-            Self::FileSystem => "File System",
-            Self::Appearance => "Appearance",
-            Self::Updates => "Updates",
+            Self::Storage => "Where files are kept",
+            Self::Help => "Help",
+            Self::About => "About",
+        }
+    }
+
+    /// The rail heading this page sits under.
+    fn group(self) -> &'static str {
+        match self {
+            Self::Appearance | Self::Startup | Self::Updates => "General",
+            Self::Columns | Self::Thumbnails | Self::FileSystem => "File list",
+            Self::DefaultOp | Self::BatchReplace | Self::MusicStyles | Self::CasingExceptions => {
+                "New cards"
+            }
+            Self::ShellIntegration | Self::Storage => "This computer",
+            Self::Help | Self::About => "RenameIt",
         }
     }
 }
@@ -97,7 +125,13 @@ pub struct Defaults<'a> {
     /// What a double-click on a file, or on a folder in Free Select, does.
     pub clicks: &'a mut ClickActions,
     pub startup: &'a mut Startup,
-    /// For the Problem Solver page's folder shortcuts.
+    /// What a new card starts as: an `OpKind::name()`.
+    pub default_op: &'a mut String,
+    /// This session's runs, for About's tally.
+    pub batches: &'a [crate::viewmodel::Batch],
+    /// A newer release the updater found, which About mentions.
+    pub newer: Option<Version>,
+    /// For the Where files are kept page's folder shortcuts.
     pub platform: &'a dyn ren_platform::Platform,
     pub journal_dir: &'a std::path::Path,
     pub preset_dir: &'a std::path::Path,
@@ -138,7 +172,7 @@ pub struct Output {
     /// the whole listing on every edit — once per frame while the thumbnail
     /// slider was dragged — for a result that could not differ.
     pub relist: bool,
-    /// The Problem Solver page's reset button was pressed.
+    /// Where files are kept's reset button was pressed.
     ///
     /// Not the reset itself: a reset puts back more than this window can
     /// reach (see `confirm::reset_ui` for the list), and the confirmation
@@ -170,8 +204,10 @@ pub fn ui(ctx: &egui::Context, page: &mut Page, defaults: Defaults<'_>, theme: T
         //
         // The rail is what makes a floor honest rather than arbitrary: nine
         // rows of tabs are a height the window has to find anyway.
+        // Fourteen pages and five headings, so the rail fits without a scroll.
+        let rail_rows = Page::ALL.len() as f32 + 5.0 * 1.25;
         let body_height = crate::theme::modal_body_height(ctx, 132.0)
-            .max(Page::ALL.len() as f32 * ui.spacing().interact_size.y);
+            .max(rail_rows * ui.spacing().interact_size.y);
 
         // Both halves are allocated as exact rects and drawn into with
         // `scope_builder`, rather than `allocate_ui` + a `ScrollArea` that
@@ -194,15 +230,39 @@ pub fn ui(ctx: &egui::Context, page: &mut Page, defaults: Defaults<'_>, theme: T
                     // "Problem Solver" already touched the right edge at 100 % —
                     // which is what `docs/manual-checks.md` has an open item
                     // asking somebody to look at under 125 % and 150 % scaling.
+                    let mut group = "";
                     for candidate in Page::ALL {
+                        if candidate.group() != group {
+                            group = candidate.group();
+                            ui.add_space(if group == "General" { 0.0 } else { 6.0 });
+                            ui.label(egui::RichText::new(group.to_uppercase()).weak().small());
+                        }
+                        let count = match candidate {
+                            Page::BatchReplace => Some(defaults.batch_replace.len()),
+                            Page::MusicStyles => Some(defaults.music_styles.len()),
+                            Page::CasingExceptions => Some(
+                                defaults.casing.exceptions.words.len()
+                                    + defaults.casing.title_case.lowercase_exceptions.len(),
+                            ),
+                            _ => None,
+                        };
                         let selected = *page == candidate;
-                        if ui
-                            .add_sized(
-                                egui::vec2(RAIL_WIDTH, ui.spacing().interact_size.y),
-                                egui::Button::selectable(selected, candidate.label()),
-                            )
-                            .clicked()
-                        {
+                        // Every entry gets a right text, empty where there is no
+                        // count: a `Button` with one lays its label out left, and
+                        // without one centres it, which made the rail ragged.
+                        let button = egui::Button::selectable(selected, candidate.label())
+                            .right_text(
+                                egui::RichText::new(
+                                    count.map_or_else(String::new, |n| n.to_string()),
+                                )
+                                .weak()
+                                .small(),
+                            );
+                        // Named by the page alone: the count is for the eye.
+                        let button = ui
+                            .add_sized(egui::vec2(RAIL_WIDTH, ui.spacing().interact_size.y), button)
+                            .accessible_name(candidate.label());
+                        if button.clicked() {
                             *page = candidate;
                         }
                     }
@@ -278,38 +338,36 @@ fn page_ui(
     out: &mut Output,
 ) {
     match *page {
+        Page::Appearance => {
+            let (picked, zoom) = appearance_ui(ui, theme, current_zoom);
+            out.theme = picked;
+            out.zoom = zoom;
+        }
+        Page::Startup => startup_ui(ui, defaults.startup),
+        Page::Updates => updates_ui(ui, defaults.updates, defaults.platform, defaults.busy),
+        Page::Columns => display_ui(ui, defaults.columns, defaults.table_style, defaults.clicks),
+        Page::Thumbnails => thumbnails_ui(ui, defaults.session),
+        Page::FileSystem => out.relist |= file_system_ui(ui, defaults.session),
+        Page::DefaultOp => default_op_ui(ui, defaults.default_op),
         Page::BatchReplace => batch_replace_ui(ui, defaults.batch_replace),
         Page::MusicStyles => music_styles_ui(ui, defaults.music_styles),
         Page::CasingExceptions => casing_ui(ui, defaults.casing),
-        Page::Display => display_ui(
-            ui,
-            defaults.columns,
-            defaults.table_style,
-            defaults.clicks,
-            defaults.session,
-        ),
-        Page::Startup => startup_ui(ui, defaults.startup),
         Page::ShellIntegration => shell_ui(
             ui,
             defaults.platform,
             defaults.presets,
             defaults.context_menu,
         ),
-        Page::ProblemSolver => {
-            out.reset = problem_solver_ui(
+        Page::Storage => {
+            out.reset = storage_ui(
                 ui,
                 defaults.platform,
                 defaults.journal_dir,
                 defaults.preset_dir,
-            )
+            );
         }
-        Page::FileSystem => out.relist |= file_system_ui(ui, defaults.session),
-        Page::Appearance => {
-            let (picked, zoom) = appearance_ui(ui, theme, current_zoom);
-            out.theme = picked;
-            out.zoom = zoom;
-        }
-        Page::Updates => updates_ui(ui, defaults.updates, defaults.platform, defaults.busy),
+        Page::Help => help_ui(ui),
+        Page::About => crate::panels::about::body(ui, defaults.batches, defaults.newer),
     }
 }
 
@@ -650,7 +708,6 @@ fn display_ui(
     columns: &mut Columns,
     style: &mut crate::viewmodel::TableStyle,
     clicks: &mut ClickActions,
-    session: &mut SessionSettings,
 ) {
     ui.label(
         egui::RichText::new(
@@ -786,11 +843,6 @@ fn display_ui(
             });
             ui.end_row();
         });
-
-    ui.add_space(10.0);
-    ui.separator();
-    ui.add_space(6.0);
-    thumbnails_ui(ui, session);
 }
 
 /// How big thumbnails are drawn, and whether they get a border.
@@ -946,12 +998,30 @@ fn startup_ui(ui: &mut egui::Ui, startup: &mut Startup) {
     );
 }
 
-/// Answers to the problems people actually hit, and shortcuts to the folders
-/// the app keeps its files in.
+/// What `+ Add operation` and Ctrl+K make (D253), stored as `OpKind::name()`.
+fn default_op_ui(ui: &mut egui::Ui, default_op: &mut String) {
+    ui.horizontal(|ui| {
+        ui.label("New cards start as:");
+        let current = crate::app::op_named(default_op);
+        if let Some(op) = crate::panels::catalogue::picker(ui, "New cards start as", &current) {
+            op.name().clone_into(default_op);
+        }
+    });
+    ui.label(
+        egui::RichText::new(
+            "What + Add operation and Ctrl+K add, and the one card an empty pipeline starts \
+             with. Any card can switch to another operation from its own drop-down.",
+        )
+        .weak()
+        .small(),
+    );
+}
+
+/// Shortcuts to the folders the app keeps its files in, and the reset.
 ///
-/// The shortcuts are the useful half and the only half that can go stale, so
-/// they are read from the same functions the app uses rather than typed out.
-fn problem_solver_ui(
+/// The shortcuts can go stale, so they are read from the same functions the
+/// app uses rather than typed out. Returns true when Reset was pressed.
+fn storage_ui(
     ui: &mut egui::Ui,
     platform: &dyn ren_platform::Platform,
     journal_dir: &std::path::Path,
@@ -1017,7 +1087,25 @@ fn problem_solver_ui(
     ui.add_space(10.0);
     ui.separator();
     ui.add_space(6.0);
+    ui.label(egui::RichText::new("Start again").strong());
+    ui.label(
+        egui::RichText::new(
+            "Puts every setting in this window back to what the app ships with. Your \
+             files, presets, scripts and undo history are not settings and are left \
+             alone — the folders they live in are listed above.",
+        )
+        .weak()
+        .small(),
+    );
+    ui.add_space(4.0);
+    // The ellipsis is the promise that it asks first.
+    ui.button("Reset all settings…")
+        .on_hover_text("Asks before it does anything")
+        .clicked()
+}
 
+/// Answers to the problems people actually hit.
+fn help_ui(ui: &mut egui::Ui) {
     ui.label(egui::RichText::new("If something looks wrong").strong());
     ui.add_space(4.0);
     for (problem, answer) in [
@@ -1034,7 +1122,7 @@ fn problem_solver_ui(
         ),
         (
             "Some files are missing from the list",
-            "Check the pattern box, the Files/Folders switches, and Settings ▸ File System. \
+            "Check the pattern box, the Files/Folders switches, and Settings ▸ Which files show. \
              Anything the walk could not read is counted beside the folder path.",
         ),
         (
@@ -1052,24 +1140,6 @@ fn problem_solver_ui(
         ui.label(egui::RichText::new(answer).weak().small());
         ui.add_space(4.0);
     }
-
-    ui.separator();
-    ui.add_space(6.0);
-    ui.label(egui::RichText::new("Start again").strong());
-    ui.label(
-        egui::RichText::new(
-            "Puts every setting in this window back to what the app ships with. Your \
-             files, presets, scripts and undo history are not settings and are left \
-             alone — the folders they live in are listed above.",
-        )
-        .weak()
-        .small(),
-    );
-    ui.add_space(4.0);
-    // The ellipsis is the promise that it asks first.
-    ui.button("Reset all settings…")
-        .on_hover_text("Asks before it does anything")
-        .clicked()
 }
 
 /// The file manager's RenameIt menu — D7, widened by the preset menu.

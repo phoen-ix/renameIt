@@ -59,6 +59,9 @@ pub struct EditorRequests {
     /// Find & Replace's *Add to Batch Replace* — the card's settings, as a
     /// rule to append to the Batch Replace defaults.
     pub add_batch_rule: RefCell<Option<ren_core::ops::Replace>>,
+    /// A card's type drop-down picked another operation: which card, and a
+    /// blank one of the new kind for the app to seed from Settings.
+    pub change_kind: RefCell<Option<(crate::viewmodel::CardId, ren_core::OpKind)>>,
     /// A ⌖ was clicked, or the strip it opened asked for something.
     ///
     /// `RefCell` rather than `Cell` because the request carries a `String` and

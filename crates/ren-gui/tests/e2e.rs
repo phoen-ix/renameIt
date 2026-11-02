@@ -156,10 +156,13 @@ fn is_run_label(label: &str) -> bool {
     label == "Rename" || label == "Run" || counted("Rename ") || counted("Run on ")
 }
 
-/// An item of the ⋯ menu at the window's top right (D251).
-fn menu(harness: &mut Harness<'_, RenameItApp>, item: &str) {
-    click(harness, "Menu");
-    click(harness, item);
+/// Settings, from the ⚙ at the window's top right (D255), on rail entry
+/// `page` unless that is "Settings" itself.
+fn menu(harness: &mut Harness<'_, RenameItApp>, page: &str) {
+    click(harness, "Settings");
+    if page != "Settings" {
+        click(harness, page);
+    }
 }
 
 /// The run button under the pipeline, whose label carries the count
@@ -203,17 +206,22 @@ fn type_into(harness: &mut Harness<'_, RenameItApp>, name: &str, text: &str) {
     settle(harness);
 }
 
-/// Adds an operation the way a user finds one: the palette, searched, clicked.
-/// The list scrolls, so an entry far down is only clickable once searched for.
-fn add_from_palette(harness: &mut Harness<'_, RenameItApp>, entry: &str, by_key: bool) {
+/// Adds an operation the way a user does: `+ Add operation` (or Ctrl+K) makes
+/// a default card, and its type drop-down turns it into `entry`.
+fn add_operation_of(harness: &mut Harness<'_, RenameItApp>, entry: &str, by_key: bool) {
     if by_key {
         harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::K);
         settle(harness);
     } else {
         click(harness, "+ Add operation");
     }
-    harness.get_by_label("Add operation");
-    type_into(harness, "Search…", entry);
+    // The new card is the last, and it is the default operation's.
+    harness
+        .get_all_by_role(Role::ComboBox)
+        .rfind(|n| n.value().as_deref() == Some("Replace"))
+        .expect("the new card's type drop-down")
+        .click();
+    settle(harness);
     harness.get_by_role_and_label(Role::Button, entry).click();
     settle(harness);
 }
@@ -253,10 +261,11 @@ fn present(harness: &Harness<'_, RenameItApp>, text: &str) -> bool {
 
 // --- Sweep: every screen opens, names itself, and closes ---------------------
 
-/// Every entry in the palette, clicked, adds its card and opens its editor.
+/// Every operation, added and picked from the card's drop-down, opens its
+/// editor.
 /// The marker is a line only that editor draws.
 #[test]
-fn sweep_every_operation_in_the_palette_opens_its_editor() {
+fn sweep_every_operation_in_the_drop_down_opens_its_editor() {
     let fixture = Fixture::new(&["a_b.txt"]);
     let mut harness = sized(fixture.app(), 1200.0);
 
@@ -283,13 +292,9 @@ fn sweep_every_operation_in_the_palette_opens_its_editor() {
     for (i, (entry, marker)) in operations.iter().enumerate() {
         let before = harness.state().stack().len();
         // The button and the hotkey both open it.
-        add_from_palette(&mut harness, entry, i % 2 == 1);
+        add_operation_of(&mut harness, entry, i % 2 == 1);
 
         assert_eq!(harness.state().stack().len(), before + 1, "{entry}");
-        assert!(
-            harness.query_by_label("Add operation").is_none(),
-            "{entry}: the palette closes once it has added the card"
-        );
         assert!(
             present(&harness, marker),
             "{entry}: its editor shows {marker:?}"
@@ -305,11 +310,13 @@ fn sweep_every_settings_page_is_reachable_from_the_rail() {
 
     menu(&mut harness, "Settings");
     let pages = [
-        ("Music Styles", "+ Add style"),
-        ("Casing Exceptions", "Exception words"),
-        ("Display", "Shade every other row"),
-        ("File System", "Hidden files and folders"),
-        ("Startup", "Uncheck Subfolders"),
+        ("Music styles", "+ Add style"),
+        ("Casing words", "Exception words"),
+        ("Columns & rows", "Shade every other row"),
+        ("Thumbnails", "Draw a border around thumbnails"),
+        ("Which files show", "Hidden files and folders"),
+        ("When RenameIt starts", "Uncheck Subfolders"),
+        ("Default operation", "New cards start as:"),
         (
             "Right-click menu",
             if cfg!(windows) {
@@ -320,8 +327,10 @@ fn sweep_every_settings_page_is_reachable_from_the_rail() {
         ),
         ("Appearance", "Interface size"),
         ("Updates", "ask GitHub whether there is a newer release"),
-        ("Problem Solver", "Where things are kept"),
-        ("Batch Replace", "rules, run top to bottom"),
+        ("Where files are kept", "Reset all settings…"),
+        ("Help", "If something looks wrong"),
+        ("About", "MIT licensed"),
+        ("Batch Replace list", "rules, run top to bottom"),
     ];
     for (page, marker) in pages {
         click(&mut harness, page);
@@ -337,8 +346,8 @@ fn sweep_every_window_and_popover_opens_and_closes() {
     let fixture = Fixture::new(&["one.txt", "two.txt"]);
     let mut harness = harness(fixture.app());
 
-    // About, from the ⋯ menu.
-    menu(&mut harness, "About RenameIt");
+    // About, the last page of Settings.
+    menu(&mut harness, "About");
     assert!(present(&harness, "MIT licensed"));
     click(&mut harness, "Close");
     assert!(!present(&harness, "MIT licensed"));
@@ -349,23 +358,7 @@ fn sweep_every_window_and_popover_opens_and_closes() {
     click(&mut harness, "✖");
     assert!(!present(&harness, "No presets saved yet."));
 
-    // The palette, closed with Escape.
-    click(&mut harness, "+ Add operation");
-    harness.get_by_label("Add operation");
-    harness.key_press(egui::Key::Escape);
-    settle(&mut harness);
-    assert!(harness.query_by_label("Add operation").is_none());
-
-    // Run settings and the include filter open popovers. Run settings holds
-    // all three run-wide settings at once (D251).
-    click(&mut harness, "Run settings ▾");
-    assert!(present(&harness, "Reset each folder"));
-    assert!(present(&harness, "use <%1> … <%9> as tags"));
-    assert!(present(&harness, "Only rename if all tags are available"));
-    harness.key_press(egui::Key::Escape);
-    settle(&mut harness);
-    assert!(!present(&harness, "Reset each folder"));
-
+    // The include filter opens a popover.
     harness.get_by_label("Include filter…").click();
     settle(&mut harness);
     assert!(present(&harness, "Include only files matching"));
@@ -624,7 +617,7 @@ fn the_card_header_switches_a_card_off_and_its_menu_edits_the_stack() {
 fn the_add_remove_editor_inserts_at_the_position_typed() {
     let fixture = Fixture::new(&["ab.txt"]);
     let mut harness = sized(fixture.app(), 1000.0);
-    add_from_palette(&mut harness, "Add / Remove", false);
+    add_operation_of(&mut harness, "Add / Remove", false);
 
     type_into(&mut harness, "Insert:", "X");
     assert_eq!(new_names(&harness), ["Xab.txt"]);
@@ -641,7 +634,7 @@ fn the_add_remove_editor_inserts_at_the_position_typed() {
 fn the_casing_editor_applies_the_mode_clicked() {
     let fixture = Fixture::new(&["My File.TXT"]);
     let mut harness = sized(fixture.app(), 1000.0);
-    add_from_palette(&mut harness, "Set Casing", false);
+    add_operation_of(&mut harness, "Set Casing", false);
 
     for (mode, expected) in [
         ("UPPER CASE", "MY FILE.TXT"),
@@ -660,7 +653,7 @@ fn the_casing_editor_applies_the_mode_clicked() {
 fn the_zero_padding_editor_pads_to_the_digits_given() {
     let fixture = Fixture::new(&["track 7.txt"]);
     let mut harness = sized(fixture.app(), 1000.0);
-    add_from_palette(&mut harness, "Zero Padding", false);
+    add_operation_of(&mut harness, "Zero Padding", false);
     assert_eq!(new_names(&harness), ["track 07.txt"]);
 
     set_number(&mut harness, "Digits:", 3.0);
@@ -671,7 +664,7 @@ fn the_zero_padding_editor_pads_to_the_digits_given() {
 fn the_add_counter_editor_moves_the_counter_and_its_separator() {
     let fixture = Fixture::new(&["a.txt"]);
     let mut harness = sized(fixture.app(), 1000.0);
-    add_from_palette(&mut harness, "Add Counter", false);
+    add_operation_of(&mut harness, "Add Counter", false);
     assert_eq!(new_names(&harness), ["1-a.txt"]);
 
     harness
@@ -689,7 +682,7 @@ fn the_add_counter_editor_moves_the_counter_and_its_separator() {
 fn the_free_format_editor_builds_the_name_from_its_pattern() {
     let fixture = Fixture::new(&["a.txt"]);
     let mut harness = sized(fixture.app(), 1000.0);
-    add_from_palette(&mut harness, "Free Format", false);
+    add_operation_of(&mut harness, "Free Format", false);
 
     type_into(&mut harness, "Pattern:", "new_<Name>.md");
     assert_eq!(new_names(&harness), ["new_a.md"]);
@@ -708,7 +701,7 @@ fn the_csv_editor_renames_from_the_list_it_was_given() {
         ..Default::default()
     });
     let mut harness = sized(app, 1000.0);
-    add_from_palette(&mut harness, "CSV List Rename", false);
+    add_operation_of(&mut harness, "CSV List Rename", false);
 
     click(&mut harness, "Choose a CSV file");
     assert_eq!(new_names(&harness), ["Some.txt", "other.txt"]);
@@ -716,14 +709,14 @@ fn the_csv_editor_renames_from_the_list_it_was_given() {
 
 // --- Run-wide settings -------------------------------------------------------
 
-/// Counter setup's own boxes, typed into, rather than `settings_mut`.
+/// The counter's own boxes in the Add Counter card (D254), typed into, rather
+/// than `settings_mut`.
 #[test]
-fn the_counter_setup_popover_drives_the_counter() {
+fn the_add_counter_cards_counter_boxes_drive_the_counter() {
     let fixture = Fixture::new(&["a.txt", "b.txt", "c.txt"]);
     let mut harness = sized(fixture.app(), 1000.0);
-    add_from_palette(&mut harness, "Add Counter", false);
+    add_operation_of(&mut harness, "Add Counter", false);
 
-    click(&mut harness, "Run settings ▾");
     set_number(&mut harness, "Start value:", 10.0);
     set_number(&mut harness, "Step:", 5.0);
     assert_eq!(new_names(&harness), ["10-a.txt", "15-b.txt", "20-c.txt"]);
@@ -742,11 +735,11 @@ fn the_counter_setup_popover_drives_the_counter() {
 fn only_if_all_tags_are_available_leaves_an_untagged_file_alone() {
     let fixture = Fixture::new(&["a.txt"]);
     let mut harness = sized(fixture.app(), 1000.0);
-    add_from_palette(&mut harness, "Free Format", false);
+    add_operation_of(&mut harness, "Free Format", false);
     type_into(&mut harness, "Pattern:", "<Name> by <Artist>.txt");
     assert_eq!(new_names(&harness), ["a by .txt"]);
 
-    click(&mut harness, "Run settings ▾");
+    // In the Free Format card, because <Artist> reads the file.
     harness
         .get_by_role_and_label(Role::CheckBox, "Only rename if all tags are available")
         .click();
@@ -1036,7 +1029,7 @@ impl ren_platform::Platform for Spy {
     }
 }
 
-/// The row menu's Show in file manager and the Problem Solver's 📂 both ask the
+/// The row menu's Show in file manager and Where files are kept's 📂 both ask the
 /// platform to show a path — the file, and the journal folder.
 #[test]
 fn show_in_file_manager_reveals_the_row_and_the_problem_solver_its_folders() {
@@ -1059,7 +1052,7 @@ fn show_in_file_manager_reveals_the_row_and_the_problem_solver_its_folders() {
 
     harness.key_press(egui::Key::F8);
     settle(&mut harness);
-    click(&mut harness, "Problem Solver");
+    click(&mut harness, "Where files are kept");
     // Two kinds of 📂: the source bar's folder picker at the top, then the
     // page's three, the journal's first.
     let mut folders: Vec<_> = harness.get_all_by_label("📂").collect();
@@ -1147,6 +1140,43 @@ fn a_quick_double_click_opens_a_folder_in_the_list_and_the_grid() {
     assert!(harness.state().session().settings.dir.ends_with("sub"));
 }
 
+/// `..` above the rows goes up a folder on a double-click, in the list and in
+/// the grid, and lands on the folder it left — Backspace's behaviour.
+#[test]
+fn a_double_click_on_dot_dot_goes_up_in_the_list_and_the_grid() {
+    let fixture = Fixture::new(&["a.txt", "sub/inside.txt"]);
+    for grid in [false, true] {
+        let mut app = with_a_folder(&fixture);
+        app.set_dir(fixture.dir.path().join("sub"));
+        let mut harness = quick(app);
+        if grid {
+            click(&mut harness, "Grid");
+        }
+        double_click(&mut harness, "📁 ..");
+        assert_eq!(
+            harness.state().session().settings.dir,
+            fixture.dir.path(),
+            "grid: {grid}"
+        );
+        let session = harness.state().session();
+        let landed = session
+            .selection
+            .lead
+            .map(|i| &session.entries()[i].file_name);
+        assert_eq!(landed.map(String::as_str), Some("sub"), "grid: {grid}");
+    }
+}
+
+/// No `..` where there is nowhere to go: Free Select has no folder.
+#[test]
+fn free_select_has_no_dot_dot() {
+    let fixture = Fixture::new(&["a.txt"]);
+    let mut app = fixture.app();
+    app.session_mut().settings.mode = ren_gui::viewmodel::SourceMode::FreeSelect;
+    let harness = quick(app);
+    assert!(harness.query_by_label("📁 ..").is_none());
+}
+
 /// Explorer's slow second click: a click on the row that is already the only
 /// one selected opens the editor once the double-click time has passed.
 #[test]
@@ -1187,7 +1217,7 @@ fn a_quick_double_click_on_a_file_does_what_the_display_page_says() {
 
     harness.key_press(egui::Key::F8);
     settle(&mut harness);
-    click(&mut harness, "Display");
+    click(&mut harness, "Columns & rows");
     pick(&mut harness, "Double-click on a file", "Open it");
     click(&mut harness, "Close");
 
@@ -1219,7 +1249,7 @@ fn a_folder_in_free_select_opens_only_if_the_display_page_says_so() {
 
     harness.key_press(egui::Key::F8);
     settle(&mut harness);
-    click(&mut harness, "Display");
+    click(&mut harness, "Columns & rows");
     pick(
         &mut harness,
         "Double-click on a folder in Free Select",
@@ -1256,17 +1286,26 @@ fn the_folder_being_browsed_opens_in_the_file_manager() {
     );
 }
 
-/// D252: the right-click menu's page is one click from the ⋯ menu, not three
-/// levels into Settings under a name nobody looks for.
+/// D255: the ⚙ opens Settings directly. There is no ⋯ menu any more, and
+/// About is the rail's last entry.
 #[test]
-fn the_menu_reaches_the_right_click_menu_page() {
+fn the_gear_opens_settings_and_about_is_its_last_page() {
     let fixture = Fixture::new(&["one.txt"]);
     let mut harness = harness(fixture.app());
-    menu(&mut harness, "Right-click menu…");
-    assert!(
-        present(&harness, "when I right-click files, folders and drives")
-            || present(&harness, "no context-menu entry to install")
-    );
+    assert!(harness.query_by_label("Menu").is_none());
+
+    click(&mut harness, "Settings");
+    assert!(present(&harness, "Interface size"), "opens on Appearance");
+    let last = harness
+        .get_all_by_role(Role::Button)
+        .filter(|n| {
+            n.accesskit_node()
+                .label()
+                .is_some_and(|l| l == "About" || l == "Help" || l == "Appearance")
+        })
+        .max_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+        .and_then(|n| n.accesskit_node().label());
+    assert_eq!(last.as_deref(), Some("About"));
 }
 
 /// Settings ▸ Updates on an installed copy: Check now finds the newer release,
@@ -1400,7 +1439,7 @@ fn the_file_system_page_changes_what_is_listed() {
 
     harness.key_press(egui::Key::F8);
     settle(&mut harness);
-    click(&mut harness, "File System");
+    click(&mut harness, "Which files show");
     harness
         .get_by_role_and_label(Role::CheckBox, "Write-protected files and folders")
         .click();
@@ -1439,14 +1478,15 @@ fn the_file_system_page_changes_what_is_listed() {
     set_readonly(false);
 }
 
-/// Settings ▸ Display: the thumbnail border and row stripes are stored.
+/// Settings ▸ Columns & rows and Thumbnails: the row stripes and the
+/// thumbnail border are stored.
 #[test]
 fn the_display_page_stores_its_switches() {
     let fixture = Fixture::new(&["one.txt"]);
     let mut harness = sized(fixture.app(), 1000.0);
     harness.key_press(egui::Key::F8);
     settle(&mut harness);
-    click(&mut harness, "Display");
+    click(&mut harness, "Columns & rows");
 
     let stripes = harness.state().table_style().stripes;
     harness
@@ -1455,6 +1495,7 @@ fn the_display_page_stores_its_switches() {
     settle(&mut harness);
     assert_eq!(harness.state().table_style().stripes, !stripes);
 
+    click(&mut harness, "Thumbnails");
     let border = harness.state().session().settings.thumb_border;
     harness
         .get_by_role_and_label(Role::CheckBox, "Draw a border around thumbnails")
@@ -1463,6 +1504,7 @@ fn the_display_page_stores_its_switches() {
     assert_eq!(harness.state().session().settings.thumb_border, !border);
 
     // A column turned on, then Restore defaults: the table is back to four.
+    click(&mut harness, "Columns & rows");
     harness.get_by_role_and_label(Role::CheckBox, "Ext").click();
     settle(&mut harness);
     assert_eq!(harness.get_all_by_label("Ext").count(), 2, "box and header");
@@ -1507,7 +1549,7 @@ fn home_and_end_jump_to_the_ends_of_the_list() {
 fn the_space_trimming_switches_reach_the_preview() {
     let fixture = Fixture::new(&["  a  b.txt"]);
     let mut harness = sized(fixture.app(), 1000.0);
-    add_from_palette(&mut harness, "Space Trimming", false);
+    add_operation_of(&mut harness, "Space Trimming", false);
     assert_eq!(new_names(&harness), ["a b.txt"]);
 
     harness

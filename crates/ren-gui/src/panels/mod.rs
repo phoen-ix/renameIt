@@ -2,11 +2,11 @@
 
 pub mod about;
 pub mod ask;
+pub mod catalogue;
 pub mod confirm;
 pub mod file_table;
 pub mod grid;
 pub mod operation;
-pub mod palette;
 pub mod presets;
 pub mod rows;
 pub mod run_controls;

@@ -90,6 +90,11 @@ pub struct FileTable<'a> {
     pub free_select: bool,
     /// Whether a listing is still out, so an empty list is not yet empty.
     pub listing: bool,
+    /// Whether to show the `..` row: Browser mode, below a root. Set by the
+    /// caller, like `scroll_to`.
+    pub parent_row: bool,
+    /// Set when `..` was double-clicked.
+    pub go_up: bool,
     /// Rows that pass `row_filter`, in display order.
     visible: Vec<usize>,
 }
@@ -134,6 +139,8 @@ impl<'a> FileTable<'a> {
             row_action: None,
             free_select: false,
             listing: false,
+            parent_row: false,
+            go_up: false,
             visible,
             thumbs,
             thumb,
@@ -185,7 +192,7 @@ impl<'a> FileTable<'a> {
             // have room rather than from the right-hand margin.
             .auto_size_mode(egui_table::AutoSizeMode::Always)
             .columns(columns)
-            .headers(vec![egui_table::HeaderRow::new(self.header_height())]);
+            .headers(self.header_rows());
         // `None` rather than `Align::Center`: minimal scroll, so a lead that is
         // already on screen does not make the whole list lurch on every arrow
         // press. The index is an *entry*; the table counts visible rows.
@@ -203,7 +210,7 @@ impl<'a> FileTable<'a> {
         // stay clickable.
         if self.visible.is_empty() {
             let mut area = ui.max_rect();
-            area.min.y += self.header_height() + CELL_GUTTER; // below the header row
+            area.min.y += self.header_rows().iter().map(|h| h.height).sum::<f32>() + CELL_GUTTER;
             empty_state(
                 ui,
                 area,
@@ -212,6 +219,22 @@ impl<'a> FileTable<'a> {
                 self.listing,
             );
         }
+    }
+
+    /// The column titles and, below a root in Browser mode, the `..` row.
+    ///
+    /// `..` is a second header row spanning every column rather than an
+    /// entry: an entry's position is its run and counter index (P86), and a
+    /// header row also stays put while the list scrolls.
+    fn header_rows(&self) -> Vec<egui_table::HeaderRow> {
+        let mut rows = vec![egui_table::HeaderRow::new(self.header_height())];
+        if self.parent_row {
+            // A text row's height even when thumbnails make the others taller.
+            let mut up = egui_table::HeaderRow::new(self.row_text_height + 2.0 * ROW_PADDING);
+            up.groups = std::iter::once(0..self.shown.len()).collect();
+            rows.push(up);
+        }
+        rows
     }
 
     /// The header row, which carries a frameless `Button` and so needs its
@@ -269,6 +292,11 @@ impl egui_table::TableDelegate for FileTable<'_> {
     }
 
     fn header_cell_ui(&mut self, ui: &mut egui::Ui, cell: &egui_table::HeaderCellInfo) {
+        if cell.row_nr == 1 {
+            ui.add_space(CELL_GUTTER);
+            self.go_up |= up_row(ui);
+            return;
+        }
         let Some(column) = self.shown.get(cell.col_range.start) else {
             return;
         };
@@ -568,6 +596,14 @@ impl FileTable<'_> {
             &mut self.row_action,
         );
     }
+}
+
+/// The `..` entry the list and the grid draw above their rows. True when it
+/// was double-clicked — the gesture that opens a folder row (P115).
+pub(super) fn up_row(ui: &mut egui::Ui) -> bool {
+    ui.add(egui::Label::new("📁 ..").sense(egui::Sense::click()))
+        .on_hover_text("Double-click to go up a folder (Backspace)")
+        .double_clicked()
 }
 
 /// Why the list is empty, in the words that name the way out of it, painted

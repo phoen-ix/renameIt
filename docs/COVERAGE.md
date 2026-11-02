@@ -15,8 +15,8 @@ the list below:
 
 ```sh
 ls crates/ren-gui/src/panels/*.rs crates/ren-gui/src/editors/*.rs | grep -vE '/(mod|assist)\.rs'   # 32 zones, windows and editors
-grep -oE 'label: "[^"]+"' crates/ren-gui/src/panels/palette.rs                                     # 18 operations
-grep -oE 'Self::[A-Za-z]+ => "[^"]+"' crates/ren-gui/src/panels/settings.rs                       # 10 Settings pages
+grep -oE 'label: "[^"]+"' crates/ren-gui/src/panels/catalogue.rs                                   # 18 operations
+grep -A15 'pub const ALL' crates/ren-gui/src/panels/settings.rs | grep -c 'Self::'                # 14 Settings pages
 grep -oE 'Key::[A-Za-z0-9]+' crates/ren-gui/src/app.rs | sort -u                                   # 18 keys
 grep -A17 'pub enum RowAction' crates/ren-gui/src/panels/rows.rs                                   # row menu
 awk '/^enum Command|^enum PresetAction|^struct JobArgs|^struct Cli/,/^}/' crates/ren-cli/src/main.rs \
@@ -39,9 +39,9 @@ Roles: none. This is a single-user desktop app and a CLI, with no accounts.
 
 | Screen kind | Test |
 |---|---|
-| All 18 operation editors, added from the palette by button and by Ctrl+K | ✅ e2e › sweep_every_operation_in_the_palette_opens_its_editor |
-| All 10 Settings pages, from the rail | ✅ e2e › sweep_every_settings_page_is_reachable_from_the_rail |
-| About (⋯ menu), presets drawer, palette (Esc), Run settings, Include filter, row menu, Grid/List | ✅ e2e › sweep_every_window_and_popover_opens_and_closes |
+| All 18 operation editors, added by button and by Ctrl+K and picked from the card's drop-down | ✅ e2e › sweep_every_operation_in_the_drop_down_opens_its_editor |
+| All 14 Settings pages, from the rail | ✅ e2e › sweep_every_settings_page_is_reachable_from_the_rail |
+| Settings ▸ About, presets drawer, Include filter, row menu, Grid/List | ✅ e2e › sweep_every_window_and_popover_opens_and_closes |
 
 ## Source bar (`panels/source_bar.rs`)
 
@@ -57,8 +57,8 @@ Roles: none. This is a single-user desktop app and a CLI, with no accounts.
 | 8 | Include filter popover (include, typed) | ✅ gui › the_include_filter_popover_takes_a_click_and_then_typing |
 | 9 | Include filter: what it narrows | ✅ gui › the_include_filter_narrows_which_files_change |
 | 10 | List ⇄ Grid switch | ✅ e2e › sweep_every_window_and_popover_opens_and_closes |
-| 11 | ⋯ menu ▸ Settings | ✅ e2e › sweep_every_settings_page_is_reachable_from_the_rail |
-| 12 | ⋯ menu ▸ About RenameIt | ✅ gui › about_opens_and_reports_what_the_session_did |
+| 11 | ⚙ ▸ Settings | ✅ e2e › the_gear_opens_settings_and_about_is_its_last_page, sweep_every_settings_page_is_reachable_from_the_rail |
+| 12 | Settings ▸ About, the last page | ✅ gui › about_opens_and_reports_what_the_session_did |
 | 13 | Free Select: Add files… | ✅ e2e › the_mode_switch_and_free_selects_add_and_clear |
 | 14 | Free Select: Clear | ✅ e2e › the_mode_switch_and_free_selects_add_and_clear |
 | 15 | Free Select: drag and drop | ✅ gui › dropped_files_populate_free_select |
@@ -68,16 +68,16 @@ Roles: none. This is a single-user desktop app and a CLI, with no accounts.
 | 19 | Command-line-limit banner: Dismiss | ✅ e2e › the_selection_limit_banner_can_be_dismissed |
 | 20 | No banner for a drag | ✅ gui › a_drag_of_many_files_is_told_nothing_about_a_limit |
 
-## Pipeline: the card stack (`panels/operation.rs`, `panels/palette.rs`)
+## Pipeline: the card stack (`panels/operation.rs`, `panels/catalogue.rs`)
 
 | # | Feature | Test |
 |---|---|---|
-| 21 | + Add operation opens the palette | ✅ gui › the_palette_offers_every_operation_and_adds_the_one_you_pick |
-| 22 | Ctrl+K opens the palette | ✅ gui › ctrl_k_opens_the_palette |
-| 23 | Palette search | ✅ gui › the_palette_search_narrows_to_what_you_typed |
-| 24 | Palette: a searched entry clicked | ✅ gui › a_palette_entry_found_by_searching_and_clicked_is_added |
-| 25 | Palette: Enter adds the first match | ✅ gui › the_palette_keeps_its_own_enter |
-| 26 | Palette: Escape closes it | ✅ e2e › sweep_every_window_and_popover_opens_and_closes |
+| 21 | + Add operation adds a default card, expanded | ✅ gui › add_operation_adds_a_default_card_and_opens_it |
+| 22 | Ctrl+K adds a default card | ✅ gui › ctrl_k_adds_a_default_card |
+| 23 | Card type drop-down offers every operation and switches the card | ✅ gui › a_cards_drop_down_offers_every_operation_and_switches_to_the_one_you_pick |
+| 24 | A switched card is seeded like a new one, keeps its switch | ✅ gui › a_switched_card_is_seeded_like_a_new_one_and_keeps_its_switch |
+| 25 | Settings ▸ Default operation | ✅ gui › the_default_operation_is_set_in_settings_and_remembered |
+| 26 | An empty pipeline starts with one default card | ✅ `crates/ren-gui/src/app.rs` unit test › an_empty_pipeline_starts_with_one_default_card |
 | 27 | New card lands after the open one, expanded | ✅ gui › a_new_card_is_added_after_the_open_one_and_expanded |
 | 28 | Card header checkbox (on/off) | ✅ e2e › the_card_header_switches_a_card_off_and_its_menu_edits_the_stack |
 | 29 | Disabled card leaves the preview | ✅ gui › disabling_a_card_takes_it_out_of_the_preview |
@@ -155,17 +155,17 @@ Roles: none. This is a single-user desktop app and a CLI, with no accounts.
 | 91 | F3 on a card without it | ✅ gui › f3_says_so_when_the_card_has_no_visual_assist |
 | 92 | The strip across sort, run, undo, duplicate, move, disable | ✅ gui › the_strip_survives_a_re_sort, a_run_closes_the_strip_and_a_simulation_does_not, an_undo_closes_the_strip, duplicating_the_card_closes_the_strip, moving_the_card_keeps_the_strip_and_recomputes_it, disabling_the_card_keeps_the_strip_and_explains |
 
-## Run-wide settings (`panels/run_settings.rs`)
+## Run-wide settings, drawn in the cards that use them (`panels/run_settings.rs`, D254)
 
 | # | Feature | Test |
 |---|---|---|
-| 93 | Counter setup: Start, Step, Reset at | ✅ e2e › the_counter_setup_popover_drives_the_counter; gui › the_reset_at_number_is_named_by_its_checkbox |
+| 93 | Counter setup: Start, Step, Reset at | ✅ e2e › the_add_counter_cards_counter_boxes_drive_the_counter; gui › the_reset_at_number_is_named_by_its_checkbox |
 | 94 | Counter setup: padding | ✅ gui › the_counter_setup_panel_drives_the_counter |
-| 95 | Counter: Reset each folder / on base name change | ✅ gui › the_counter_popover_stays_open_while_its_boxes_are_ticked (what they do: `crates/ren-core/src/counter.rs` unit tests) |
+| 95 | Counter: Reset each folder / on base name change | ✅ gui › the_counters_boxes_tick_in_the_add_counter_card (what they do: `crates/ren-core/src/counter.rs` unit tests) |
 | 96 | Running counter carries over | ✅ gui › a_running_counter_picks_up_where_the_last_batch_left_off |
 | 97 | Setup parts pattern feeds `<%n>` | ✅ gui › the_parts_pattern_feeds_the_part_tags |
-| 98 | Setup parts ✨ detect | ✅ gui › the_parts_wand_keeps_its_popover_open |
-| 99 | Chips summarise and open | ✅ gui › the_counter_and_parts_chips_summarise_and_open |
+| 98 | Setup parts ✨ detect | ✅ gui › the_parts_wand_fills_the_pattern_in_the_tagger_card |
+| 99 | Each section shows only in the cards that use it | ✅ gui › each_run_wide_setting_shows_in_the_cards_that_use_it |
 | 100 | Only rename if all tags are available | ✅ e2e › only_if_all_tags_are_available_leaves_an_untagged_file_alone |
 
 ## File list and grid (`panels/file_table.rs`, `rows.rs`, `grid.rs`, `tile.rs`)
@@ -181,6 +181,8 @@ Roles: none. This is a single-user desktop app and a CLI, with no accounts.
 | 107 | Home / End | ✅ e2e › home_and_end_jump_to_the_ends_of_the_list |
 | 108 | Enter into a folder | ✅ gui › enter_walks_into_the_folder_under_the_keyboard |
 | 109 | Backspace up a level | ✅ gui › backspace_goes_up_one_level_and_lands_on_the_folder_it_left |
+| 109a | `..` above the list and the grid, double-clicked | ✅ e2e › a_double_click_on_dot_dot_goes_up_in_the_list_and_the_grid |
+| 109b | No `..` in Free Select | ✅ e2e › free_select_has_no_dot_dot |
 | 110 | Enter on a file does nothing | ✅ gui › enter_on_a_file_does_not_go_anywhere |
 | 111 | Delete removes Free Select rows only | ✅ gui › delete_removes_rows_from_free_select_and_leaves_the_files |
 | 112 | F2 inline rename, and undo | ✅ gui › f2_renames_a_single_row_and_undo_covers_it |
@@ -265,22 +267,22 @@ Roles: none. This is a single-user desktop app and a CLI, with no accounts.
 |---|---|---|
 | 172 | Batch Replace page: edit the default list | ✅ gui › the_settings_window_edits_the_list_a_new_batch_replace_card_starts_from |
 | 173 | Batch Replace page: add a blank rule | ✅ gui › the_batch_replace_list_adds_a_blank_rule |
-| 174 | Music Styles page | ✅ gui › the_music_styles_list_is_editable_and_the_card_keeps_its_pattern |
-| 175 | Casing Exceptions page | ✅ gui › the_casing_exception_list_is_a_default_for_new_cards |
-| 176 | Display: columns on, Name always on | ✅ gui › the_display_page_turns_a_column_on_and_the_table_shows_it |
-| 177 | Display: Restore defaults (columns); Music Styles: Restore defaults | ✅ e2e › the_display_page_stores_its_switches; gui › a_restored_string_list_row_does_not_inherit_the_old_rows_undo |
-| 178 | Display: stripes, thumbnail border | ✅ e2e › the_display_page_stores_its_switches |
-| 179 | File System: hidden, write-protected, pattern scope | ✅ e2e › the_file_system_page_changes_what_is_listed |
-| 180 | File System: System files switch | ✅ e2e › the_file_system_page_changes_what_is_listed (the switch; what it hides is a Windows attribute, so Linux lists nothing differently: `crates/ren-platform/src/visibility.rs` › nothing_is_a_system_file_here) |
-| 181 | File System: system-folder guard | ✅ gui › a_guarded_folder_blocks_the_run_with_a_reason |
-| 182 | Startup page | ✅ gui › the_startup_page_stores_a_switch_that_a_later_start_obeys |
+| 174 | Music styles page | ✅ gui › the_music_styles_list_is_editable_and_the_card_keeps_its_pattern |
+| 175 | Casing words page | ✅ gui › the_casing_exception_list_is_a_default_for_new_cards |
+| 176 | Columns & rows: columns on, Name always on | ✅ gui › the_display_page_turns_a_column_on_and_the_table_shows_it |
+| 177 | Columns & rows: Restore defaults; Music styles: Restore defaults | ✅ e2e › the_display_page_stores_its_switches; gui › a_restored_string_list_row_does_not_inherit_the_old_rows_undo |
+| 178 | Columns & rows: stripes; Thumbnails: border | ✅ e2e › the_display_page_stores_its_switches |
+| 179 | Which files show: hidden, write-protected, pattern scope | ✅ e2e › the_file_system_page_changes_what_is_listed |
+| 180 | Which files show: System files switch | ✅ e2e › the_file_system_page_changes_what_is_listed (the switch; what it hides is a Windows attribute, so Linux lists nothing differently: `crates/ren-platform/src/visibility.rs` › nothing_is_a_system_file_here) |
+| 181 | Which files show: system-folder guard | ✅ gui › a_guarded_folder_blocks_the_run_with_a_reason |
+| 182 | When RenameIt starts page | ✅ gui › the_startup_page_stores_a_switch_that_a_later_start_obeys |
 | 183 | Right-click menu page (was Shell Integration) | ✅ gui › the_shell_page_says_what_this_platform_can_do |
 | 184 | Right-click menu: install / refresh the menu (Windows) | ❌ (c) `crates/ren-gui/src/app.rs` MenuSpy tests and `panels/settings.rs` › LockedMenu; Linux has no menu to install |
 | 185 | Appearance: theme | ✅ gui › the_theme_control_lives_in_settings_now |
 | 186 | Appearance: interface size | ✅ gui › the_interface_size_scales_the_window_and_the_reset_puts_it_back |
-| 187 | Problem Solver: folders | ✅ gui › the_problem_solver_page_names_the_folders_the_app_really_uses |
-| 188 | Problem Solver: 📂 opens a folder | ✅ e2e › show_in_file_manager_reveals_the_row_and_the_problem_solver_its_folders |
-| 189 | Problem Solver: Reset all settings… (confirm) | ✅ gui › the_reset_button_asks_first_then_puts_every_setting_back |
+| 187 | Where files are kept: folders | ✅ gui › the_problem_solver_page_names_the_folders_the_app_really_uses |
+| 188 | Where files are kept: 📂 opens a folder | ✅ e2e › show_in_file_manager_reveals_the_row_and_the_problem_solver_its_folders |
+| 189 | Where files are kept: Reset all settings… (confirm) | ✅ gui › the_reset_button_asks_first_then_puts_every_setting_back |
 | 190 | Reset declined | ✅ gui › declining_the_reset_changes_nothing |
 | 191 | Window keeps its size across pages | ✅ gui › the_settings_window_does_not_change_size_when_you_change_page |
 
@@ -370,8 +372,8 @@ the rows in the sections above. F1 is deliberately unbound (P64).
 |---|---|---|
 | 249 | Quick double-click on a folder opens it, in the list and the grid | ✅ e2e › a_quick_double_click_opens_a_folder_in_the_list_and_the_grid |
 | 250 | Slow second click renames; a Ctrl-click does not | ✅ e2e › a_slow_second_click_on_the_selected_row_renames_it |
-| 251 | Display: *Double-click on a file* (Rename it / Open it) | ✅ e2e › a_quick_double_click_on_a_file_does_what_the_display_page_says |
-| 252 | Display: *Double-click on a folder in Free Select* (Do nothing / Browse into it) | ✅ e2e › a_folder_in_free_select_opens_only_if_the_display_page_says_so |
+| 251 | Columns & rows: *Double-click on a file* (Rename it / Open it) | ✅ e2e › a_quick_double_click_on_a_file_does_what_the_display_page_says |
+| 252 | Columns & rows: *Double-click on a folder in Free Select* (Do nothing / Browse into it) | ✅ e2e › a_folder_in_free_select_opens_only_if_the_display_page_says_so |
 
 ## The layout (D251)
 
@@ -386,6 +388,6 @@ the rows in the sections above. F1 is deliberately unbound (P64).
 | # | Feature | Test |
 |---|---|---|
 | 256 | Open in Explorer / file manager beside ⟳ | ✅ e2e › the_folder_being_browsed_opens_in_the_file_manager |
-| 257 | ⋯ ▸ Right-click menu… opens its Settings page | ✅ e2e › the_menu_reaches_the_right_click_menu_page |
+| 257 | No ⋯ menu: ⚙ opens Settings, About is the rail's last entry (D255) | ✅ e2e › the_gear_opens_settings_and_about_is_its_last_page |
 | 258 | The page's box records this user's choice | ✅ `panels/settings.rs` › the_box_records_the_users_choice |
 | 259 | First start sets the menu up after an install offered it; a "no" stays | ❌ (c) `crates/ren-gui/src/app.rs` › an_install_that_offered_the_menu_sets_it_up_at_first_start and its two siblings; `start_from` is reached only from `main`, and installer-smoke covers the installer half on Windows |

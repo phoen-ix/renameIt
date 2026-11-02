@@ -77,10 +77,11 @@ names the file that was mid-change and offers **Roll back** or **Leave as is**.
 
 ## Adding an operation
 
-**+ Add operation** or **Ctrl+K**: every operation, in groups; typing narrows
-the list — here *tags* leaves the Music operations and Free Format.
+**+ Add operation** or **Ctrl+K** adds a card of the default operation
+(Settings ▸ Default operation; Replace out of the box). The drop-down at the top of each
+card switches it to any other operation, in groups.
 
-<img src="palette-add-operation.png" alt="The add-operation palette with tags typed in the search box, listing Music Rename, Music Tagger, Remove Tags and Free Format" width="800">
+<img src="card-type-drop-down.png" alt="A Replace card's operation drop-down open, listing every operation under General, Numbers, Music and Advanced" width="800">
 
 ## Presets
 
@@ -118,43 +119,8 @@ operation is handed; select part of it and press **Select** to fill the box.
 
 ## Settings
 
-**F8**, or ⋯ ▸ Settings. Each page:
-
-### Batch Replace
-
-The rules a new Batch Replace card starts from.
-
-<img src="settings-batch-replace.png" alt="Settings, Batch Replace page" width="800">
-
-### Music Styles
-
-The patterns Music Rename offers.
-
-<img src="settings-music-styles.png" alt="Settings, Music Styles page" width="800">
-
-### Casing Exceptions
-
-The words a new Set Casing card keeps in lower or upper case.
-
-<img src="settings-casing-exceptions.png" alt="Settings, Casing Exceptions page" width="800">
-
-### Display
-
-Which columns the list shows, row shading and click target, thumbnail size.
-
-<img src="settings-display.png" alt="Settings, Display page" width="800">
-
-### File System
-
-Hidden and system files, and the system-folder guard.
-
-<img src="settings-file-system.png" alt="Settings, File System page" width="800">
-
-### Startup
-
-What a fresh start remembers.
-
-<img src="settings-startup.png" alt="Settings, Startup page" width="800">
+**F8**, or ⚙ at the top right. The rail groups the pages: General, File list,
+New cards, This computer, and RenameIt (Help, About).
 
 ### Appearance
 
@@ -162,14 +128,69 @@ Theme and interface size.
 
 <img src="settings-appearance.png" alt="Settings, Appearance page" width="800">
 
+### When RenameIt starts
+
+What a fresh start remembers.
+
+<img src="settings-startup.png" alt="Settings, When RenameIt starts page" width="800">
+
+### Columns & rows
+
+Which columns the list shows, row shading, click target and double-click.
+
+<img src="settings-columns.png" alt="Settings, Columns and rows page" width="800">
+
+### Thumbnails
+
+Thumbnail size and border, for the Thumb column and the grid.
+
+<img src="settings-thumbnails.png" alt="Settings, Thumbnails page" width="800">
+
+### Which files show
+
+Hidden and system files, what the pattern box applies to, and the
+system-folder guard.
+
+<img src="settings-file-system.png" alt="Settings, Which files show page" width="800">
+
+### Default operation
+
+What *+ Add operation* and Ctrl+K add.
+
+<img src="settings-default-operation.png" alt="Settings, Default operation page" width="800">
+
+### Batch Replace list
+
+The rules a new Batch Replace card starts from. The rail shows how many.
+
+<img src="settings-batch-replace.png" alt="Settings, Batch Replace list page" width="800">
+
+### Music styles
+
+The patterns Music Rename offers.
+
+<img src="settings-music-styles.png" alt="Settings, Music styles page" width="800">
+
+### Casing words
+
+The words a new Set Casing card keeps in lower or upper case.
+
+<img src="settings-casing-exceptions.png" alt="Settings, Casing words page" width="800">
+
+### Help
+
+Answers to the problems people actually hit.
+
+<img src="settings-help.png" alt="Settings, Help page" width="800">
+
 ### Reset all settings
 
-Settings ▸ Problem Solver ▸ **Reset all settings…** says everything it will
-put back before it does.
+Settings ▸ Where files are kept ▸ **Reset all settings…** says everything it
+will put back before it does.
 
 <img src="dialog-reset.png" alt="The reset dialog listing what it restores" width="800">
 
 Not pictured: **About** (it carries the version, so every release would change
 it), **Right-click menu** (a Linux render shows the page's "nothing to
-install" branch, not the Windows one) and **Problem Solver** (it prints the
-machine's own home folder).
+install" branch, not the Windows one), **Updates** (it depends on the release
+feed) and **Where files are kept** (it prints the machine's own home folder).

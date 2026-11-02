@@ -105,8 +105,8 @@ pub fn ui(ui: &mut egui::Ui, op: &mut MusicRename, cx: &EditorCx<'_>) -> bool {
     ui.label(
         egui::RichText::new(
             "A file with none of these tags is left alone rather than renamed to the \
-             pattern's punctuation. Run Settings ▸ \"Only rename if all tags are available\" \
-             does the same for a file that is missing just one.",
+             pattern's punctuation. \"Only rename if all tags are available\" below does \
+             the same for a file that is missing just one.",
         )
         .weak()
         .small(),

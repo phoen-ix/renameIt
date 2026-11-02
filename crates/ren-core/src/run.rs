@@ -102,7 +102,7 @@ pub struct RunSettings {
     pub counter: CounterSetup,
     pub parts: PartsSpec,
     /// Only rename a file if every tag its template names is available for it
-    /// — the checkbox in Run Settings. A file missing one keeps its name,
+    /// — the checkbox in the cards that read tags (D254). A file missing one keeps its name,
     /// rather than being renamed with a gap where the tag would have been.
     pub require_all_tags: bool,
     /// Keeps `<Rnd*>` reproducible between a preview and the rename that

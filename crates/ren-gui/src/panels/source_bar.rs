@@ -29,12 +29,8 @@ pub struct SourceBarOutput {
     pub hard_refresh: bool,
     /// The filter changed, so the preview must be recomputed.
     pub refilter: bool,
-    /// The Settings button was pressed.
+    /// The ⚙ was pressed.
     pub open_settings: bool,
-    /// The About button was pressed.
-    pub open_about: bool,
-    /// ⋯ ▸ Right-click menu…: Settings, on that page (D252).
-    pub open_menu_page: bool,
     /// "Open in Explorer": show the folder being browsed in the file manager.
     pub reveal_dir: bool,
 }
@@ -45,8 +41,6 @@ impl SourceBarOutput {
         self.hard_refresh |= other.hard_refresh;
         self.refilter |= other.refilter;
         self.open_settings |= other.open_settings;
-        self.open_about |= other.open_about;
-        self.open_menu_page |= other.open_menu_page;
         self.reveal_dir |= other.reveal_dir;
     }
 }
@@ -84,32 +78,18 @@ pub fn ui(
             SourceMode::FreeSelect => out.merge(free_select_controls(ui, session, dialogs)),
         }
 
-        // Settings and About: the window's own commands, at the window's own
-        // top-right corner, in one menu (D251). They used to live in the
-        // *Pipeline* panel's header, which scoped them wrongly — neither has
-        // anything to do with the card stack — and then as two icons here.
+        // Settings, at the window's own top-right corner (D255). It was a ⋯
+        // menu of Settings, Right-click menu… and About (D251); the middle
+        // entry only jumped into Settings and About is now its last page, so
+        // the one command left needs no menu.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             use crate::widgets::icons::{Icon, icon_button};
-            let button = icon_button(ui, Icon::Kebab, "Menu");
-            egui::Popup::menu(&button).show(|ui| {
-                if ui.button("Settings").on_hover_text("F8").clicked() {
-                    out.open_settings = true;
-                    ui.close();
-                }
-                if ui
-                    .button("Right-click menu…")
-                    .on_hover_text(format!("RenameIt in the {file_manager}'s right-click menu"))
-                    .clicked()
-                {
-                    out.open_menu_page = true;
-                    ui.close();
-                }
-                if ui.button("About RenameIt").clicked() {
-                    out.open_about = true;
-                    ui.close();
-                }
-            });
-            button.on_hover_text("Settings and About");
+            if icon_button(ui, Icon::Gear, "Settings")
+                .on_hover_text("Settings (F8)")
+                .clicked()
+            {
+                out.open_settings = true;
+            }
         });
     });
 

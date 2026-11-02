@@ -29,6 +29,13 @@ enum Command {
     Expand(Option<CardId>),
 }
 
+/// The run-wide settings a card may draw (D254), and the file Setup Parts'
+/// wand reads.
+pub struct RunCx<'a> {
+    pub settings: &'a mut ren_core::RunSettings,
+    pub sample: Option<&'a ren_core::model::FileEntry>,
+}
+
 /// The payload a dragged card carries. A newtype, not a bare index: the file
 /// table will want row dragging too, and `DragAndDrop` matches on the type.
 #[derive(Debug, Clone, Copy)]
@@ -45,6 +52,7 @@ pub fn ui(
     expanded: &mut Option<CardId>,
     cx: &EditorCx<'_>,
     assist: Option<&crate::panels::visual_assist::VisualAssist>,
+    run: &mut RunCx<'_>,
     reserve: f32,
 ) -> bool {
     let mut changed = false;
@@ -72,7 +80,7 @@ pub fn ui(
                 return;
             }
             for index in 0..stack.len() {
-                changed |= card_ui(ui, stack, index, expanded, &mut commands, cx, assist);
+                changed |= card_ui(ui, stack, index, expanded, &mut commands, cx, assist, run);
                 ui.add_space(STEP_GAP);
             }
         });
@@ -134,6 +142,10 @@ fn request_for(outcome: crate::panels::visual_assist::Outcome) -> Option<editors
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one card of the stack, and what it reports"
+)]
 fn card_ui(
     ui: &mut egui::Ui,
     stack: &mut CardStack,
@@ -142,6 +154,7 @@ fn card_ui(
     commands: &mut Vec<Command>,
     cx: &EditorCx<'_>,
     assist: Option<&crate::panels::visual_assist::VisualAssist>,
+    run: &mut RunCx<'_>,
 ) -> bool {
     let mut changed = false;
     let Some(card) = stack.get(index) else {
@@ -168,6 +181,7 @@ fn card_ui(
                     commands,
                     cx,
                     assist,
+                    run,
                     &mut changed,
                 )
             })
@@ -235,6 +249,7 @@ fn card_body(
     commands: &mut Vec<Command>,
     cx: &EditorCx<'_>,
     assist: Option<&crate::panels::visual_assist::VisualAssist>,
+    run: &mut RunCx<'_>,
     changed_out: &mut bool,
 ) -> Option<std::sync::Arc<CardDrag>> {
     let mut changed = false;
@@ -265,10 +280,15 @@ fn card_body(
                 .on_hover_text("Drag to reorder");
 
                 let card = stack.get_mut(index).expect("index checked above");
+                // Named for the operation, as the label beside it used to be.
                 changed |= ui
-                    .checkbox(&mut card.enabled, card.op.label())
+                    .checkbox(&mut card.enabled, "")
                     .on_hover_text("Include this operation in the run")
+                    .accessible_name(card.op.label())
                     .changed();
+                if let Some(op) = crate::panels::catalogue::picker(ui, "Operation", &card.op) {
+                    *cx.requests.change_kind.borrow_mut() = Some((id, op));
+                }
 
                 if summary_toggle(ui, is_expanded, &card.summary(), card.enabled).clicked() {
                     commands.push(Command::Expand((!is_expanded).then_some(id)));
@@ -319,6 +339,10 @@ fn card_body(
                     ui.ctx().request_repaint();
                     changed = true;
                 }
+                // After the editor, so a section appearing — `<Counter>`
+                // typed into a field — never re-ids the editor's spinners.
+                changed |=
+                    crate::panels::run_settings::for_card(ui, &card.op, run.settings, run.sample);
                 ui.add_space(6.0);
                 changed |= scope_ui(ui, card);
 

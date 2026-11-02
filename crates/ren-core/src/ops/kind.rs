@@ -337,6 +337,15 @@ impl OpKind {
         }
     }
 
+    /// What this operation's tag fields cost — the same answer
+    /// `Pipeline::needs` gives for its step, without building one.
+    pub fn needs(&self) -> crate::template::TagNeeds {
+        match self.as_step() {
+            StepRef::Name(t) => t.needs(),
+            StepRef::Action(a) => a.needs(),
+        }
+    }
+
     /// The one exhaustive classifier. Every new variant must land in an arm
     /// here, which is what stops the next operation being silently misfiled.
     pub fn as_step(&self) -> StepRef<'_> {
@@ -482,6 +491,17 @@ mod tests {
 
         let op = OpKind::Casing(Casing::new(CaseMode::Upper));
         assert!(op.summary().contains("Upper"), "{}", op.summary());
+    }
+
+    /// The GUI decides which run-wide settings a card draws from this, so it
+    /// must agree with what the pipeline will actually need.
+    #[test]
+    fn needs_is_the_steps_own() {
+        use crate::template::TagNeeds;
+        let op = OpKind::FreeFormat(super::FreeFormat::new("<Counter> <%1>"));
+        assert!(op.needs().contains(TagNeeds::COUNTER));
+        assert!(op.needs().contains(TagNeeds::PARTS));
+        assert_eq!(OpKind::default().needs(), TagNeeds::NONE);
     }
 
     #[test]

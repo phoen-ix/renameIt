@@ -190,7 +190,7 @@ refused. Folders, drives and backgrounds are unaffected and stay either way.
 | 10 | Select enough files to get near that number and use *Start and load selected files* | The banner appears, gives a character count, and *List the whole folder* relists the folder. Then select three files and confirm **no** banner |
 | 11 | Use *Copy filenames to clipboard* on three files and paste into a text editor | Three names, one per line, sorted — no paths, and no window ever opened |
 | 12 | Extract the release zip to a stick, run it, save a preset, then run it from another machine | The preset is there. `RenameIt-data` sits beside the executable and nothing was written to `%APPDATA%` |
-| 13 | Extract the same zip into `C:\Program Files\` and run it | It starts, and Settings ▸ Problem Solver reports a **normal** install — the portable path is declined when the folder is not writable, rather than taken and then failing |
+| 13 | Extract the same zip into `C:\Program Files\` and run it | It starts, and Settings ▸ Where files are kept reports a **normal** install — the portable path is declined when the folder is not writable, rather than taken and then failing |
 | 14 | Delete `renameit-portable.txt` from a portable copy and start it | A normal install: files in `%APPDATA%\RenameIt` |
 | 15 | Right-click a file whose **path contains a space** and choose *Show in file manager*; then the same for a folder with a space in its path | Explorer opens the containing folder with the file selected, and the folder itself. The command line is `explorer.exe /select,"C:\My Folder\a.txt"` — switch bare, path quoted (`raw_arg`). Before the audit the whole argument was quoted as one string, which Explorer is known to mis-parse; this is the check no CI can run |
 
@@ -213,7 +213,7 @@ xvfb-run -a cargo run -p ren-gui     # or just `cargo run -p ren-gui`
 
 | # | Do this | Expect |
 |---|---|---|
-| 1 | Settings ▸ Display, tick *Click anywhere on a row to select it*, close | — |
+| 1 | Settings ▸ Columns & rows, tick *Click anywhere on a row to select it*, close | — |
 | 2 | Click a row's **Size** or **Modified** cell | The row is selected, and the count at the bottom follows |
 | 3 | Ctrl-click the same cell again | It is deselected — the same rule the name cell follows |
 | 4 | Click a selected row's **name** again, slowly | The inline editor opens (P115). The row target behind it must not have swallowed this |
@@ -256,7 +256,7 @@ large, and one text file renamed to `.jpg`.
 |---|---|---|
 | 1 | Open the folder, press **Grid** on the source bar, and look at the phone photograph taken in portrait | Upright. If Exif orientation were dropped it would be on its side, and this is the single most visible thing this feature can get wrong |
 | 2 | Compare each tile's picture with its name | They match. Nothing here proves that automatically — the cache is keyed by path, length and mtime, and a wrong key would show a plausible picture under the wrong name |
-| 3 | Settings ▸ Display, drag the **Size** slider from end to end | Tiles resize smoothly. Between the three decode buckets the picture is scaled, never re-read — it must not flicker or blank while you drag |
+| 3 | Settings ▸ Thumbnails, drag the **Size** slider from end to end | Tiles resize smoothly. Between the three decode buckets the picture is scaled, never re-read — it must not flicker or blank while you drag |
 | 4 | Tick **Draw a border around thumbnails** | A one-pixel border, tight to the picture rather than to the tile |
 | 5 | Put a Find & Replace card on the stack | The second line under each tile is the new name, diffed, with the ⚠ if the extension changes |
 | 6 | Narrow the row filter to **Changed** | Unchanged tiles disappear entirely, and the ones left still show their own pictures |
@@ -265,7 +265,7 @@ large, and one text file renamed to `.jpg`.
 | 9 | Hover the text file renamed `.jpg` | "cannot be read" — the ⊘ itself is the snapshot's |
 | 10 | Rename all thirty (F5), then Undo (F4) | The pictures stay put through both. No blanking, no re-decode — that is D139's rekey, and a flicker here means it missed |
 | 11 | Press **F9** | The folder is read again. Nothing visibly changes, which is the point; edit a photograph in another program first and it should be the edited one afterwards |
-| 12 | Switch to **List**, tick the **Thumb** column in Settings ▸ Display | Every row grows to the tile size — that is the cost, and it should be obvious rather than surprising |
+| 12 | Switch to **List**, tick the **Thumb** column in Settings ▸ Columns & rows | Every row grows to the tile size — that is the cost, and it should be obvious rather than surprising |
 | 13 | Windows at 125% and 150% scaling | Tiles are sharp, not soft. The bucket above the drawn size is what makes this work, so a soft tile means the scale is not reaching `key_for` |
 | 14 | Drop a 64 000 × 64 000 PNG in the folder | "too large to preview" on that one tile, promptly. The app stays responsive and memory does not spike |
 
@@ -349,7 +349,7 @@ about the machine around the code.
 | 5 | A `.bat` beside some files containing `ren-cli /p "%~dp0" /r "Photo cleanup"` | It renames them: the switches after the quoted folder are kept (D211) |
 | 6 | In Windows PowerShell 5.1: `Get-ChildItem *.jpg \| % FullName > list.txt`, then `ren-cli /l list.txt` | The files are listed. The file is UTF-16 with a byte-order mark; `Set-Content` (ANSI) must work as well (D212) |
 | 7 | With **Narrator** and then **NVDA** running, Tab through a card, a file row and a ⌖ button | Each is read with its name, not as *button* or silence (D218) |
-| 8 | About ▸ the repository link | The browser opens it (D218) |
+| 8 | Settings ▸ About ▸ the repository link | The browser opens it (D218) |
 | 9 | Start an undo of a large batch on a network share, then close the window — and try **Alt+F4**. Repeat with the window minimised, closing it from the taskbar | The window stays until the undo finishes, then closes, minimised or not; Alt+F4 never starts an undo (D220, D222, D245) |
 | 10 | Start a long run in one RenameIt window, then open a second | The second window's banner says *a run is still going on in another RenameIt window* and offers no Roll back for it (D175, D228) |
 | 11 | `ren-cli apply C:\Windows\Temp --suffix _x` from an elevated prompt | Exit 2, naming the folder; nothing renamed (D200) |
@@ -412,7 +412,7 @@ release and a person at the screen.
 |---|---|---|
 | 1 | On Windows, set Control Panel ▸ Mouse ▸ double-click speed to its slowest, restart RenameIt, double-click a folder at that pace | It opens, as it would in Explorer |
 | 2 | Click a file, wait a second, click its name again | The inline editor opens, about half a second later |
-| 3 | Settings ▸ Display ▸ *Double-click on a file* ▸ *Open it*, double-click a `.txt` | It opens in the default editor |
+| 3 | Settings ▸ Columns & rows ▸ *Double-click on a file* ▸ *Open it*, double-click a `.txt` | It opens in the default editor |
 
 **Results:** *not yet recorded.*
 
@@ -423,7 +423,7 @@ release and a person at the screen.
 | 1 | Install for yourself, leaving *Right-click menu in Explorer* ticked; right-click a file | The RenameIt submenu is there straight away |
 | 2 | Install for everyone, as one account; sign in as a **second** user and right-click a file, then start RenameIt and right-click again | No menu before the first start; the menu after it |
 | 3 | As that second user, Settings ▸ Right-click menu ▸ untick; then reinstall or update RenameIt and start it | The menu stays off for that user |
-| 4 | ⋯ ▸ *Right-click menu…* | Settings opens on that page |
+| 4 | ⚙ at the top right | Settings opens on Appearance; Right-click menu is under This computer |
 | 5 | *Open in Explorer* beside ⟳ | Explorer opens the folder RenameIt is browsing |
 
 **Results:** *not yet recorded.*

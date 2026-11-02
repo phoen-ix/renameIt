@@ -105,11 +105,13 @@ fn tall_harness(app: RenameItApp) -> Harness<'static, RenameItApp> {
     harness
 }
 
-/// An item of the ⋯ menu at the window's top right (D251).
-fn open_menu(harness: &mut Harness<'_, RenameItApp>, item: &str) {
-    harness.get_by_label("Menu").click();
+/// Settings from the ⚙ at the window's top right (D255), on rail entry `page`.
+fn open_menu(harness: &mut Harness<'_, RenameItApp>, page: &str) {
+    harness.get_by_label("Settings").click();
     settle(harness);
-    harness.get_by_label(item).click();
+    if page != "Settings" {
+        harness.get_by_label(page).click();
+    }
 }
 
 /// The run button, whose label carries the count (D251): "Rename 3 files",
@@ -838,7 +840,8 @@ fn every_numbers_operation_previews_what_it_should() {
     }
 }
 
-/// The Counter Setup panel is on screen, and what it says drives the preview.
+/// The Add Counter card draws the counter's settings (D254), and what they say
+/// drives the preview.
 #[test]
 fn the_counter_setup_panel_drives_the_counter() {
     use ren_core::CounterSetup;
@@ -850,13 +853,14 @@ fn the_counter_setup_panel_drives_the_counter() {
         OpKind::AddCounter(AddCounter::new(CounterPlacement::First, "-"));
     settle(&mut harness);
 
-    // One button opens all three run-wide settings (D251).
-    harness.get_by_label("Run settings ▾").click();
-    settle(&mut harness);
-    harness.get_by_label_contains("Counter setup");
-    harness.get_by_label_contains("Only rename if all tags are available");
-    harness.key_press(egui::Key::Escape);
-    settle(&mut harness);
+    // In the card, said to be shared; the tag rule is not this card's concern.
+    harness.get_by_label("Counter");
+    harness.get_by_label("Start value:");
+    assert!(
+        harness
+            .query_by_label_contains("Only rename if all tags are available")
+            .is_none()
+    );
 
     harness.state_mut().settings_mut().counter = CounterSetup {
         start: 10,
@@ -879,8 +883,6 @@ fn the_parts_pattern_feeds_the_part_tags() {
 
     let fixture = Fixture::new(&["Metallica - Nothing Else Matters.mp3"]);
     let mut harness = harness(fixture.app());
-
-    harness.get_by_label("Run settings ▾");
 
     harness.state_mut().settings_mut().parts = PartsSpec::new("<%1> - <%2>");
     *harness.state_mut().operation_mut() = OpKind::AddRemove(AddRemove {
@@ -986,25 +988,8 @@ fn music_rename_names_files_from_their_tags() {
     ]);
     let mut harness = harness(fixture.app());
 
-    // Through the palette, so the entry being live is part of the test. It
-    // has to be searched for rather than scrolled to: the list is taller than
-    // the modal, and a click on a row below the fold lands on nothing.
-    harness.get_by_label_contains("Add operation").click();
-    settle(&mut harness);
-    let search = harness
-        .get_all_by_role(egui::accesskit::Role::TextInput)
-        .last()
-        .expect("the search box");
-    search.focus();
-    harness.run();
-    harness
-        .get_all_by_role(egui::accesskit::Role::TextInput)
-        .last()
-        .unwrap()
-        .type_text("music rename");
-    settle(&mut harness);
-    harness.get_by_label("Music Rename").click();
-    settle(&mut harness);
+    // Through the drop-down, so the entry being live is part of the test.
+    pick_kind(&mut harness, "Replace", "Music Rename");
 
     // The default style, showing in the preview without anything being typed.
     assert!(
@@ -1069,7 +1054,7 @@ fn the_music_styles_list_is_editable_and_the_card_keeps_its_pattern() {
     // The card's own link opens Settings on the right page.
     harness.get_by_label("(edit styles)").click();
     settle(&mut harness);
-    harness.get_by_label("Music Styles");
+    harness.get_by_label("Music styles");
     harness.get_by_label_contains("not which row it came from");
 
     harness.get_all_by_label("✖").next().unwrap().click();
@@ -2097,118 +2082,125 @@ fn the_card_stack_survives_a_restart() {
     assert!(!restarted.state().stack().get(1).unwrap().enabled);
 }
 
-// --- M4: the add-operation palette -------------------------------------------
+// --- The card type drop-down and the default operation ----------------------
 
-/// Replaces the assertion the two "every operation previews" tests used to
-/// carry — reachability proved by interaction rather than by painting.
+/// Opens the type drop-down of the last card showing `from` and picks `to`.
+fn pick_kind(harness: &mut Harness<'_, RenameItApp>, from: &str, to: &str) {
+    harness
+        .get_all_by_role(egui::accesskit::Role::ComboBox)
+        .rfind(|node| node.value().as_deref() == Some(from))
+        .unwrap_or_else(|| panic!("a card's type drop-down showing {from}"))
+        .click();
+    settle(harness);
+    harness.get_by_label(to).click();
+    settle(harness);
+}
+
+/// `+ Add operation` adds a card of the default operation, opened, with no
+/// popup in between.
 #[test]
-fn the_palette_offers_every_operation_and_adds_the_one_you_pick() {
+fn add_operation_adds_a_default_card_and_opens_it() {
     let fixture = Fixture::new(&["a.txt"]);
     let mut harness = harness(fixture.app());
     let before = harness.state().stack().len();
-
-    // Closed to begin with, so none of it is in the tree.
-    assert!(harness.query_by_label("Add operation").is_none());
 
     harness.get_by_label_contains("Add operation").click();
     settle(&mut harness);
 
-    for op in OpKind::all() {
-        assert!(
-            harness.query_all_by_label_contains(op.label()).count() >= 1,
-            "the palette should offer {}",
-            op.label()
-        );
-    }
-
-    // Typed rather than scrolled to. The catalogue is twenty operations of two
-    // lines each and the modal is bounded by the window, so it scrolls — and a
-    // synthetic click lands at the node's screen position, which for a row
-    // below the fold is nowhere. Filtering first is also what the search box is
-    // *for*, so this exercises the real path rather than working around it.
-    // The palette focuses its search box on open, so the text goes straight in.
-    harness.event(egui::Event::Text("zero".to_owned()));
-    settle(&mut harness);
-    harness.get_by_label("Zero Padding").click();
-    settle(&mut harness);
-
-    assert_eq!(harness.state().stack().len(), before + 1);
-    assert_eq!(
-        harness.state().stack().cards().last().unwrap().op.name(),
-        "zero_padding"
-    );
+    let stack = harness.state().stack();
+    assert_eq!(stack.len(), before + 1);
+    let card = stack.cards().last().unwrap();
+    assert_eq!(card.op.name(), "replace");
+    assert_eq!(harness.state().expanded(), Some(card.id));
 }
 
-/// Ctrl+K, per `docs/DESIGN.md` S2.
+/// Ctrl+K does what the button does (`docs/DESIGN.md` S2).
 #[test]
-fn ctrl_k_opens_the_palette() {
-    let fixture = Fixture::new(&["a.txt"]);
-    let mut harness = harness(fixture.app());
-
-    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::K);
-    settle(&mut harness);
-    harness.get_by_label("Add operation");
-}
-
-#[test]
-fn the_palette_search_narrows_to_what_you_typed() {
-    let fixture = Fixture::new(&["a.txt"]);
-    let mut harness = harness(fixture.app());
-    harness.state_mut().open_palette();
-    settle(&mut harness);
-
-    // The search box is the palette's own field; the source bar's two are
-    // behind the modal.
-    let search = harness
-        .get_all_by_role(egui::accesskit::Role::TextInput)
-        .last()
-        .expect("the search box");
-    search.focus();
-    harness.run();
-    harness
-        .get_all_by_role(egui::accesskit::Role::TextInput)
-        .last()
-        .unwrap()
-        .type_text("zero");
-    settle(&mut harness);
-
-    harness.get_by_label("Zero Padding");
-    assert!(
-        harness.query_by_label("Set Casing").is_none(),
-        "the rest should be filtered out"
-    );
-}
-
-/// An entry found by searching and clicked really does land in the stack.
-///
-/// Search first, so the row is actually on screen: the catalogue is taller
-/// than the palette's scroll area, so an entry past the General group is
-/// clipped while still reaching the accessibility tree, and a click aimed at
-/// it lands on nothing.
-#[test]
-fn a_palette_entry_found_by_searching_and_clicked_is_added() {
+fn ctrl_k_adds_a_default_card() {
     let fixture = Fixture::new(&["a.txt"]);
     let mut harness = harness(fixture.app());
     let before = harness.state().stack().len();
 
-    harness.state_mut().open_palette();
-    settle(&mut harness);
-    let search = harness
-        .get_all_by_role(egui::accesskit::Role::TextInput)
-        .last()
-        .expect("the search box");
-    search.focus();
-    harness.run();
-    harness
-        .get_all_by_role(egui::accesskit::Role::TextInput)
-        .last()
-        .unwrap()
-        .type_text("zero padding");
-    settle(&mut harness);
-
-    harness.get_by_label_contains("Zero Padding").click();
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::K);
     settle(&mut harness);
     assert_eq!(harness.state().stack().len(), before + 1);
+}
+
+/// Every operation is offered by a card's drop-down, and picking one turns the
+/// card into it. Replaces the assertion the two "every operation previews"
+/// tests used to carry — reachability proved by interaction.
+#[test]
+fn a_cards_drop_down_offers_every_operation_and_switches_to_the_one_you_pick() {
+    let fixture = Fixture::new(&["a.txt"]);
+    let mut harness = harness(fixture.app());
+
+    harness
+        .get_all_by_role(egui::accesskit::Role::ComboBox)
+        .find(|node| node.value().as_deref() == Some("Replace"))
+        .expect("the card's type drop-down")
+        .click();
+    settle(&mut harness);
+    for op in OpKind::all() {
+        assert!(
+            harness.query_all_by_label(op.label()).count() >= 1,
+            "the drop-down should offer {}",
+            op.label()
+        );
+    }
+    harness.get_by_label("Zero Padding").click();
+    settle(&mut harness);
+
+    let card = &harness.state().stack().cards()[0];
+    assert_eq!(card.op.name(), "zero_padding");
+    assert_eq!(harness.state().stack().len(), 1, "switched, not added");
+}
+
+/// A switched card is seeded as a new one would be — Batch Replace from the
+/// list in Settings, scope the new operation's own — and its run switch stays.
+#[test]
+fn a_switched_card_is_seeded_like_a_new_one_and_keeps_its_switch() {
+    let fixture = Fixture::new(&["a.txt"]);
+    let mut harness = harness(fixture.app());
+    harness
+        .state_mut()
+        .set_card_scope(0, ren_core::model::Scope::Extension);
+    harness.state_mut().set_card_enabled(0, false);
+    settle(&mut harness);
+
+    pick_kind(&mut harness, "Replace", "Batch Replace");
+
+    let card = &harness.state().stack().cards()[0];
+    match &card.op {
+        OpKind::BatchReplace(batch) => assert!(!batch.rules.is_empty(), "the Settings list"),
+        other => panic!("expected Batch Replace, got {other:?}"),
+    }
+    assert_eq!(card.scope, card.op.default_scope());
+    assert!(!card.enabled);
+}
+
+/// Settings ▸ Startup decides what `+ Add operation` makes. That it is stored
+/// is `the_persisted_state_round_trips_through_eframe_storage`'s job.
+#[test]
+fn the_default_operation_is_set_in_settings_and_remembered() {
+    let fixture = Fixture::new(&["a.txt"]);
+    let mut harness = harness(fixture.app());
+
+    harness.key_press(egui::Key::F8);
+    settle(&mut harness);
+    harness.get_by_label("Default operation").click();
+    settle(&mut harness);
+    // The Settings window's drop-down is drawn after the card's behind it.
+    pick_kind(&mut harness, "Replace", "Add / Remove");
+    harness.get_by_label("Close").click();
+    settle(&mut harness);
+    assert_eq!(harness.state().default_op().name(), "add_remove");
+
+    harness.get_by_label_contains("Add operation").click();
+    settle(&mut harness);
+    assert_eq!(
+        harness.state().stack().cards().last().unwrap().op.name(),
+        "add_remove"
+    );
 }
 
 /// The new card lands next to the one you were looking at, and opens.
@@ -2295,8 +2287,10 @@ fn the_settings_window_edits_the_list_a_new_batch_replace_card_starts_from() {
 
     open_menu(&mut harness, "Settings");
     settle(&mut harness);
+    harness.get_by_label("Batch Replace list").click();
+    settle(&mut harness);
     assert!(
-        harness.query_by_label("Problem Solver").is_some(),
+        harness.query_by_label("Where files are kept").is_some(),
         "the Settings window did not open"
     );
     harness.get_by_label_contains("rules, run top to bottom");
@@ -2339,6 +2333,8 @@ fn a_batch_replace_card_keeps_its_own_rules() {
     // Now change the default list in Settings.
     open_menu(&mut harness, "Settings");
     settle(&mut harness);
+    harness.get_by_label("Batch Replace list").click();
+    settle(&mut harness);
     harness.get_all_by_label("✖").next().unwrap().click();
     settle(&mut harness);
     harness.get_by_label("Close").click();
@@ -2380,34 +2376,42 @@ fn the_theme_control_lives_in_settings_now() {
     settle(&mut harness);
 }
 
-/// The two run-wide objects are chips that summarise themselves, and open their
-/// dialog on a click.
+/// The run-wide settings appear in the cards that use them, and only there
+/// (D254): nothing for a Replace, the counter for Add Counter or a `<Counter>`
+/// tag, the parts for Music Tagger, the tag rule for Music Rename.
 #[test]
-fn the_run_settings_say_what_is_set_and_open() {
-    use ren_core::{CounterSetup, PartsSpec};
-
+fn each_run_wide_setting_shows_in_the_cards_that_use_it() {
     let fixture = Fixture::new(&["a.txt"]);
     let mut harness = harness(fixture.app());
-
-    harness.state_mut().settings_mut().counter = CounterSetup {
-        start: 5,
-        step: 2,
-        auto_pad: false,
-        pad: 3,
-        ..Default::default()
+    let shows = |harness: &Harness<'_, RenameItApp>| {
+        [
+            "Start value:",
+            "Filename parts",
+            "Only rename if all tags are available",
+        ]
+        .map(|label| harness.query_all_by_label(label).next().is_some())
     };
-    harness.state_mut().settings_mut().parts = PartsSpec::new("<%1> - <%2>");
-    settle(&mut harness);
 
-    // What is not at its default is printed under the button (D251).
-    harness.get_by_label_contains("Counter 5, step 2, pad 3");
-    harness.get_by_label_contains("Parts <%1> - <%2>");
+    assert_eq!(shows(&harness), [false, false, false], "a plain Replace");
+    assert!(harness.query_by_label("Run settings ▾").is_none());
 
-    // And the button opens the editors behind it.
-    harness.get_by_label("Run settings ▾").click();
-    settle(&mut harness);
-    harness.get_by_label_contains("Start value");
-    harness.get_by_label_contains("Example:");
+    for (op, expected) in [
+        (OpKind::AddCounter(Default::default()), [true, false, false]),
+        (
+            OpKind::FreeFormat(ren_core::ops::FreeFormat::new("<Counter> <Name>")),
+            [true, false, false],
+        ),
+        (OpKind::MusicTagger(Box::default()), [false, true, false]),
+        (
+            OpKind::MusicRename(Default::default()),
+            [false, false, true],
+        ),
+    ] {
+        let name = op.name();
+        *harness.state_mut().operation_mut() = op;
+        settle(&mut harness);
+        assert_eq!(shows(&harness), expected, "{name}");
+    }
 }
 
 // --- M4: presets in the app ---------------------------------------------------
@@ -3184,7 +3188,7 @@ fn f8_opens_the_settings_window() {
 
     harness.key_press(egui::Key::F8);
     settle(&mut harness);
-    harness.get_by_label_contains("rules, run top to bottom");
+    harness.get_by_label_contains("Interface size");
 }
 
 /// F4 is a shortcut for the Undo button.
@@ -3377,7 +3381,7 @@ fn about_opens_and_reports_what_the_session_did() {
     let fixture = Fixture::new(&["one.txt", "two.txt"]);
     let mut harness = harness(fixture.app());
 
-    open_menu(&mut harness, "About RenameIt");
+    open_menu(&mut harness, "About");
     settle(&mut harness);
     harness.get_by_label_contains("Nothing renamed yet this session");
     harness.get_by_label_contains("MIT licensed");
@@ -3392,7 +3396,7 @@ fn about_opens_and_reports_what_the_session_did() {
     harness.key_press(egui::Key::F5);
     settle(&mut harness);
 
-    open_menu(&mut harness, "About RenameIt");
+    open_menu(&mut harness, "About");
     settle(&mut harness);
     harness.get_by_label_contains("Renamed 2 items, over 1 run this session");
 }
@@ -3523,17 +3527,7 @@ fn the_settings_window_does_not_change_size_when_you_change_page() {
     harness.key_press(egui::Key::F8);
     settle(&mut harness);
 
-    let pages = [
-        "Batch Replace",
-        "Music Styles",
-        "Casing Exceptions",
-        "Display",
-        "File System",
-        "Startup",
-        "Right-click menu",
-        "Appearance",
-        "Problem Solver",
-    ];
+    let pages = ren_gui::panels::settings::Page::ALL.map(|page| page.label());
 
     let mut seen: Vec<(&str, egui::Rect)> = Vec::new();
     for page in pages {
@@ -3574,7 +3568,7 @@ fn the_settings_window_does_not_change_size_when_you_change_page() {
 fn the_interface_size_scales_the_window_and_the_reset_puts_it_back() {
     let fixture = Fixture::new(&["one.txt"]);
     // Tall, because the second half of this test drives the reset through the
-    // Problem Solver page *while zoomed in* — and zooming shrinks the window
+    // Where files are kept page *while zoomed in* — and zooming shrinks the window
     // in points, so the modal body gets shorter and its buttons go below the
     // fold. A synthetic click lands at a screen position, not on a node.
     let mut harness = tall_harness(fixture.app());
@@ -3599,9 +3593,9 @@ fn the_interface_size_scales_the_window_and_the_reset_puts_it_back() {
         content.width()
     );
 
-    // Through the real path — Problem Solver, then the confirmation — rather
+    // Through the real path — Where files are kept, then the confirmation — rather
     // than a test hook, because the reset is the half that can silently miss.
-    harness.get_by_label("Problem Solver").click();
+    harness.get_by_label("Where files are kept").click();
     settle(&mut harness);
     harness.get_by_label("Reset all settings…").click();
     settle(&mut harness);
@@ -3627,7 +3621,7 @@ fn the_display_page_turns_a_column_on_and_the_table_shows_it() {
 
     harness.key_press(egui::Key::F8);
     settle(&mut harness);
-    harness.get_by_label("Display").click();
+    harness.get_by_label("Columns & rows").click();
     settle(&mut harness);
     // Two nodes carry the label while Settings is open: the checkbox and the
     // text beside it. The first is the one that toggles.
@@ -3649,7 +3643,7 @@ fn the_name_column_cannot_be_turned_off() {
     let mut harness = harness(fixture.app());
     harness.key_press(egui::Key::F8);
     settle(&mut harness);
-    harness.get_by_label("Display").click();
+    harness.get_by_label("Columns & rows").click();
     settle(&mut harness);
 
     assert!(
@@ -3687,7 +3681,7 @@ fn a_guarded_folder_blocks_the_run_with_a_reason() {
     // And it is a decision the user can take.
     harness.key_press(egui::Key::F8);
     settle(&mut harness);
-    harness.get_by_label("File System").click();
+    harness.get_by_label("Which files show").click();
     settle(&mut harness);
     harness
         .get_by_label_contains("Refuse to rename inside operating-system folders")
@@ -3776,7 +3770,7 @@ fn the_casing_exception_list_is_a_default_for_new_cards() {
 
     harness.key_press(egui::Key::F8);
     settle(&mut harness);
-    harness.get_by_label("Casing Exceptions").click();
+    harness.get_by_label("Casing words").click();
     settle(&mut harness);
     // Two lists on the page, each with its own add button; either will do.
     harness
@@ -3794,7 +3788,7 @@ fn the_casing_exception_list_is_a_default_for_new_cards() {
     assert!(words > 1, "the shipped list survives a stray click");
 }
 
-/// Settings ▸ Problem Solver has shortcuts to the folders the app keeps its
+/// Settings ▸ Where files are kept has shortcuts to the folders the app keeps its
 /// data in.
 ///
 /// The shortcuts are the half that can go stale, so they are read from the same
@@ -3807,7 +3801,7 @@ fn the_problem_solver_page_names_the_folders_the_app_really_uses() {
 
     harness.key_press(egui::Key::F8);
     settle(&mut harness);
-    harness.get_by_label("Problem Solver").click();
+    harness.get_by_label("Where files are kept").click();
     settle(&mut harness);
 
     harness.get_by_label("Undo journal");
@@ -3820,6 +3814,8 @@ fn the_problem_solver_page_names_the_folders_the_app_really_uses() {
             .count()
             >= 1
     );
+    harness.get_by_label("Help").click();
+    settle(&mut harness);
     harness.get_by_label_contains("The Rename button is greyed out");
 }
 
@@ -3832,7 +3828,7 @@ fn the_startup_page_stores_a_switch_that_a_later_start_obeys() {
 
     harness.key_press(egui::Key::F8);
     settle(&mut harness);
-    harness.get_by_label("Startup").click();
+    harness.get_by_label("When RenameIt starts").click();
     settle(&mut harness);
     harness.get_by_label_contains("Clear the pipeline").click();
     settle(&mut harness);
@@ -4187,38 +4183,6 @@ fn neither_key_navigates_in_free_select() {
     assert_eq!(harness.state().session().settings.dir, before);
 }
 
-/// The palette reads Enter without consuming it, and `handle_list_keys` runs
-/// first — so one Enter must not both add an operation and change folder.
-///
-/// This one passes on `text_edit_focused()` alone, because the palette's search
-/// box has the keyboard. The modal guard is what covers a window with **no**
-/// focused field — see the Settings test below, which is the one that
-/// discriminates.
-#[test]
-fn the_palette_keeps_its_own_enter() {
-    let fixture = Fixture::new(&["a.txt"]);
-    std::fs::create_dir(fixture.dir.path().join("sub")).unwrap();
-    let mut app = fixture.app();
-    app.session_mut().settings.folders = true;
-    app.session_mut().request_refresh();
-    let mut harness = harness(app);
-
-    let before = harness.state().session().settings.dir.clone();
-    let cards = harness.state().stack().to_steps().len();
-
-    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::K);
-    settle(&mut harness);
-    harness.key_press(egui::Key::Enter);
-    settle(&mut harness);
-
-    assert_eq!(harness.state().stack().to_steps().len(), cards + 1);
-    assert_eq!(
-        harness.state().session().settings.dir,
-        before,
-        "the palette had the keyboard"
-    );
-}
-
 /// **The test the modal guard is actually for.** A window can own the keyboard
 /// without any text box holding it — Settings opens on a page whose only field
 /// is unfocused — and `text_edit_focused()` says nothing about that. Without
@@ -4528,7 +4492,7 @@ fn the_history_holds_no_duplicates_and_stops_at_twelve() {
     );
 }
 
-/// Settings ▸ Problem Solver's reset puts every setting back.
+/// Settings ▸ Where files are kept: its reset puts every setting back.
 ///
 /// It asks first, and it asks because nothing puts a settings file back —
 /// **D156**, not P2, which is about tag writes and never reaches a settings
@@ -4544,13 +4508,13 @@ fn the_reset_button_asks_first_then_puts_every_setting_back() {
     // Move something a Settings page owns.
     harness.key_press(egui::Key::F8);
     settle(&mut harness);
-    harness.get_by_label("Music Styles").click();
+    harness.get_by_label("Music styles").click();
     settle(&mut harness);
     harness.get_all_by_label("✖").next().unwrap().click();
     settle(&mut harness);
     let trimmed = harness.state().music_styles().len();
 
-    harness.get_by_label("Problem Solver").click();
+    harness.get_by_label("Where files are kept").click();
     settle(&mut harness);
     harness.get_by_label("Reset all settings…").click();
     settle(&mut harness);
@@ -4595,13 +4559,13 @@ fn declining_the_reset_changes_nothing() {
 
     harness.key_press(egui::Key::F8);
     settle(&mut harness);
-    harness.get_by_label("Music Styles").click();
+    harness.get_by_label("Music styles").click();
     settle(&mut harness);
     harness.get_all_by_label("✖").next().unwrap().click();
     settle(&mut harness);
     let trimmed = harness.state().music_styles().len();
 
-    harness.get_by_label("Problem Solver").click();
+    harness.get_by_label("Where files are kept").click();
     settle(&mut harness);
     harness.get_by_label("Reset all settings…").click();
     settle(&mut harness);
@@ -4658,7 +4622,7 @@ fn full_row_select_makes_the_whole_row_a_click_target() {
 
     harness.key_press(egui::Key::F8);
     settle(&mut harness);
-    harness.get_by_label("Display").click();
+    harness.get_by_label("Columns & rows").click();
     settle(&mut harness);
     harness
         .get_by_label_contains("Click anywhere on a row to select it")
@@ -4771,7 +4735,7 @@ fn a_batch_rule_whose_hidden_settings_are_not_default_says_so_on_its_own_row() {
 
     harness.key_press(egui::Key::F8);
     settle(&mut harness);
-    harness.get_by_label("Batch Replace").click();
+    harness.get_by_label("Batch Replace list").click();
     settle(&mut harness);
 
     // One row in the whole list carries a summary; the shipped fifty are plain.
@@ -4797,6 +4761,8 @@ fn the_batch_replace_list_adds_a_blank_rule() {
     let before = harness.state().batch_replace_rules().len();
 
     harness.key_press(egui::Key::F8);
+    settle(&mut harness);
+    harness.get_by_label("Batch Replace list").click();
     settle(&mut harness);
     harness.get_by_label("Add rule").click();
     settle(&mut harness);
@@ -5888,6 +5854,8 @@ fn the_hotkeys_stand_down_behind_a_modal() {
 
     harness.key_press(egui::Key::F8);
     settle(&mut harness);
+    harness.get_by_label("Batch Replace list").click();
+    settle(&mut harness);
     harness.get_by_label_contains("rules, run top to bottom");
 
     harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
@@ -6698,13 +6666,13 @@ fn the_reset_dialog_names_everything_outside_the_window_it_puts_back() {
 
     harness.key_press(egui::Key::F8);
     settle(&mut harness);
-    harness.get_by_label("Problem Solver").click();
+    harness.get_by_label("Where files are kept").click();
     settle(&mut harness);
     harness.get_by_label("Reset all settings…").click();
     settle(&mut harness);
 
     for what in [
-        "Setup Parts",
+        "the filename parts",
         "Only rename if all tags are available",
         "remembered",
         "Simulate",
@@ -6751,7 +6719,9 @@ fn a_string_list_row_that_moves_up_keeps_its_own_undo() {
     let mut harness = harness(fixture.app());
     harness.key_press(egui::Key::F8);
     settle(&mut harness);
-    harness.get_by_label("Music Styles").click();
+    harness.get_by_label("Batch Replace list").click();
+    settle(&mut harness);
+    harness.get_by_label("Music styles").click();
     settle(&mut harness);
 
     let styles = harness.state().music_styles().to_vec();
@@ -6790,7 +6760,9 @@ fn a_restored_string_list_row_does_not_inherit_the_old_rows_undo() {
     let mut harness = harness(fixture.app());
     harness.key_press(egui::Key::F8);
     settle(&mut harness);
-    harness.get_by_label("Music Styles").click();
+    harness.get_by_label("Batch Replace list").click();
+    settle(&mut harness);
+    harness.get_by_label("Music styles").click();
     settle(&mut harness);
 
     let first = harness.state().music_styles()[0].clone();
@@ -6931,7 +6903,7 @@ fn the_pattern_box_is_named_by_its_label() {
 fn the_reset_at_number_is_named_by_its_checkbox() {
     let fixture = Fixture::new(&["a.txt"]);
     let mut harness = harness(fixture.app());
-    harness.get_by_label("Run settings ▾").click();
+    *harness.state_mut().operation_mut() = OpKind::AddCounter(Default::default());
     settle(&mut harness);
 
     harness
@@ -6948,6 +6920,8 @@ fn a_batch_rules_skip_and_max_are_named() {
     let fixture = Fixture::new(&["a.txt"]);
     let mut harness = harness(fixture.app());
     harness.key_press(egui::Key::F8);
+    settle(&mut harness);
+    harness.get_by_label("Batch Replace list").click();
     settle(&mut harness);
     let skips = |harness: &Harness<'_, RenameItApp>| {
         harness
@@ -6987,10 +6961,10 @@ fn the_preset_rename_box_has_a_name() {
 // that; a popover of fields does not.
 
 #[test]
-fn the_counter_popover_stays_open_while_its_boxes_are_ticked() {
+fn the_counters_boxes_tick_in_the_add_counter_card() {
     let fixture = Fixture::new(&["a.txt"]);
     let mut harness = harness(fixture.app());
-    harness.get_by_label("Run settings ▾").click();
+    *harness.state_mut().operation_mut() = OpKind::AddCounter(Default::default());
     settle(&mut harness);
 
     for label in [
@@ -7030,12 +7004,13 @@ fn the_include_filter_popover_takes_a_click_and_then_typing() {
     assert_eq!(new_names(&harness), ["x_1.txt", "y 1.mp3"]);
 }
 
-/// ✨ fills the parts pattern, and the popover stays to show what it found.
+/// ✨ in Music Tagger's Filename parts fills the pattern and shows what it
+/// found.
 #[test]
-fn the_parts_wand_keeps_its_popover_open() {
+fn the_parts_wand_fills_the_pattern_in_the_tagger_card() {
     let fixture = Fixture::new(&["01 - Artist - Title.mp3"]);
     let mut harness = harness(fixture.app());
-    harness.get_by_label("Run settings ▾").click();
+    *harness.state_mut().operation_mut() = OpKind::MusicTagger(Box::default());
     settle(&mut harness);
 
     harness.get_by_label("✨").click();
@@ -7049,6 +7024,8 @@ fn a_batch_rules_options_stay_open_while_they_are_used() {
     let fixture = Fixture::new(&["one.txt"]);
     let mut harness = harness(fixture.app());
     harness.key_press(egui::Key::F8);
+    settle(&mut harness);
+    harness.get_by_label("Batch Replace list").click();
     settle(&mut harness);
     let before = harness.state().batch_replace_rules()[0].case_sensitive;
 

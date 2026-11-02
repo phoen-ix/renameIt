@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::dialogs::{FileDialogs, HostDialogs, NoDialogs};
 use crate::panels::{
-    AskForm, AskOutcome, FileTable, about, ask, confirm, operation, palette, presets, run_controls,
-    run_settings, settings, source_bar, visual_assist,
+    AskForm, AskOutcome, FileTable, ask, confirm, operation, presets, run_controls, settings,
+    source_bar, visual_assist,
 };
 use crate::thumbs::Thumbs;
 use crate::viewmodel::update::unix_now;
@@ -41,9 +41,9 @@ struct Persisted {
     /// The card stack, in the same shape a preset stores (D8).
     ///
     /// `Option`, not a bare `Vec`: absent means "written by a build that had no
-    /// card stack", while `Some(vec![])` means the user deleted every card and
-    /// meant it. A bare `Vec` cannot tell those apart, and would regrow a card
-    /// on every restart.
+    /// card stack", whose single `operation` is migrated. `Some(vec![])` — every
+    /// card deleted, or Startup's *Clear the pipeline* — restores as one card of
+    /// `default_op`, so a start always has a card to type into.
     steps: Option<Vec<(OpKind, StepConfig)>>,
     /// Counter setup, parts and the tag policy — run-wide, so they outlive any
     /// one operation.
@@ -56,6 +56,10 @@ struct Persisted {
     music_styles: Vec<String>,
     /// Settings ▸ Startup: what a fresh start deliberately forgets.
     startup: Startup,
+    /// Settings ▸ Startup: the operation `+ Add operation` makes, and the one
+    /// card an empty pipeline starts with. An `OpKind::name()`; one this build
+    /// does not know reads as Replace.
+    default_op: String,
     /// Settings ▸ Casing Exceptions: the word lists a *new* Set Casing card
     /// copies. Same bargain as the two above — the card keeps its own, so a
     /// preset stays self-contained (D35).
@@ -121,6 +125,7 @@ impl Default for Persisted {
                 .map(|style| (*style).to_owned())
                 .collect(),
             startup: Startup::default(),
+            default_op: OpKind::default().name().to_owned(),
             casing: ren_core::ops::CasingRules::default(),
             table_style: crate::viewmodel::TableStyle::default(),
             clicks: ClickActions::default(),
@@ -136,6 +141,15 @@ impl Default for Persisted {
             step: StepConfig::default(),
         }
     }
+}
+
+/// The operation an `OpKind::name()` names, or Replace for one this build
+/// does not know.
+pub fn op_named(name: &str) -> OpKind {
+    OpKind::all()
+        .into_iter()
+        .find(|op| op.name() == name)
+        .unwrap_or_default()
 }
 
 /// What a quick double-click does where a folder does not simply open
@@ -199,8 +213,8 @@ impl Startup {
         }
         if self.clear_pipeline {
             // `Some(vec![])` rather than `None`: absent means "written by a
-            // build with no card stack" and would restore the one default card
-            // (see `steps`), which is not what "cleared" means.
+            // build with no card stack" and would migrate M3's operation (see
+            // `steps`). Empty restores as one card of the default operation.
             persisted.steps = Some(Vec::new());
             persisted.pipeline_name.clear();
             // **And the drop-down histories.** D128 justifies this switch with
@@ -245,7 +259,7 @@ struct Hotkeys {
     f9: bool,
     f12: bool,
     undo: bool,
-    palette: bool,
+    add_card: bool,
 }
 
 /// A run that has been handed to the worker and not yet come back.
@@ -323,13 +337,8 @@ pub struct RenameItApp {
     answers: Answers,
     /// The modal, while it is up.
     asking: Option<AskForm>,
-    /// The add-operation palette, while it is open.
-    palette: Option<palette::PaletteState>,
     /// The Settings window, while it is open.
     settings_page: Option<settings::Page>,
-    /// The About window, while it is open. Session state, not persisted:
-    /// nobody wants it back on the next start.
-    about_open: bool,
     /// The preset drawer, while it is open.
     drawer: Option<presets::DrawerState>,
     /// The Visual Assist strip, while it is open. At most one, ever — it fills
@@ -352,6 +361,8 @@ pub struct RenameItApp {
     music_styles: Vec<String>,
     /// What a fresh start forgets, and does not.
     startup: Startup,
+    /// Settings ▸ Startup: what a new card starts as (`OpKind::name()`).
+    default_op: String,
     /// The casing exception lists a new Set Casing card starts from.
     casing: ren_core::ops::CasingRules,
     /// Row striping and full-row select.
@@ -394,7 +405,7 @@ pub struct RenameItApp {
     /// rewriting the registry inside `apply_drawer` would do it mid-frame with
     /// the drawer's borrow still live.
     needs_menu_rewrite: bool,
-    /// Settings ▸ Problem Solver asked to reset, and the confirmation is up.
+    /// Settings ▸ Where files are kept asked to reset, and the confirmation is up.
     confirming_reset: bool,
     /// A row the keyboard reached that the view should bring into sight.
     /// An **entry** index; each view translates to its own row numbering.
@@ -610,6 +621,14 @@ impl RenameItApp {
     fn restore(persisted: &Persisted) -> CardStack {
         let name = persisted.pipeline_name.clone();
         match &persisted.steps {
+            // An empty pipeline — cleared at startup, or every card deleted —
+            // starts with one card of the default operation: a start always
+            // shows something to type into.
+            Some(steps) if steps.is_empty() => {
+                let op = op_named(&persisted.default_op);
+                let config = StepConfig::for_op(&op);
+                CardStack::from_steps(name, vec![(op, config)])
+            }
             Some(steps) => CardStack::from_steps(name, steps.clone()),
             // An M3 blob, or none at all — either way, one card.
             None => CardStack::from_steps(
@@ -678,9 +697,7 @@ impl RenameItApp {
             filter: FilterForm::default(),
             answers: Answers::default(),
             asking: None,
-            palette: None,
             settings_page: None,
-            about_open: false,
             drawer: None,
             visual_assist: None,
             forget_assist_selection: false,
@@ -690,6 +707,7 @@ impl RenameItApp {
             batch_replace: persisted.batch_replace,
             music_styles: persisted.music_styles,
             startup: persisted.startup,
+            default_op: persisted.default_op,
             casing: persisted.casing,
             table_style: persisted.table_style,
             clicks: persisted.clicks,
@@ -1184,8 +1202,47 @@ impl RenameItApp {
         &mut self.stack
     }
 
-    /// Adds an operation and opens its editor, as the palette does.
-    pub fn add_operation(&mut self, mut op: OpKind) -> CardId {
+    /// Adds an operation and opens its editor.
+    pub fn add_operation(&mut self, op: OpKind) -> CardId {
+        let op = self.seeded(op);
+        let after = self.expanded.and_then(|id| self.stack.index_of(id));
+        let id = self.stack.insert_after(after, op);
+        self.expanded = Some(id);
+        self.needs_preview = true;
+        id
+    }
+
+    /// Adds a card of the default operation, as `+ Add operation` and Ctrl+K do.
+    pub fn add_default_operation(&mut self) -> CardId {
+        self.add_operation(self.default_op())
+    }
+
+    /// Turns card `index` into a fresh `op`, as its type drop-down does. Its
+    /// switch, filter and pre-processing stay; the operation's own settings
+    /// and its scope start over as a new card's would — Free Format's is the
+    /// whole name, Replace's the name without its extension.
+    pub fn change_card_kind(&mut self, index: usize, op: OpKind) {
+        let op = self.seeded(op);
+        if let Some(card) = self.stack.get_mut(index) {
+            card.scope = op.default_scope();
+            card.op = op;
+            self.expanded = Some(card.id);
+            self.needs_preview = true;
+        }
+    }
+
+    /// What `+ Add operation` makes (Settings ▸ Startup).
+    pub fn default_op(&self) -> OpKind {
+        op_named(&self.default_op)
+    }
+
+    pub fn set_default_op(&mut self, op: &OpKind) {
+        op.name().clone_into(&mut self.default_op);
+    }
+
+    /// A new card's operation, filled from Settings where a blank one would
+    /// be wrong.
+    fn seeded(&self, mut op: OpKind) -> OpKind {
         // A fresh Batch Replace starts from the list in Settings. It then keeps
         // its own copy, so editing the default later never rewrites a pipeline
         // that has already been built — or a preset already saved (D35).
@@ -1205,11 +1262,7 @@ impl RenameItApp {
             set_date.date =
                 ren_core::ops::WallClock::from_naive(chrono::Local::now().naive_local());
         }
-        let after = self.expanded.and_then(|id| self.stack.index_of(id));
-        let id = self.stack.insert_after(after, op);
-        self.expanded = Some(id);
-        self.needs_preview = true;
-        id
+        op
     }
 
     pub fn set_card_enabled(&mut self, index: usize, enabled: bool) {
@@ -1258,14 +1311,14 @@ impl RenameItApp {
         }
     }
 
+    /// The card whose editor is open.
+    pub fn expanded(&self) -> Option<CardId> {
+        self.expanded
+    }
+
     /// Opens one card's editor, closing whichever was open.
     pub fn expand_card(&mut self, index: usize) {
         self.expanded = self.stack.get(index).map(|c| c.id);
-    }
-
-    /// Opens the add-operation palette, as `+ Add operation` and Ctrl+K do.
-    pub fn open_palette(&mut self) {
-        self.palette = Some(palette::PaletteState::default());
     }
 
     /// Opens the Settings window, as the ⚙ button does.
@@ -1357,6 +1410,7 @@ impl RenameItApp {
             batch_replace: self.batch_replace.clone(),
             music_styles: self.music_styles.clone(),
             startup: self.startup,
+            default_op: self.default_op.clone(),
             casing: self.casing.clone(),
             table_style: self.table_style,
             clicks: self.clicks,
@@ -1373,7 +1427,7 @@ impl RenameItApp {
         }
     }
 
-    /// Settings ▸ Problem Solver's reset: the one button that puts every
+    /// Settings ▸ Where files are kept: the reset: the one button that puts every
     /// setting back, for a user whose app has got into a state they cannot
     /// find their way out of.
     ///
@@ -1397,6 +1451,7 @@ impl RenameItApp {
         self.music_styles = fresh.music_styles.clone();
         self.casing = fresh.casing.clone();
         self.startup = fresh.startup;
+        self.default_op = fresh.default_op.clone();
         self.table_style = fresh.table_style;
         self.clicks = fresh.clicks;
         self.columns = fresh.columns.clone();
@@ -2779,17 +2834,23 @@ impl RenameItApp {
             }
         }
 
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace))
-            && let Some(parent) = self.session.settings.dir.parent().map(Path::to_path_buf)
-        {
-            // Nothing above a drive root, where `parent()` is `None`.
-            let leaving = std::mem::replace(&mut self.session.settings.dir, parent);
-            self.session.request_refresh();
-            // Land on the folder just left, as Explorer does — when it is
-            // listed at all, which is when the Folders chip is on. Once the
-            // parent's rows exist, which is not yet.
-            self.after_listing = Some(AfterListing::LandOn(leaving));
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace)) {
+            self.go_up();
         }
+    }
+
+    /// Up to the parent folder, as Backspace and the list's `..` row do.
+    /// Nothing above a drive root, where `parent()` is `None`.
+    pub fn go_up(&mut self) {
+        let Some(parent) = self.session.settings.dir.parent().map(Path::to_path_buf) else {
+            return;
+        };
+        let leaving = std::mem::replace(&mut self.session.settings.dir, parent);
+        self.session.request_refresh();
+        // Land on the folder just left, as Explorer does — when it is listed
+        // at all, which is when the Folders chip is on. Once the parent's rows
+        // exist, which is not yet.
+        self.after_listing = Some(AfterListing::LandOn(leaving));
     }
 
     /// P65: Delete takes the selected rows — or the one under the keyboard
@@ -2817,11 +2878,7 @@ impl RenameItApp {
 
     /// True while something in front of the list owns the keyboard.
     fn modal_is_up(&self) -> bool {
-        self.palette.is_some()
-            || self.asking.is_some()
-            || self.confirming.is_some()
-            || self.settings_page.is_some()
-            || self.about_open
+        self.asking.is_some() || self.confirming.is_some() || self.settings_page.is_some()
     }
 
     /// The entry indices on screen, in display order.
@@ -2924,7 +2981,7 @@ impl RenameItApp {
                 f9: plain(egui::Key::F9),
                 f12: plain(egui::Key::F12),
                 undo: command(egui::Key::Z),
-                palette: command(egui::Key::K),
+                add_card: command(egui::Key::K),
             }
         });
         let Hotkeys {
@@ -2936,11 +2993,11 @@ impl RenameItApp {
             f9,
             f12,
             undo,
-            palette,
+            add_card,
         } = keys;
 
-        if palette {
-            self.open_palette();
+        if add_card {
+            self.add_default_operation();
         }
         if f8 {
             self.open_settings();
@@ -3632,6 +3689,14 @@ impl RenameItApp {
                 table_style: &mut self.table_style,
                 clicks: &mut self.clicks,
                 startup: &mut self.startup,
+                default_op: &mut self.default_op,
+                batches: &self.history.batches,
+                newer: match self.updates.status() {
+                    UpdateStatus::Available(version) | UpdateStatus::Ready(version) => {
+                        Some(*version)
+                    }
+                    _ => None,
+                },
                 session: &mut self.session.settings,
                 platform: self.platform.as_ref(),
                 journal_dir: &self.history.journal_dir,
@@ -3685,26 +3750,6 @@ impl RenameItApp {
                 }
                 confirm::Outcome::Cancelled => self.confirming_reset = false,
                 confirm::Outcome::Open => {}
-            }
-        }
-
-        let newer = match self.updates.status() {
-            UpdateStatus::Available(version) | UpdateStatus::Ready(version) => Some(*version),
-            _ => None,
-        };
-        if self.about_open && about::ui(&ctx, &self.history.batches, newer) {
-            self.about_open = false;
-        }
-
-        if let Some(state) = &mut self.palette {
-            let mut state = std::mem::take(state);
-            match palette::ui(&ctx, &mut state) {
-                palette::Outcome::Open => self.palette = Some(state),
-                palette::Outcome::Add(op) => {
-                    self.palette = None;
-                    self.add_operation(op);
-                }
-                palette::Outcome::Cancelled => self.palette = None,
             }
         }
 
@@ -3776,12 +3821,6 @@ impl RenameItApp {
             }
             if out.open_settings {
                 self.open_settings();
-            }
-            if out.open_about {
-                self.about_open = true;
-            }
-            if out.open_menu_page {
-                self.settings_page = Some(settings::Page::ShellIntegration);
             }
             if out.reveal_dir {
                 // Best effort, as the row menu's reveal is: no file manager is
@@ -3876,12 +3915,26 @@ impl RenameItApp {
                         card: crate::viewmodel::CardId::none(),
                         assist: None,
                     };
+                    // The file Setup Parts' wand reads: the first selected, or
+                    // the first listed.
+                    let sample = self
+                        .session
+                        .selection
+                        .iter()
+                        .next()
+                        .and_then(|i| self.session.entries().get(i))
+                        .or_else(|| self.session.entries().first());
+                    let mut run = operation::RunCx {
+                        settings: &mut self.settings,
+                        sample,
+                    };
                     if operation::ui(
                         ui,
                         &mut self.stack,
                         &mut expanded,
                         &cx,
                         self.visual_assist.as_ref(),
+                        &mut run,
                         tail,
                     ) {
                         self.needs_preview = true;
@@ -3914,6 +3967,12 @@ impl RenameItApp {
                 if let Some(rule) = self.requests.add_batch_rule.borrow_mut().take() {
                     self.batch_replace.push(rule);
                 }
+                let change_kind = self.requests.change_kind.borrow_mut().take();
+                if let Some((id, op)) = change_kind
+                    && let Some(index) = self.stack.index_of(id)
+                {
+                    self.change_card_kind(index, op);
+                }
 
                 let tail_top = ui.cursor().top();
                 ui.add_space(4.0);
@@ -3922,23 +3981,9 @@ impl RenameItApp {
                     .on_hover_text("Ctrl+K")
                     .clicked()
                 {
-                    self.open_palette();
+                    self.add_default_operation();
                 }
 
-                ui.add_space(4.0);
-                // Borrowed, not cloned: `settings` and `session` are disjoint
-                // fields, and the popup this feeds is closed on almost every
-                // frame.
-                let sample = self
-                    .session
-                    .selection
-                    .iter()
-                    .next()
-                    .and_then(|i| self.session.entries().get(i))
-                    .or_else(|| self.session.entries().first());
-                if run_settings::ui(ui, &mut self.settings, sample) {
-                    self.needs_preview = true;
-                }
                 if self.pending_ask.is_some() {
                     ui.label(
                         egui::RichText::new(
@@ -4007,6 +4052,9 @@ impl RenameItApp {
 
             let mut sort_request = None;
             let mut reorder_request = false;
+            let go_up;
+            // Not in Free Select, which has no folder, nor above a root.
+            let parent_row = !free_select && self.session.settings.dir.parent().is_some();
             let mut move_request = None;
             let row_action;
             let rename_confirmed;
@@ -4029,7 +4077,9 @@ impl RenameItApp {
                     table.scroll_to = scroll_to;
                     table.free_select = free_select;
                     table.listing = listing;
+                    table.parent_row = parent_row;
                     table.show(ui);
+                    go_up = table.go_up;
                     sort_request = table.sort_request;
                     reorder_request = table.reorder_request;
                     move_request = table.move_request.take();
@@ -4053,7 +4103,9 @@ impl RenameItApp {
                     grid.scroll_to = scroll_to;
                     grid.free_select = free_select;
                     grid.listing = listing;
+                    grid.parent_row = parent_row;
                     grid.show(ui);
+                    go_up = grid.go_up;
                     row_action = grid.row_action.take();
                     rename_confirmed = grid.rename_confirmed.take();
                 }
@@ -4065,6 +4117,9 @@ impl RenameItApp {
             self.session.selection = selection;
             if selection_changed {
                 self.needs_preview = true;
+            }
+            if go_up {
+                self.go_up();
             }
 
             if let Some(column) = sort_request {
@@ -4499,6 +4554,7 @@ mod tests {
                 clear_pattern: false,
                 clear_pipeline: true,
             },
+            default_op: "add_remove".to_owned(),
             casing: {
                 let mut casing = ren_core::ops::CasingRules::default();
                 casing.exceptions.words = vec!["CD".to_owned()];
@@ -4544,6 +4600,7 @@ mod tests {
         assert_eq!(back.table_style, original.table_style);
         assert_eq!(back.casing, original.casing);
         assert_eq!(back.startup, original.startup);
+        assert_eq!(back.default_op, original.default_op);
         assert_eq!(back.theme, original.theme);
         assert_eq!(back.simulate, original.simulate);
         assert_eq!(back.clicks, original.clicks);
@@ -4614,10 +4671,25 @@ mod tests {
         assert!(!cleared.session.subfolders);
         assert!(cleared.session.pattern.is_empty());
         // `Some(vec![])`, not `None`: absent means "an older build wrote this"
-        // and restores the one default card, which is not what cleared means.
+        // and migrates its one operation. Empty starts with one default card.
         assert_eq!(cleared.steps, Some(Vec::new()));
-        assert_eq!(RenameItApp::restore(&cleared).len(), 0);
+        assert_eq!(RenameItApp::restore(&cleared).len(), 1);
         assert!(cleared.pipeline_name.is_empty());
+    }
+
+    /// An empty pipeline starts with one card of the default operation —
+    /// whichever Settings ▸ Startup names, Replace for a name it does not know.
+    #[test]
+    fn an_empty_pipeline_starts_with_one_default_card() {
+        let stored = |default_op: &str| Persisted {
+            steps: Some(Vec::new()),
+            default_op: default_op.to_owned(),
+            ..Default::default()
+        };
+        let first = |p: &Persisted| RenameItApp::restore(p).cards()[0].op.name();
+
+        assert_eq!(first(&stored("add_remove")), "add_remove");
+        assert_eq!(first(&stored("teleport")), "replace");
     }
 
     /// And the wiring: `build` applies them, so both entry points do.
@@ -4652,7 +4724,7 @@ mod tests {
         );
         assert!(!app.session.settings.subfolders);
         assert!(app.session.settings.pattern.is_empty());
-        assert!(app.stack.is_empty());
+        assert_eq!(app.stack.len(), 1, "one default card, nothing typed");
         // **D128** clears the whole card stack for privacy — so a history
         // holding every pattern the user has run has to go with it, or the
         // reason stops being true.
@@ -4820,23 +4892,6 @@ mod tests {
         assert_eq!(stack.get(0).unwrap().op.name(), "casing");
         assert_eq!(stack.get(0).unwrap().scope, Scope::Extension);
         assert_eq!(persisted.theme, Theme::Dark);
-    }
-
-    /// A pipeline the user deliberately emptied must come back empty, which is
-    /// why `steps` is an `Option` rather than a bare `Vec`.
-    #[test]
-    fn an_empty_pipeline_does_not_regrow_a_card_on_restart() {
-        let mut storage = MapStorage::default();
-        eframe::set_value(
-            &mut storage,
-            STORAGE_KEY,
-            &Persisted {
-                steps: Some(Vec::new()),
-                ..Default::default()
-            },
-        );
-        let back: Persisted = eframe::get_value(&storage, STORAGE_KEY).unwrap();
-        assert!(RenameItApp::restore(&back).is_empty());
     }
 
     /// Each theme to its own preference — a mapping, not merely a match that

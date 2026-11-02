@@ -398,19 +398,18 @@ fn main_recovery_banner() {
 }
 
 #[test]
-fn palette_add_operation() {
+fn card_type_drop_down() {
     let demo = holiday();
     let mut harness = light(demo.app());
-    harness.state_mut().open_palette();
-    settle(&mut harness);
-    // Narrowed, so the list ends on a whole entry: the full catalogue
-    // scrolls. The search box has the focus from the moment it opens.
-    harness.event(egui::Event::Text("tags".to_owned()));
+    harness
+        .get_all_by_role(egui::accesskit::Role::ComboBox)
+        .find(|n| n.value().as_deref() == Some("Replace"))
+        .expect("the card's type drop-down")
+        .click();
     settle(&mut harness);
     harness.get_by_label("Free Format");
     harness.get_by_label("Remove Tags");
-    assert!(harness.query_by_label("Set Casing").is_none());
-    shoot(&mut harness, "palette-add-operation");
+    shoot(&mut harness, "card-type-drop-down");
 }
 
 #[test]
@@ -527,7 +526,7 @@ fn settings_page(page: &str, expect: &str, name: &str) {
 #[test]
 fn settings_batch_replace() {
     settings_page(
-        "Batch Replace",
+        "Batch Replace list",
         "a new Batch Replace operation starts from",
         "settings-batch-replace",
     );
@@ -535,27 +534,54 @@ fn settings_batch_replace() {
 
 #[test]
 fn settings_music_styles() {
-    settings_page("Music Styles", "+ Add style", "settings-music-styles");
+    settings_page("Music styles", "+ Add style", "settings-music-styles");
 }
 
 #[test]
 fn settings_casing_exceptions() {
     settings_page(
-        "Casing Exceptions",
+        "Casing words",
         "Exception words",
         "settings-casing-exceptions",
     );
 }
 
 #[test]
-fn settings_display() {
-    settings_page("Display", "Shade every other row", "settings-display");
+fn settings_columns() {
+    settings_page(
+        "Columns & rows",
+        "Shade every other row",
+        "settings-columns",
+    );
+}
+
+#[test]
+fn settings_thumbnails() {
+    settings_page(
+        "Thumbnails",
+        "Draw a border around thumbnails",
+        "settings-thumbnails",
+    );
+}
+
+#[test]
+fn settings_default_operation() {
+    settings_page(
+        "Default operation",
+        "New cards start as:",
+        "settings-default-operation",
+    );
+}
+
+#[test]
+fn settings_help() {
+    settings_page("Help", "If something looks wrong", "settings-help");
 }
 
 #[test]
 fn settings_file_system() {
     settings_page(
-        "File System",
+        "Which files show",
         "Hidden files and folders",
         "settings-file-system",
     );
@@ -563,7 +589,11 @@ fn settings_file_system() {
 
 #[test]
 fn settings_startup() {
-    settings_page("Startup", "Uncheck Subfolders", "settings-startup");
+    settings_page(
+        "When RenameIt starts",
+        "Uncheck Subfolders",
+        "settings-startup",
+    );
 }
 
 #[test]
@@ -575,7 +605,7 @@ fn settings_appearance() {
 fn dialog_reset() {
     let demo = holiday();
     let mut harness = light(demo.app());
-    open_settings_page(&mut harness, "Problem Solver");
+    open_settings_page(&mut harness, "Where files are kept");
     harness.get_by_label("Reset all settings…").click();
     settle(&mut harness);
     harness.get_by_label("Restore every setting");

@@ -16,7 +16,7 @@
 //! Rendering never fails. A tag whose value is not available — a filesystem
 //! with no creation time, an `<Ask>` nobody has answered yet — renders as
 //! nothing and is reported in [`Rendered::missing`], which is what the "Only
-//! rename if all tags are available" checkbox in Run Settings reads.
+//! rename if all tags are available" checkbox (in the cards that use tags) reads.
 
 use std::path::Path;
 

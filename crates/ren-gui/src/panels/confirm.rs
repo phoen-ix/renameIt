@@ -248,9 +248,9 @@ pub fn ui(ctx: &egui::Context, state: &Confirm) -> Outcome {
 /// It names what it **spares**, because a button called "reset settings" sitting
 /// ten lines under three folder shortcuts invites exactly the wrong guess — and
 /// it names, one by one, everything it puts back that is **not** on a Settings
-/// page, because those are the ones nobody would guess: Run Settings (the
-/// counter, Setup Parts and the tag policy, which a saved pipeline also
-/// carries), the remembered values behind every drop-down, Simulate, List or
+/// page, because those are the ones nobody would guess: the run-wide settings
+/// the cards share (the counter, Setup Parts and the tag policy, which a saved
+/// pipeline also carries, D254), the remembered values behind every drop-down, Simulate, List or
 /// Grid, and the include filter. The list is `RenameItApp::reset_settings`,
 /// field by field; D156 as amended says the same.
 pub fn reset_ui(ctx: &egui::Context) -> Outcome {
@@ -301,7 +301,7 @@ pub fn reset_ui(ctx: &egui::Context) -> Outcome {
 /// What the reset puts back that no Settings page shows, in the order the
 /// dialog lists it.
 const RESET_OUTSIDE_THE_WINDOW: [&str; 5] = [
-    "Run Settings: the counter, Setup Parts and \"Only rename if all tags are available\"",
+    "the counter, the filename parts and \"Only rename if all tags are available\", shared by the cards",
     "the values every drop-down has remembered",
     "Simulate",
     "List or Grid",
