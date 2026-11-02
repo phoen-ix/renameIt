@@ -6,7 +6,7 @@ Two things this file does **not** track. Engine and UI decisions live in
 `docs/DECISIONS.md`, which is the authority on why anything behaves as it does;
 and the reasoning behind each default lives beside the code it governs.
 
-## [Unreleased]
+## [1.9.1] - 2026-11-02
 
 ### Removed
 
