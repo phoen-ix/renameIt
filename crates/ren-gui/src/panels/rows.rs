@@ -182,6 +182,8 @@ pub enum RowAction {
     ClickedAgain(usize),
     /// *"show in Explorer"* (DESIGN §S3).
     Reveal(usize),
+    /// *Rearrange like this…* (P124): the builder, with this row as the sample.
+    Rearrange(usize),
     /// Browser mode: collect these rows into Free Select, where one run can
     /// cover files from several folders.
     AddToFreeSelect(Vec<usize>),
@@ -260,6 +262,13 @@ pub(crate) fn row_menu(
     }
     if ui.button("Show in file manager").clicked() {
         asked = Some(RowAction::Reveal(index));
+    }
+    if ui
+        .button("Rearrange like this…")
+        .on_hover_text("Build a new name from this one's blocks")
+        .clicked()
+    {
+        asked = Some(RowAction::Rearrange(index));
     }
 
     ui.separator();
@@ -677,6 +686,7 @@ mod tests {
             target: format!("/tmp/{new_name}").into(),
             state,
             actions,
+            warnings: Vec::new(),
         }
     }
 

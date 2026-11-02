@@ -23,6 +23,8 @@ pub enum Step {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Evaluation {
     pub name: String,
+    /// Why a step left this file alone when it should not have (D258).
+    pub warnings: Vec<String>,
     /// In step order. Empty for every pipeline made only of name transforms,
     /// and an empty `Vec` does not allocate — so the common path is free.
     pub actions: Vec<PlannedAction>,
@@ -229,6 +231,7 @@ impl Pipeline {
         let path = cx.entry.path.to_string_lossy();
         let mut name = cx.entry.file_name.clone();
         let mut actions: Vec<PlannedAction> = Vec::new();
+        let mut warnings: Vec<String> = Vec::new();
 
         for (index, (step, config)) in self.steps.iter().enumerate() {
             if let Some(_no) = gate(config, &path, &name, cx.entry.is_dir)? {
@@ -264,12 +267,17 @@ impl Pipeline {
             let step_cx = cx.with_current(&name);
             let transformed = transform.apply(subject.active(), &step_cx)?;
             if transformed == subject.active() {
+                warnings.extend(transform.warn(subject.active(), &step_cx));
                 continue;
             }
             let next = subject.reassemble(&transformed);
             name = next;
         }
-        Ok(Evaluation { name, actions })
+        Ok(Evaluation {
+            name,
+            actions,
+            warnings,
+        })
     }
 
     /// The exact text step `index` is handed for this file.

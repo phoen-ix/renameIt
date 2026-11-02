@@ -36,6 +36,11 @@ pub const CATALOGUE: [Group; 4] = [
                 build: || OpKind::Replace(Default::default()),
             },
             Item {
+                label: "Rearrange",
+                what: "Cut the name into blocks and put them in a new order",
+                build: || OpKind::Rearrange(Default::default()),
+            },
+            Item {
                 label: "Batch Replace",
                 what: "Run a whole list of replacements in one go",
                 build: || OpKind::BatchReplace(Default::default()),

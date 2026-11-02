@@ -30,6 +30,8 @@ pub struct SourceBarOutput {
     pub open_settings: bool,
     /// "Open in Explorer": show the folder being browsed in the file manager.
     pub reveal_dir: bool,
+    /// *Rearrange names…* (P124).
+    pub open_rearrange: bool,
 }
 
 impl SourceBarOutput {
@@ -38,6 +40,7 @@ impl SourceBarOutput {
         self.hard_refresh |= other.hard_refresh;
         self.open_settings |= other.open_settings;
         self.reveal_dir |= other.reveal_dir;
+        self.open_rearrange |= other.open_rearrange;
     }
 }
 
@@ -84,6 +87,14 @@ pub fn ui(
                 .clicked()
             {
                 out.open_settings = true;
+            }
+            // The 2.0 headline, where it is seen (P124).
+            if ui
+                .button("Rearrange names…")
+                .on_hover_text("Cut a name into blocks and drag them into a new order")
+                .clicked()
+            {
+                out.open_rearrange = true;
             }
         });
     });

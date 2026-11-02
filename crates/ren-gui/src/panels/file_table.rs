@@ -481,7 +481,19 @@ impl egui_table::TableDelegate for FileTable<'_> {
                 );
             }
             ColumnKind::Name => self.name_cell(ui, index, entry),
-            ColumnKind::NewName => new_name_cell(ui, entry, cell_kind),
+            // A row a step left alone and said why (D258): the reason on a
+            // badge, the cell as it would be otherwise.
+            ColumnKind::NewName => match self.item(index).filter(|i| !i.warnings.is_empty()) {
+                Some(item) => {
+                    let why = item.warnings.join("\n");
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("⚠").color(ui.visuals().warn_fg_color))
+                            .on_hover_text(why);
+                        new_name_cell(ui, entry, cell_kind);
+                    });
+                }
+                None => new_name_cell(ui, entry, cell_kind),
+            },
             // A folder has no size worth showing: the number the filesystem
             // reports for one is its own directory entry, not its contents.
             // Right-aligned, because a column of sizes is read by comparing

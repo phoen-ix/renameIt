@@ -326,6 +326,9 @@ fn summary(session: &Session, counts: Option<Counts>, writes: usize) -> String {
     if counts.errors > 0 {
         parts.push(ren_core::plural(counts.errors, "error"));
     }
+    if counts.warned > 0 {
+        parts.push(format!("⚠ {} left alone", counts.warned));
+    }
     if !session.selection.is_empty() {
         parts.push(format!("{} selected", session.selection.len()));
     }
@@ -428,6 +431,7 @@ mod tests {
                     target: format!("/tmp/{index}-new").into(),
                     state: state.clone(),
                     actions: Vec::new(),
+                    warnings: Vec::new(),
                 })
                 .collect(),
             ops: Vec::new(),

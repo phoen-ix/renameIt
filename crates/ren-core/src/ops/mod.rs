@@ -25,6 +25,7 @@ pub mod move_section;
 pub mod music_rename;
 pub mod music_tagger;
 pub mod numbers;
+pub mod rearrange;
 pub mod remove_tags;
 pub mod renumber;
 pub mod replace;
@@ -45,6 +46,7 @@ pub use move_section::MoveSection;
 pub use music_rename::MusicRename;
 pub use music_tagger::MusicTagger;
 pub use numbers::{MAX_PAD_WIDTH, NumberOptions, NumberSpan, NumberTarget};
+pub use rearrange::{Piece, Rearrange, Split};
 pub use remove_tags::RemoveTags;
 pub use renumber::{NumberAction, ReNumber};
 pub use replace::{BatchReplace, Replace, regex_escape};
@@ -227,6 +229,13 @@ pub trait NameTransform: Send + Sync + std::fmt::Debug {
     /// — a real cost, paid only by the runs that need it.
     fn is_order_sensitive(&self) -> bool {
         false
+    }
+
+    /// Why this file was left alone when it should not have been, for the
+    /// list to flag (D258) — Rearrange's "does not fit the rule". Asked only
+    /// when `apply` changed nothing, so an operation pays for it only then.
+    fn warn(&self, _subject: &str, _cx: &EvalCx<'_>) -> Option<String> {
+        None
     }
 
     /// Called once, before the first row, on an ordered run.

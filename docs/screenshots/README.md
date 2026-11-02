@@ -104,6 +104,15 @@ every file.
 
 <img src="dialog-irreversible.png" alt="The confirmation dialog: This run cannot be undone, with Leave everything alone and Change 2 item(s)" width="800">
 
+## Rearrange
+
+Cut a sample name into blocks, drag them into the new order, and check it on
+the files in the list before a card is added.
+
+<img src="dialog-rearrange.png" alt="The Rearrange names window: Dune - Frank Herbert cut into two coloured blocks and rebuilt as Frank Herbert - Dune, with a preview of five books and one file that does not fit" width="800">
+
+<img src="card-rearrange.png" alt="The Rearrange card in the pipeline, and the list renaming five books with the reading list flagged as left alone" width="800">
+
 ## A simulation
 
 With Simulate ticked, a run writes nothing and shows what it would have done:

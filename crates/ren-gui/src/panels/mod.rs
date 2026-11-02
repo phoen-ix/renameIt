@@ -8,6 +8,7 @@ pub mod file_table;
 pub mod grid;
 pub mod operation;
 pub mod presets;
+pub mod rearrange;
 pub mod rows;
 pub mod run_controls;
 pub mod run_settings;

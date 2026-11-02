@@ -6,6 +6,26 @@ Two things this file does **not** track. Engine and UI decisions live in
 `docs/DECISIONS.md`, which is the authority on why anything behaves as it does;
 and the reasoning behind each default lives beside the code it governs.
 
+## [2.0.0] - 2026-11-02
+
+**Rearrange**: build a new name from the old one's blocks.
+
+### Added
+
+- A **Rearrange** operation and its builder. Pick a sample file, and its name
+  is already cut into blocks at the usual separators (adjust it by selecting
+  text and pressing *Split here*, or clicking a separator to join blocks).
+  Drag the blocks into the new order — `Title - Author` becomes
+  `Author - Title` — add your own text or any tag, set each block's case, and
+  check the result on the files in the list before adding the card. *Guide
+  me* walks the same steps one at a time; *Advanced* cuts by a typed pattern
+  or a regular expression (**D258**, **P124**).
+- Open it from *Rearrange names…* at the top right, from a file's right-click
+  menu (*Rearrange like this…*), or by choosing Rearrange in a card's type
+  drop-down; *Edit in builder…* on the card reopens it.
+- A file that does not have the rule's shape is left alone and flagged with ⚠
+  in the list, and the counts line says how many were left alone.
+
 ## [1.10.0] - 2026-11-02
 
 Explorer's sort order, one Filter box, Open in Free Select from Explorer, and

@@ -452,6 +452,8 @@ pub struct RenameItApp {
     /// What the last simulated run would have done, while its window is up
     /// (P123).
     simulation: Option<crate::panels::simulation::SimulationResult>,
+    /// The Rearrange builder while it is open (P124).
+    rearrange: Option<crate::panels::rearrange::Builder>,
     /// *Rename now* from that window: the next run is for real, whatever the
     /// Simulate box says, and the box is left as the user set it.
     real_once: bool,
@@ -766,6 +768,7 @@ impl RenameItApp {
             consented_for: None,
             confirming: None,
             simulation: None,
+            rearrange: None,
             real_once: false,
             status: None,
             instant: false,
@@ -907,6 +910,63 @@ impl RenameItApp {
     /// Runs the current plan, as the Rename button would.
     pub fn run_now(&mut self) {
         self.run();
+    }
+
+    /// Opens the Rearrange builder (P124). `card` is the card it edits, or
+    /// `None` for a new one; `sample` is the row to build on, else the lead
+    /// row, else the first.
+    pub fn open_rearrange(&mut self, card: Option<CardId>, sample: Option<usize>) {
+        let entries = self.session.entries();
+        let stem = |e: &FileEntry| {
+            if e.is_dir {
+                e.file_name.clone()
+            } else {
+                e.split().0.to_owned()
+            }
+        };
+        let names: Vec<String> = entries.iter().map(stem).collect();
+        let index = sample
+            .or(self.session.selection.lead)
+            .filter(|&i| i < entries.len())
+            .unwrap_or(0);
+        let sample = names.get(index).cloned().unwrap_or_default();
+        let existing = card
+            .and_then(|id| self.stack.index_of(id))
+            .and_then(|i| self.stack.get(i))
+            .and_then(|c| match &c.op {
+                OpKind::Rearrange(rule) => Some(rule.clone()),
+                _ => None,
+            });
+        self.rearrange = Some(crate::panels::rearrange::Builder::new(
+            &sample,
+            names,
+            existing.as_ref(),
+            card,
+        ));
+    }
+
+    /// The builder's *Add card* / *Update card*.
+    fn finish_rearrange(&mut self, card: Option<CardId>, rule: ren_core::ops::Rearrange) {
+        match card.and_then(|id| self.stack.index_of(id)) {
+            Some(index) => {
+                if let Some(card) = self.stack.get_mut(index) {
+                    card.op = OpKind::Rearrange(rule);
+                }
+                self.needs_preview = true;
+            }
+            None => {
+                self.add_operation(OpKind::Rearrange(rule));
+            }
+        }
+    }
+
+    /// The Rearrange builder, while it is open.
+    pub fn rearrange_builder(&self) -> Option<&crate::panels::rearrange::Builder> {
+        self.rearrange.as_ref()
+    }
+
+    pub fn rearrange_builder_mut(&mut self) -> Option<&mut crate::panels::rearrange::Builder> {
+        self.rearrange.as_mut()
     }
 
     /// The simulation window's *Rename now* (P123): the same plan, for real,
@@ -2716,6 +2776,7 @@ impl RenameItApp {
                 target: target.clone(),
                 state: RowState::Changed,
                 actions: Vec::new(),
+                warnings: Vec::new(),
             }],
             ops: vec![PlannedOp::Rename {
                 from: entry.path,
@@ -3214,6 +3275,7 @@ impl RenameItApp {
                     .get(index)
                     .map(|entry| (entry.path.clone(), self.frame_time));
             }
+            RowAction::Rearrange(index) => self.open_rearrange(None, Some(index)),
             RowAction::Reveal(index) => {
                 if let Some(entry) = self.session.entries().get(index) {
                     // Best effort: there may be no file manager, and failing to
@@ -3914,6 +3976,15 @@ impl RenameItApp {
             }
         }
 
+        if let Some(mut builder) = self.rearrange.take() {
+            use crate::panels::rearrange::{Outcome, ui as rearrange_ui};
+            match rearrange_ui(&ctx, &mut builder) {
+                Outcome::Open => self.rearrange = Some(builder),
+                Outcome::Cancel => {}
+                Outcome::Done(rule) => self.finish_rearrange(builder.card, rule),
+            }
+        }
+
         if let Some(mut state) = self.simulation.take() {
             use crate::panels::simulation::{Outcome, ui as simulation_ui};
             match simulation_ui(&ctx, &mut state) {
@@ -3964,6 +4035,9 @@ impl RenameItApp {
             }
             if out.open_settings {
                 self.open_settings();
+            }
+            if out.open_rearrange {
+                self.open_rearrange(None, None);
             }
             if out.reveal_dir {
                 // Best effort, as the row menu's reveal is: no file manager is
@@ -4114,7 +4188,16 @@ impl RenameItApp {
                 if let Some((id, op)) = change_kind
                     && let Some(index) = self.stack.index_of(id)
                 {
+                    // A card turned into Rearrange opens the builder at once:
+                    // a Rearrange card with no rule does nothing (P124).
+                    let rearrange = matches!(op, OpKind::Rearrange(_));
                     self.change_card_kind(index, op);
+                    if rearrange {
+                        self.open_rearrange(Some(id), None);
+                    }
+                }
+                if let Some(id) = self.requests.open_rearrange.take() {
+                    self.open_rearrange(Some(id), None);
                 }
 
                 let tail_top = ui.cursor().top();

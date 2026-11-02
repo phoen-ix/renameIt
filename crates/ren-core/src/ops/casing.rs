@@ -345,18 +345,12 @@ fn coin_flip(seed: u64, position: usize) -> bool {
     (z ^ (z >> 31)) & 1 == 1
 }
 
-impl NameTransform for Casing {
-    fn id(&self) -> &'static str {
-        "casing"
-    }
-
-    fn summary(&self) -> String {
-        format!("Set casing: {:?}", self.mode)
-    }
-
-    fn apply<'a>(&self, subject: &'a str, _cx: &EvalCx<'_>) -> Result<Cow<'a, str>, OpError> {
+impl Casing {
+    /// The case change itself, for a caller with no file to hand — Rearrange
+    /// cases each block with it (D258). `apply` is this and nothing more.
+    pub fn transform<'a>(&self, subject: &'a str) -> Cow<'a, str> {
         if self.mode == CaseMode::NoChange || subject.is_empty() {
-            return Ok(Cow::Borrowed(subject));
+            return Cow::Borrowed(subject);
         }
 
         let mut out = String::with_capacity(subject.len());
@@ -381,10 +375,24 @@ impl NameTransform for Casing {
         }
 
         if out == subject {
-            Ok(Cow::Borrowed(subject))
+            Cow::Borrowed(subject)
         } else {
-            Ok(Cow::Owned(out))
+            Cow::Owned(out)
         }
+    }
+}
+
+impl NameTransform for Casing {
+    fn id(&self) -> &'static str {
+        "casing"
+    }
+
+    fn summary(&self) -> String {
+        format!("Set casing: {:?}", self.mode)
+    }
+
+    fn apply<'a>(&self, subject: &'a str, _cx: &EvalCx<'_>) -> Result<Cow<'a, str>, OpError> {
+        Ok(self.transform(subject))
     }
 }
 

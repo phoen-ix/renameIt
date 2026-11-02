@@ -7028,3 +7028,267 @@ fn the_drawers_import_button_is_on_screen_and_imports() {
     settle(&mut harness);
     assert_eq!(harness.state().preset_names(), ["Tidy"]);
 }
+
+// --- 2.0: the Rearrange builder (D258, P124) --------------------------------
+
+fn books() -> Fixture {
+    Fixture::new(&[
+        "Dune - Frank Herbert.pdf",
+        "Emma - Jane Austen.epub",
+        "Notes.txt",
+    ])
+}
+
+/// Author first, title last — what two drags do.
+fn swap_in_builder(harness: &mut Harness<'_, RenameItApp>) {
+    let builder = harness.state_mut().rearrange_builder_mut().unwrap();
+    builder.move_to(2, 0);
+    builder.move_to(1, 3);
+}
+
+/// The top bar's button opens the builder on the first file, already cut.
+#[test]
+fn rearrange_names_opens_the_builder_with_the_name_cut_into_blocks() {
+    let fixture = books();
+    let mut harness = harness(fixture.app());
+    harness.get_by_label("Rearrange names…").click();
+    settle(&mut harness);
+
+    harness.get_by_label("Rearrange names");
+    let builder = harness.state().rearrange_builder().expect("open");
+    assert_eq!(builder.sample(), "Dune - Frank Herbert");
+    assert_eq!(builder.block_texts(), ["Dune", "Frank Herbert"]);
+    assert_eq!(builder.misfits(), 1, "Notes has no ' - '");
+    harness.get_by_label_contains("1 file doesn't fit");
+}
+
+/// The user's ebooks: swap author and title, add the card, and the plan
+/// renames every book and leaves the odd one out flagged.
+#[test]
+fn the_builder_adds_a_card_that_rearranges_every_matching_name() {
+    let fixture = books();
+    let mut harness = harness(fixture.app());
+    harness.get_by_label("Rearrange names…").click();
+    settle(&mut harness);
+    swap_in_builder(&mut harness);
+    settle(&mut harness);
+    harness.get_by_label("Add card").click();
+    settle(&mut harness);
+
+    assert!(harness.state().rearrange_builder().is_none(), "closed");
+    let mut names = new_names(&harness);
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "Frank Herbert - Dune.pdf",
+            "Jane Austen - Emma.epub",
+            "Notes.txt"
+        ]
+    );
+    let plan = harness.state().plan().unwrap();
+    let notes = plan
+        .items
+        .iter()
+        .find(|i| i.new_name == "Notes.txt")
+        .unwrap();
+    assert_eq!(notes.warnings.len(), 1, "flagged, not renamed");
+    harness.get_by_label_contains("⚠ 1 left alone");
+}
+
+/// ◀ and × work from the keyboard and a screen reader, as drags do.
+#[test]
+fn the_result_blocks_move_and_leave_by_their_buttons() {
+    let fixture = books();
+    let mut harness = harness(fixture.app());
+    harness.state_mut().open_rearrange(None, None);
+    settle(&mut harness);
+
+    // [Dune][ - ][Frank Herbert]: the third block's ◀ puts it second.
+    harness.get_all_by_label("◀").nth(2).unwrap().click();
+    settle(&mut harness);
+    let builder = harness.state().rearrange_builder().unwrap();
+    assert_eq!(
+        builder.check()[0].1.as_deref(),
+        Some("DuneFrank Herbert - ")
+    );
+
+    harness.get_all_by_label("×").nth(2).unwrap().click();
+    settle(&mut harness);
+    let builder = harness.state().rearrange_builder().unwrap();
+    assert_eq!(builder.check()[0].1.as_deref(), Some("DuneFrank Herbert"));
+}
+
+/// A real pointer drag: the first result block dropped at the end of the row.
+#[test]
+fn a_result_block_can_be_dragged_to_the_end() {
+    let fixture = books();
+    let mut harness = harness(fixture.app());
+    harness.state_mut().open_rearrange(None, None);
+    settle(&mut harness);
+
+    let from = harness
+        .get_all_by_label("Dune")
+        .last()
+        .unwrap()
+        .rect()
+        .center();
+    let to = harness.get_by_label_contains("drop here").rect().center();
+    harness.drag_at(from);
+    harness.run();
+    harness.hover_at(from + egui::vec2(12.0, 0.0));
+    harness.run();
+    harness.hover_at(to);
+    harness.run();
+    harness.drop_at(to);
+    settle(&mut harness);
+
+    let builder = harness.state().rearrange_builder().unwrap();
+    assert_eq!(
+        builder.check()[0].1.as_deref(),
+        Some(" - Frank HerbertDune"),
+        "Dune moved to the end"
+    );
+}
+
+/// Clicking a palette block adds it; + Text adds typed text; + Tag a tag.
+#[test]
+fn text_and_tag_blocks_can_be_added() {
+    let fixture = books();
+    let mut harness = harness(fixture.app());
+    harness.state_mut().open_rearrange(None, None);
+    settle(&mut harness);
+    harness.get_by_label("Start again").click();
+    settle(&mut harness);
+
+    let builder = harness.state_mut().rearrange_builder_mut().unwrap();
+    builder.layout.clear();
+    builder.push(ren_core::ops::Piece::part(2));
+    builder.push(ren_core::ops::Piece::Text(" (".into()));
+    builder.push(ren_core::ops::Piece::Tag("<Parent>".into()));
+    builder.push(ren_core::ops::Piece::Text(")".into()));
+    settle(&mut harness);
+    harness.get_by_label("Add card").click();
+    settle(&mut harness);
+
+    let parent = fixture
+        .dir
+        .path()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert!(
+        new_names(&harness).contains(&format!("Frank Herbert ({parent}).pdf")),
+        "{:?}",
+        new_names(&harness)
+    );
+}
+
+/// Per-block case, from the block's Aa menu.
+#[test]
+fn a_block_can_be_put_in_upper_case() {
+    let fixture = books();
+    let mut harness = harness(fixture.app());
+    harness.state_mut().open_rearrange(None, None);
+    settle(&mut harness);
+    harness.get_all_by_label("Aa").next().unwrap().click();
+    settle(&mut harness);
+    harness.get_by_label("UPPER").click();
+    settle(&mut harness);
+    let builder = harness.state().rearrange_builder().unwrap();
+    assert_eq!(
+        builder.check()[0].1.as_deref(),
+        Some("DUNE - Frank Herbert")
+    );
+}
+
+/// The card's Edit in builder… reopens the same rule, and Update card
+/// changes that card rather than adding one.
+#[test]
+fn edit_in_builder_reopens_the_rule_and_updates_the_card() {
+    let fixture = books();
+    let mut harness = harness(fixture.app());
+    harness.state_mut().open_rearrange(None, None);
+    settle(&mut harness);
+    swap_in_builder(&mut harness);
+    harness.get_by_label("Add card").click();
+    settle(&mut harness);
+    let cards = harness.state().stack().to_steps().len();
+
+    harness.get_by_label("Edit in builder…").click();
+    settle(&mut harness);
+    let builder = harness.state().rearrange_builder().expect("reopened");
+    assert_eq!(
+        builder.check()[0].1.as_deref(),
+        Some("Frank Herbert - Dune")
+    );
+    harness.get_by_label("Update card").click();
+    settle(&mut harness);
+    assert_eq!(
+        harness.state().stack().to_steps().len(),
+        cards,
+        "no new card"
+    );
+}
+
+/// Guide me shows one area at a time, with Back and Next.
+#[test]
+fn guide_me_walks_the_three_steps() {
+    let fixture = books();
+    let mut harness = harness(fixture.app());
+    harness.state_mut().open_rearrange(None, None);
+    settle(&mut harness);
+    harness.get_by_label("Guide me").click();
+    settle(&mut harness);
+
+    harness.get_by_label("1  Cut");
+    assert!(harness.query_by_label("2  Build").is_none());
+    harness.get_by_label("Next").click();
+    settle(&mut harness);
+    harness.get_by_label("2  Build");
+    harness.get_by_label("Back").click();
+    settle(&mut harness);
+    harness.get_by_label("1  Cut");
+    harness.get_by_label("Next").click();
+    settle(&mut harness);
+    harness.get_by_label("Next").click();
+    settle(&mut harness);
+    harness.get_by_label("3  Check");
+    harness.get_by_label("Add card");
+}
+
+/// The row menu's Rearrange like this… builds on that row.
+#[test]
+fn rearrange_like_this_uses_the_row_as_the_sample() {
+    let fixture = books();
+    let mut harness = harness(fixture.app());
+    harness
+        .get_by_label_contains("Emma - Jane Austen.epub")
+        .click_secondary();
+    settle(&mut harness);
+    harness.get_by_label("Rearrange like this…").click();
+    settle(&mut harness);
+    assert_eq!(
+        harness.state().rearrange_builder().unwrap().sample(),
+        "Emma - Jane Austen"
+    );
+}
+
+/// Choosing Rearrange in a card's type drop-down opens the builder for that
+/// card.
+#[test]
+fn turning_a_card_into_rearrange_opens_the_builder() {
+    let fixture = books();
+    let mut harness = harness(fixture.app());
+    harness
+        .get_all_by_role(egui::accesskit::Role::ComboBox)
+        .find(|n| n.value().as_deref() == Some("Replace"))
+        .expect("the card's type drop-down")
+        .click();
+    settle(&mut harness);
+    harness.get_by_label("Rearrange").click();
+    settle(&mut harness);
+    let builder = harness.state().rearrange_builder().expect("opened");
+    assert!(builder.card.is_some(), "editing that card");
+}

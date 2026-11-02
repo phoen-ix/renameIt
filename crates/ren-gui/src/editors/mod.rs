@@ -34,6 +34,7 @@ mod free_format;
 mod move_section;
 mod music_rename;
 mod music_tagger;
+mod rearrange;
 mod remove_tags;
 mod renumber;
 mod replace;
@@ -69,6 +70,8 @@ pub struct EditorRequests {
     /// been drawn — the strip lives *inside* a card, so acting on it mid-frame
     /// would mutate a card while it is being drawn.
     pub assist: RefCell<Option<AssistRequest>>,
+    /// A Rearrange card's *Edit in builder…* (P124).
+    pub open_rearrange: Cell<Option<crate::viewmodel::CardId>>,
 }
 
 impl EditorRequests {
@@ -239,6 +242,7 @@ pub fn ui(ui: &mut egui::Ui, op: &mut OpKind, cx: &EditorCx<'_>) -> bool {
         OpKind::ReNumber(inner) => renumber::ui(ui, inner),
         OpKind::ZeroPadding(inner) => zero_pad::ui(ui, inner),
         OpKind::FreeFormat(inner) => free_format::ui(ui, inner, cx),
+        OpKind::Rearrange(inner) => rearrange::ui(ui, inner, cx),
         OpKind::MusicRename(inner) => music_rename::ui(ui, inner, cx),
         OpKind::MusicTagger(inner) => music_tagger::ui(ui, inner, cx),
         OpKind::RemoveTags(inner) => remove_tags::ui(ui, inner),

@@ -483,6 +483,60 @@ fn dialog_irreversible() {
     shoot(&mut harness, "dialog-irreversible");
 }
 
+/// An ebook folder in two shapes, for the Rearrange builder (P124).
+fn library() -> Demo {
+    Demo::new("Library").files(&[
+        "Dune - Frank Herbert.pdf",
+        "Emma - Jane Austen.epub",
+        "Frank Herbert - Children of Dune.pdf",
+        "Jane Austen - Persuasion.epub",
+        "The Hobbit - J. R. R. Tolkien.pdf",
+        "reading list.txt",
+    ])
+}
+
+/// The builder with author and title swapped: the 2.0 headline.
+fn rearrange_builder(theme: egui::Theme, name: &str) {
+    let demo = library();
+    let mut harness = window(demo.app(), theme);
+    harness.state_mut().open_rearrange(None, None);
+    settle(&mut harness);
+    let builder = harness.state_mut().rearrange_builder_mut().unwrap();
+    builder.move_to(2, 0);
+    builder.move_to(1, 3);
+    settle(&mut harness);
+    harness.get_by_label("Rearrange names");
+    shoot(&mut harness, name);
+}
+
+#[test]
+fn dialog_rearrange() {
+    rearrange_builder(egui::Theme::Light, "dialog-rearrange");
+}
+
+#[test]
+fn dialog_rearrange_dark() {
+    rearrange_builder(egui::Theme::Dark, "dialog-rearrange.dark");
+}
+
+/// The card it makes, and the list it renames — with the one file that does
+/// not fit flagged.
+#[test]
+fn card_rearrange() {
+    let demo = library();
+    let mut harness = light(demo.app());
+    harness.state_mut().open_rearrange(None, None);
+    settle(&mut harness);
+    let builder = harness.state_mut().rearrange_builder_mut().unwrap();
+    builder.move_to(2, 0);
+    builder.move_to(1, 3);
+    settle(&mut harness);
+    harness.get_by_label("Add card").click();
+    settle(&mut harness);
+    harness.get_by_label("Edit in builder…");
+    shoot(&mut harness, "card-rearrange");
+}
+
 /// P123: what a simulated run would have done.
 #[test]
 fn dialog_simulation() {

@@ -424,6 +424,21 @@ release and a person at the screen.
 
 **Results:** *not yet recorded.*
 
+## P124 — the Rearrange builder
+
+The model is tested; what is left is the feel of the gestures and how the
+window copes with real names.
+
+| # | Do this | Expect |
+|---|---|---|
+| 1 | *Rearrange names…* on a folder of `Title - Author` books; drag *Author* in front of the separator and *Title* behind it | Each drag shows where it will land; the Check area updates as you drop |
+| 2 | Drag a block from *New name* back up to *Blocks* | It leaves the new name |
+| 3 | Select part of the name in the Cut area (e.g. an `_`) and press *Split here* | A new separator chip appears, the blocks recolour, the new name starts again from the name as it is |
+| 4 | A sample with a 120-character name, and a folder of 2 000 files | The window stays inside the screen and responsive; Check shows the first 50 |
+| 5 | *Guide me*, then Back and Next through the three steps | One area at a time, each with its sentence of help |
+
+**Results:** *not yet recorded.*
+
 ## P122 — Open in Free Select, and several items selected
 
 Defaults: *Several items selected* is *Show only "Open in Free Select"*, a folder opens as *the folder itself*. These rows also decide whether Windows honours `MultiSelectModel=Single` on a **cascade** parent, which nothing off Windows can check.

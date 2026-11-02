@@ -188,6 +188,9 @@ pub struct PlanItem {
     /// What the run will do to the file besides renaming it, in step order.
     /// Empty for every pipeline built before M5.
     pub actions: Vec<PlannedAction>,
+    /// Why a step left this file alone when it should not have — the list
+    /// flags it (D258). Not a conflict: the run goes ahead for the rest.
+    pub warnings: Vec<String>,
 }
 
 impl PlanItem {
@@ -304,6 +307,8 @@ pub struct Counts {
     pub unchanged: usize,
     pub conflicts: usize,
     pub errors: usize,
+    /// Rows a step left alone and said why (D258).
+    pub warned: usize,
 }
 
 impl Plan {
@@ -321,6 +326,7 @@ impl Plan {
             counts.unchanged += usize::from(item.state == RowState::Unchanged && !acts);
             counts.conflicts += usize::from(item.state.is_conflict());
             counts.errors += usize::from(matches!(item.state, RowState::Error(_)));
+            counts.warned += usize::from(!item.warnings.is_empty());
         }
         counts
     }
@@ -570,12 +576,14 @@ fn plan_item(
             new_name: entry.file_name.clone(),
             state: RowState::Unchanged,
             actions: Vec::new(),
+            warnings: Vec::new(),
         };
     }
-    let (new_name, mut state, actions) = match result {
+    let (new_name, mut state, actions, warnings) = match result {
         Err(e) => (
             entry.file_name.clone(),
             RowState::Error(e.to_string()),
+            Vec::new(),
             Vec::new(),
         ),
         Ok(ev) => {
@@ -584,7 +592,7 @@ fn plan_item(
                 Ok(()) if ev.name == entry.file_name => RowState::Unchanged,
                 Ok(()) => RowState::Changed,
             };
-            (ev.name, state, ev.actions)
+            (ev.name, state, ev.actions, ev.warnings)
         }
     };
 
@@ -624,6 +632,7 @@ fn plan_item(
         new_name,
         state,
         actions,
+        warnings,
     }
 }
 

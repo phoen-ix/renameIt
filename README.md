@@ -26,6 +26,10 @@ operations produced it.
   shipped.
 - **Keyboard:** the full hotkey set, including list navigation.
 - **Thumbnails** as both a grid and a column.
+- **Rearrange** (2.0): cut a name into blocks and drag them into a new order —
+  `Title - Author.pdf` to `Author - Title.pdf` for a whole folder — with your
+  own text, tags and per-block case. Files that do not fit are left alone and
+  flagged.
 - **Visual Assist** on the four pattern fields.
 - **Screen-reader support.**
 - **Ten Settings pages**, the file-list menu and portable mode.

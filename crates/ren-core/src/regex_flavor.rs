@@ -143,6 +143,20 @@ impl Pattern {
     }
 
     /// The byte range of the leftmost match, if any.
+    /// The groups of the first match: `[whole, group 1, …]`, `None` for a
+    /// group that took no part; `None` overall when nothing matches.
+    pub fn captures(&self, subject: &str) -> Result<Option<Vec<Option<String>>>, RegexError> {
+        let found = self
+            .regex
+            .captures(subject)
+            .map_err(|e| classify(e, self.backtrack_limit))?;
+        Ok(found.map(|caps| {
+            caps.iter()
+                .map(|group| group.map(|m| m.as_str().to_owned()))
+                .collect()
+        }))
+    }
+
     pub fn find(&self, subject: &str) -> Result<Option<std::ops::Range<usize>>, RegexError> {
         self.regex
             .find(subject)

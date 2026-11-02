@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     AddCounter, AddRemove, BatchReplace, Casing, CsvList, FilenameEditor, FreeFormat, MoveSection,
-    MusicRename, MusicTagger, NameTransform, ReNumber, RemoveTags, Replace, Script, SetAttributes,
-    SetDate, SideEffectAction, SpaceTrim, ZeroPadding,
+    MusicRename, MusicTagger, NameTransform, ReNumber, Rearrange, RemoveTags, Replace, Script,
+    SetAttributes, SetDate, SideEffectAction, SpaceTrim, ZeroPadding,
 };
 use crate::model::Scope;
 use crate::pipeline::Step;
@@ -45,6 +45,8 @@ pub enum OpKind {
     ReNumber(ReNumber),
     ZeroPadding(ZeroPadding),
     FreeFormat(FreeFormat),
+    /// D258: a new name built from the old one's blocks.
+    Rearrange(Rearrange),
     CsvList(CsvList),
     FilenameEditor(FilenameEditor),
     SetAttributes(SetAttributes),
@@ -127,6 +129,7 @@ impl OpKind {
             Self::ReNumber(ReNumber::default()),
             Self::ZeroPadding(ZeroPadding::default()),
             Self::FreeFormat(FreeFormat::default()),
+            Self::Rearrange(Rearrange::default()),
             Self::CsvList(CsvList::default()),
             Self::FilenameEditor(FilenameEditor::default()),
             Self::SetAttributes(SetAttributes::default()),
@@ -151,6 +154,7 @@ impl OpKind {
             Self::ReNumber(_) => "renumber",
             Self::ZeroPadding(_) => "zero_padding",
             Self::FreeFormat(_) => "free_format",
+            Self::Rearrange(_) => "rearrange",
             Self::CsvList(_) => "csv_list",
             Self::FilenameEditor(_) => "filename_editor",
             Self::SetAttributes(_) => "set_attributes",
@@ -177,6 +181,7 @@ impl OpKind {
             | Self::FilenameEditor(_)
             | Self::SetAttributes(_)
             | Self::SetDate(_) => OpGroup::Advanced,
+            Self::Rearrange(_) => OpGroup::General,
             Self::MusicRename(_) => OpGroup::Music,
             Self::MusicTagger(_) | Self::RemoveTags(_) => OpGroup::Music,
             Self::Script(_) => OpGroup::Advanced,
@@ -196,6 +201,7 @@ impl OpKind {
     pub fn default_scope(&self) -> Scope {
         match self {
             Self::FreeFormat(_) => Scope::Both,
+            Self::Rearrange(_) => Scope::Name,
             Self::Replace(_)
             | Self::BatchReplace(_)
             | Self::Casing(_)
@@ -257,6 +263,7 @@ impl OpKind {
             Self::ReNumber(_) => "Re-Number",
             Self::ZeroPadding(_) => "Zero Padding",
             Self::FreeFormat(_) => "Free Format",
+            Self::Rearrange(_) => "Rearrange",
             Self::CsvList(_) => "CSV List Rename",
             Self::FilenameEditor(_) => "Filename Editor",
             Self::SetAttributes(_) => "Set Attributes",
@@ -360,6 +367,7 @@ impl OpKind {
             Self::ReNumber(op) => StepRef::Name(op),
             Self::ZeroPadding(op) => StepRef::Name(op),
             Self::FreeFormat(op) => StepRef::Name(op),
+            Self::Rearrange(op) => StepRef::Name(op),
             Self::CsvList(op) => StepRef::Name(op),
             Self::FilenameEditor(op) => StepRef::Name(op),
             Self::SetAttributes(op) => StepRef::Action(op),
@@ -388,6 +396,7 @@ impl OpKind {
             Self::ReNumber(op) => Name(Box::new(op.clone())),
             Self::ZeroPadding(op) => Name(Box::new(op.clone())),
             Self::FreeFormat(op) => Name(Box::new(op.clone())),
+            Self::Rearrange(op) => Name(Box::new(op.clone())),
             Self::CsvList(op) => Name(Box::new(op.clone())),
             Self::FilenameEditor(op) => Name(Box::new(op.clone())),
             Self::SetAttributes(op) => Action(Box::new(*op)),
@@ -419,6 +428,7 @@ impl OpKind {
             "renumber" => Self::ReNumber(parse(table)?),
             "zero_padding" => Self::ZeroPadding(parse(table)?),
             "free_format" => Self::FreeFormat(parse(table)?),
+            "rearrange" => Self::Rearrange(parse(table)?),
             "csv_list" => Self::CsvList(parse(table)?),
             "filename_editor" => Self::FilenameEditor(parse(table)?),
             "set_attributes" => Self::SetAttributes(parse(table)?),

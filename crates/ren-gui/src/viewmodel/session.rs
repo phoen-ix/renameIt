@@ -1878,6 +1878,7 @@ mod tests {
             target: "/tmp/a.txt".into(),
             state,
             actions,
+            warnings: Vec::new(),
         }
     }
 

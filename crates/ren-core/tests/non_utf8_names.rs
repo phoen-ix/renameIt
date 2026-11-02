@@ -196,6 +196,7 @@ fn such_a_file_can_be_renamed_by_hand_and_undone_exactly() {
             target: target.clone(),
             state: RowState::Changed,
             actions: Vec::new(),
+            warnings: Vec::new(),
         }],
         ops: vec![PlannedOp::Rename {
             from: source.clone(),
