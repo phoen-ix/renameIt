@@ -77,7 +77,10 @@ fn main() -> eframe::Result {
         let store = ren_core::PresetStore::user();
         let _ = store.seed_defaults();
         let (entries, _) = store.list();
-        let _ = ren_platform::host().set_context_menu(true, &ren_gui::app::menu_presets(&entries));
+        let _ = ren_platform::host().set_context_menu(
+            true,
+            &ren_gui::app::shell_menu(&entries, &Default::default()),
+        );
         return Ok(());
     }
 

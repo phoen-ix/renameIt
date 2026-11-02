@@ -392,3 +392,5 @@ the rows in the sections above. F1 is deliberately unbound (P64).
 | 258 | The page's box records this user's choice | ✅ `panels/settings.rs` › the_box_records_the_users_choice |
 | 259 | First start sets the menu up after an install offered it; a "no" stays | ❌ (c) `crates/ren-gui/src/app.rs` › an_install_that_offered_the_menu_sets_it_up_at_first_start and its two siblings; `start_from` is reached only from `main`, and installer-smoke covers the installer half on Windows |
 | 260 | Drag across rows selects them; moving back deselects; Ctrl-drag adds (P117) | ✅ e2e › dragging_over_rows_selects_them_and_moving_back_deselects, a_ctrl_drag_adds_to_the_selection |
+| 261 | Right-click menu: choose its entries; the last stays (P119) | ✅ `panels/settings.rs` › the_entries_are_chosen_one_by_one_and_the_last_stays, `app.rs` › the shell_menu test |
+| 262 | Right-click menu: one entry goes straight on the menu; a place with none gets no item (P119) | ✅ `shell/plan.rs` › one_entry_needs_no_submenu_and_a_place_it_does_not_apply_gets_none, each_place_is_shaped_by_what_applies_there |

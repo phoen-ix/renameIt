@@ -412,3 +412,14 @@ release and a person at the screen.
 | 5 | *Open in Explorer* beside ⟳ | Explorer opens the folder RenameIt is browsing |
 
 **Results:** *not yet recorded.*
+
+## P119 — choosing the right-click menu's entries
+
+| # | Do this | Expect |
+|---|---|---|
+| 1 | Settings ▸ Right-click menu: untick *Copy filenames to clipboard* and one preset, then right-click a file | The RenameIt submenu holds the rest, without those two |
+| 2 | Untick everything but *Start and load selected files*; right-click a file, then a folder's empty background | On the file, **RenameIt: Start and load selected files** directly, no submenu, and it opens RenameIt with the file loaded. On the background, no RenameIt item at all |
+| 3 | Leave only *Start from this folder*; right-click a file and a folder background | Both show **RenameIt: Start from this folder** directly |
+| 4 | Try to untick the last ticked entry | It is greyed out; hovering says to untick the box above instead |
+
+**Results:** *not yet recorded.*

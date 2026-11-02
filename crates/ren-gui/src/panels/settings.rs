@@ -146,6 +146,8 @@ pub struct Defaults<'a> {
     /// (D252). Recorded when the box is ticked or unticked, so a first start
     /// after an install that offers the menu leaves a "no" alone.
     pub context_menu: &'a mut Option<bool>,
+    /// Entries the user took off that menu (P119).
+    pub menu_hidden: &'a mut std::collections::BTreeSet<String>,
     /// The Updates page's.
     pub updates: &'a mut Updates,
     /// A run or an undo is out, so *Update* must wait: the installer cannot
@@ -357,6 +359,7 @@ fn page_ui(
             defaults.platform,
             defaults.presets,
             defaults.context_menu,
+            defaults.menu_hidden,
         ),
         Page::Storage => {
             out.reset = storage_ui(
@@ -1145,16 +1148,9 @@ fn shell_ui(
     platform: &dyn ren_platform::Platform,
     presets: &[ren_core::PresetEntry],
     choice: &mut Option<bool>,
+    hidden: &mut std::collections::BTreeSet<String>,
 ) {
-    ui.label(
-        egui::RichText::new(
-            "Open RenameIt from your file manager's right-click menu, on the files you \
-             have selected there — or with one of your presets already loaded.",
-        )
-        .weak()
-        .small(),
-    );
-    ui.add_space(8.0);
+    use ren_platform::shell::{Fixed, plan::MAX_PRESETS};
 
     let Some(installed) = platform.context_menu_installed() else {
         ui.label(format!(
@@ -1165,7 +1161,6 @@ fn shell_ui(
         return;
     };
 
-    let menu = crate::app::menu_presets(presets);
     // Kept across frames in egui's temp store, not in a local: the page is
     // redrawn on the next mouse move, and a local set only on the click's
     // frame showed a failed registry write for one frame — after which the
@@ -1173,8 +1168,12 @@ fn shell_ui(
     // the next write that succeeds.
     let failure_id = ui.scope_id().with("shell_menu_failure");
     let mut failure: Option<String> = ui.data(|d| d.get_temp(failure_id));
-    let mut wrote = |result: ren_platform::Result<()>| {
-        failure = result.err().map(|error| error.to_string());
+    let mut write = |want: bool, hidden: &std::collections::BTreeSet<String>| {
+        let menu = crate::app::shell_menu(presets, hidden);
+        failure = platform
+            .set_context_menu(want, &menu)
+            .err()
+            .map(|error| error.to_string());
     };
 
     let mut want = installed;
@@ -1184,74 +1183,81 @@ fn shell_ui(
             "Show a RenameIt menu when I right-click files, folders and drives",
         )
         .on_hover_text(
-            "Written under HKEY_CURRENT_USER, so this needs no administrator and removing it \
-             is deleting what it wrote.",
+            "Written for you alone, under HKEY_CURRENT_USER: no administrator, and on a \
+             computer several people use, each decides for themselves.",
         )
         .changed()
     {
-        wrote(platform.set_context_menu(want, &menu));
+        write(want, hidden);
         *choice = Some(want);
     }
-    ui.label(
-        egui::RichText::new(
-            "The installer can set this up for you. On a computer several people use, each \
-             decides for themselves: turning it off here keeps it off for you.",
-        )
-        .weak()
-        .small(),
-    );
 
-    ui.add_space(6.0);
     if installed {
-        ui.horizontal(|ui| {
-            // What the menu holds, not what the folder holds: the plan stops
-            // at `MAX_PRESETS`, and a count above it would describe a menu
-            // that does not exist.
-            let shown = menu.len().min(ren_platform::shell::plan::MAX_PRESETS);
-            ui.label(
-                egui::RichText::new(format!(
-                    "Installed, with {shown} preset{} in it.",
-                    if shown == 1 { "" } else { "s" }
-                ))
-                .small(),
-            );
-            if ui
-                .button("Refresh")
-                .on_hover_text(
-                    "Writes the menu again from the presets that are here now. The menu is a \
-                     snapshot — RenameIt refreshes it whenever you add, rename or delete a \
-                     preset, and when it starts.",
-                )
-                .clicked()
-            {
-                wrote(platform.set_context_menu(true, &menu));
+        // P119: every entry is the user's to keep or drop. With one left it
+        // goes straight on the menu, so the line under the list says so.
+        ui.add_space(8.0);
+        ui.strong("Entries");
+        let entries: Vec<(String, String)> = Fixed::ALL
+            .iter()
+            .map(|f| (f.id().to_owned(), f.label().to_owned()))
+            .chain(
+                presets
+                    .iter()
+                    .map(|p| (crate::app::menu_entry_id(p), format!("Preset: {}", p.name))),
+            )
+            .collect();
+        let shown = entries
+            .iter()
+            .filter(|(id, _)| !hidden.contains(id))
+            .count();
+        let mut changed = false;
+        for (id, label) in &entries {
+            let mut on = !hidden.contains(id);
+            // The last one stays: a menu with nothing in it is no menu, and
+            // the box above is how to have none.
+            let last = on && shown == 1;
+            let response = ui
+                .add_enabled(!last, egui::Checkbox::new(&mut on, label))
+                .on_disabled_hover_text("Untick the box above to remove the menu");
+            if response.changed() {
+                if on {
+                    hidden.remove(id);
+                } else {
+                    hidden.insert(id.clone());
+                }
+                changed = true;
             }
-        });
-    }
+        }
+        if changed {
+            write(true, hidden);
+        }
 
-    if menu.len() > ren_platform::shell::plan::MAX_PRESETS {
-        // Said here because nothing else says it: the plan truncates the
-        // list silently, and a user with forty-five presets would otherwise
-        // find five missing from the menu with no clue why.
-        ui.label(
-            egui::RichText::new(format!(
-                "The menu holds the first {} presets by name; {} more are here but not in it.",
-                ren_platform::shell::plan::MAX_PRESETS,
-                menu.len() - ren_platform::shell::plan::MAX_PRESETS
-            ))
-            .color(ui.visuals().warn_fg_color)
-            .small(),
-        );
+        let presets_on = presets
+            .iter()
+            .filter(|p| !hidden.contains(&crate::app::menu_entry_id(p)))
+            .count();
+        if presets_on > MAX_PRESETS {
+            // Said here because nothing else says it: the plan stops at
+            // `MAX_PRESETS`, and the rest would vanish with no clue why.
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                format!(
+                    "Only the first {MAX_PRESETS} ticked presets fit; {} more are left off.",
+                    presets_on - MAX_PRESETS
+                ),
+            );
+        }
+        ui.add_space(4.0);
+        ui.weak("With one entry ticked, it sits directly on the menu, without a submenu.");
     }
 
     match &failure {
         Some(error) => {
             // Shown rather than swallowed: the one thing worse than a failed
             // registry write is one the user thinks succeeded.
-            ui.label(
-                egui::RichText::new(format!("Could not change it: {error}"))
-                    .color(ui.visuals().error_fg_color)
-                    .small(),
+            ui.colored_label(
+                ui.visuals().error_fg_color,
+                format!("Could not change it: {error}"),
             );
             ui.data_mut(|d| d.insert_temp(failure_id, error.clone()));
         }
@@ -1259,39 +1265,16 @@ fn shell_ui(
     }
 
     ui.add_space(10.0);
-    // The two facts a user cannot discover from the menu itself. Both are
-    // consequences of shipping registry entries rather than a COM handler
-    // (D2), and neither has anywhere else to be said.
-    ui.label(
-        egui::RichText::new(
-            "On Windows 11 this lives under \"Show more options\", or Shift+F10 — the short \
-             menu is reserved for entries built with a component this program deliberately \
-             does not ship.",
-        )
-        .weak()
-        .small(),
-    );
-    ui.add_space(6.0);
-    ui.label(
-        egui::RichText::new(
-            "Windows passes a selection to a menu entry as a command line, and caps it at \
-             2000 characters — roughly 30 files with ordinary names. Past that Windows hides \
-             the entry rather than shortening it. \"Start from this folder\" has no such \
-             limit, and neither does opening the folder and selecting inside RenameIt.",
-        )
-        .weak()
-        .small(),
-    );
-    ui.add_space(6.0);
-    ui.label(
-        egui::RichText::new(
-            "Choosing a preset here loads it and shows the preview. It does not rename: a \
-             right-click has nowhere to warn about a conflict or ask before something that \
-             cannot be undone.",
-        )
-        .weak()
-        .small(),
-    );
+    // What a user cannot discover from the menu itself. Folded away and at
+    // the normal size, rather than three paragraphs of small print.
+    egui::CollapsingHeader::new("Good to know").show(ui, |ui| {
+        ui.label("On Windows 11 the menu is under \"Show more options\" (or Shift+F10).");
+        ui.label(
+            "Windows hides the file entries for a selection longer than about 2000 \
+             characters (roughly 30 files). \"Start from this folder\" always works.",
+        );
+        ui.label("A preset from the menu loads and shows the preview. It never renames by itself.");
+    });
 }
 
 #[cfg(test)]
@@ -1303,8 +1286,14 @@ mod tests {
     /// A machine whose menu is not installed and cannot be: a policy has
     /// locked `HKCU\Software\Classes`. Only the three calls the page makes
     /// are answered.
-    #[derive(Debug)]
-    struct LockedMenu;
+    ///
+    /// With `installed` set it is instead a menu that is there and takes every
+    /// write, keeping the labels of the last one.
+    #[derive(Debug, Default)]
+    struct LockedMenu {
+        installed: bool,
+        written: std::sync::Mutex<Vec<String>>,
+    }
 
     impl ren_platform::Platform for LockedMenu {
         fn name(&self) -> &'static str {
@@ -1346,7 +1335,26 @@ mod tests {
         }
         fn notify_shell_changed(&self, _: &Path) {}
         fn context_menu_installed(&self) -> Option<bool> {
-            Some(false)
+            Some(self.installed)
+        }
+        fn set_context_menu(
+            &self,
+            _: bool,
+            menu: &ren_platform::shell::Menu<'_>,
+        ) -> ren_platform::Result<()> {
+            if !self.installed {
+                return Err(ren_platform::PlatformError::CapabilityUnsupported {
+                    capability: ren_platform::Capability::ShellContextMenu,
+                    platform: "Locked",
+                });
+            }
+            *self.written.lock().unwrap() = menu
+                .fixed
+                .iter()
+                .map(|f| f.label().to_owned())
+                .chain(menu.presets.iter().map(|p| p.name.to_owned()))
+                .collect();
+            Ok(())
         }
     }
 
@@ -1354,8 +1362,15 @@ mod tests {
     /// the next repaint dropped it and the box just refused to stay ticked.
     #[test]
     fn a_menu_that_could_not_be_written_keeps_saying_so() {
-        let mut harness =
-            egui_kittest::Harness::new_ui(|ui| shell_ui(ui, &LockedMenu, &[], &mut None));
+        let mut harness = egui_kittest::Harness::new_ui(|ui| {
+            shell_ui(
+                ui,
+                &LockedMenu::default(),
+                &[],
+                &mut None,
+                &mut Default::default(),
+            )
+        });
         harness.run();
         harness
             .get_by_label("Show a RenameIt menu when I right-click files, folders and drives")
@@ -1371,7 +1386,15 @@ mod tests {
     #[test]
     fn the_box_records_the_users_choice() {
         let mut harness = egui_kittest::Harness::new_ui_state(
-            |ui, choice: &mut Option<bool>| shell_ui(ui, &LockedMenu, &[], choice),
+            |ui, choice: &mut Option<bool>| {
+                shell_ui(
+                    ui,
+                    &LockedMenu::default(),
+                    &[],
+                    choice,
+                    &mut Default::default(),
+                )
+            },
             None,
         );
         harness.run();
@@ -1380,5 +1403,48 @@ mod tests {
             .click();
         harness.run();
         assert_eq!(*harness.state(), Some(true));
+    }
+
+    /// Each entry is the user's to keep or drop (P119), and every change
+    /// writes the menu at once; the last one left cannot be unticked.
+    #[test]
+    fn the_entries_are_chosen_one_by_one_and_the_last_stays() {
+        let platform = LockedMenu {
+            installed: true,
+            ..Default::default()
+        };
+        let presets = [ren_core::PresetEntry {
+            name: "Tidy".to_owned(),
+            description: String::new(),
+            path: std::path::PathBuf::from("/p/tidy.toml"),
+            steps: 1,
+        }];
+        let mut harness = egui_kittest::Harness::new_ui_state(
+            |ui, hidden: &mut std::collections::BTreeSet<String>| {
+                shell_ui(ui, &platform, &presets, &mut None, hidden)
+            },
+            Default::default(),
+        );
+        harness.run();
+        for label in [
+            "Copy filenames to clipboard",
+            "Start and load selected files",
+            "Preset: Tidy",
+        ] {
+            harness.get_by_label(label).click();
+            harness.run();
+        }
+        assert_eq!(
+            *platform.written.lock().unwrap(),
+            ["Start from this folder"],
+            "what is left is what was written"
+        );
+
+        harness.get_by_label("Start from this folder").click();
+        harness.run();
+        assert!(
+            !harness.state().contains("start-here"),
+            "the last entry stays"
+        );
     }
 }

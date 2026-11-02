@@ -271,11 +271,7 @@ impl Platform for WindowsPlatform {
         Some(crate::shell::is_registered())
     }
 
-    fn set_context_menu(
-        &self,
-        installed: bool,
-        presets: &[crate::shell::MenuPreset<'_>],
-    ) -> Result<()> {
+    fn set_context_menu(&self, installed: bool, menu: &crate::shell::Menu<'_>) -> Result<()> {
         if !installed {
             return crate::shell::unregister();
         }
@@ -284,7 +280,7 @@ impl Platform for WindowsPlatform {
         // a stale verb that launches a program that is no longer there is
         // worse than no verb.
         let exe = std::env::current_exe().map_err(|e| PlatformError::io(Path::new("."), e))?;
-        crate::shell::register(&exe, presets)
+        crate::shell::register(&exe, menu)
     }
 
     fn release_context_menu(&self) -> Result<()> {

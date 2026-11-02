@@ -4473,9 +4473,12 @@ fn the_shell_page_says_what_this_platform_can_do() {
 
     if cfg!(windows) {
         harness.get_by_label_contains("when I right-click files, folders and drives");
-        // The two facts the menu itself cannot tell anyone. Windows-only,
-        // because the page returns before them where there is no menu to
-        // install — which is the whole of what the Linux runner can see here.
+        // The facts the menu itself cannot tell anyone, folded under "Good to
+        // know". Windows-only, because the page returns before them where
+        // there is no menu to install — which is the whole of what the Linux
+        // runner can see here.
+        harness.get_by_label("Good to know").click();
+        settle(&mut harness);
         harness.get_by_label_contains("Show more options");
         harness.get_by_label_contains("2000 characters");
     } else {

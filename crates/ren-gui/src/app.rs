@@ -87,6 +87,10 @@ struct Persisted {
     /// what they chose. A first start after an install that offers the menu
     /// sets it up only while this is `None` (D252).
     context_menu: Option<bool>,
+    /// Entries left off the right-click menu (P119), by
+    /// [`menu_entry_id`]. What is not here is on it, so a new preset arrives
+    /// on the menu as it always did.
+    menu_hidden: std::collections::BTreeSet<String>,
     /// The updater's own bookkeeping, kept so a restart neither checks again
     /// at once nor retries an install that did not take: when a check last
     /// went out, and which version the Automatic mode last tried and when.
@@ -135,6 +139,7 @@ impl Default for Persisted {
             simulate: false,
             update_mode: UpdateMode::default(),
             context_menu: None,
+            menu_hidden: Default::default(),
             last_update_check: None,
             update_attempt: None,
             operation: OpKind::default(),
@@ -319,6 +324,8 @@ pub struct RenameItApp {
     updates: Updates,
     /// See `Persisted::context_menu`.
     context_menu: Option<bool>,
+    /// See `Persisted::menu_hidden`.
+    menu_hidden: std::collections::BTreeSet<String>,
     /// The decode threads and the texture cache. Owned here rather than by the
     /// table or the grid because both views draw from the one cache, and
     /// because a run, an undo and F9 all have to reach it.
@@ -677,6 +684,7 @@ impl RenameItApp {
             running: None,
             close_when_idle: false,
             context_menu: persisted.context_menu,
+            menu_hidden: persisted.menu_hidden.clone(),
             updates: {
                 let mut updates = Updates::spawn(platform.clone(), update_temp, {
                     let repaint = repaint.clone();
@@ -1047,7 +1055,7 @@ impl RenameItApp {
         let (entries, _) = self.presets.list();
         match self
             .platform
-            .set_context_menu(true, &menu_presets(&entries))
+            .set_context_menu(true, &shell_menu(&entries, &self.menu_hidden))
         {
             Ok(()) => self.context_menu = Some(true),
             Err(error) => {
@@ -1420,6 +1428,7 @@ impl RenameItApp {
             simulate: self.simulate,
             update_mode: self.updates.mode,
             context_menu: self.context_menu,
+            menu_hidden: self.menu_hidden.clone(),
             last_update_check: self.updates.last_check,
             update_attempt: self.updates.auto_attempt.clone(),
             operation: OpKind::default(),
@@ -1511,7 +1520,7 @@ impl RenameItApp {
             return;
         }
         let (entries, _) = self.presets.list();
-        let menu = menu_presets(&entries);
+        let menu = shell_menu(&entries, &self.menu_hidden);
         if let Err(error) = self.platform.set_context_menu(true, &menu) {
             self.status = Some(format!("Could not update the file manager menu: {error}"));
         }
@@ -3513,17 +3522,35 @@ fn history_entries(op: &OpKind) -> Vec<(&'static str, String)> {
 /// rather than guessing, and a menu keyed on names would ship that ambiguity to
 /// every right-click.
 ///
-/// A free function so the three callers that need it — the drawer's funnel, the
-/// startup repair and the Settings page — cannot each convert it slightly
-/// differently.
-pub fn menu_presets(entries: &[ren_core::PresetEntry]) -> Vec<ren_platform::shell::MenuPreset<'_>> {
-    entries
-        .iter()
-        .map(|entry| ren_platform::shell::MenuPreset {
-            name: &entry.name,
-            file: &entry.path,
-        })
-        .collect()
+/// A free function so every caller — the drawer's funnel, the startup repair,
+/// `--install-menu` and the Settings page — builds the same menu from the same
+/// choice. `hidden` holds [`menu_entry_id`]s (P119).
+pub fn shell_menu<'a>(
+    entries: &'a [ren_core::PresetEntry],
+    hidden: &std::collections::BTreeSet<String>,
+) -> ren_platform::shell::Menu<'a> {
+    use ren_platform::shell::{Fixed, Menu, MenuPreset};
+    Menu {
+        fixed: Fixed::ALL
+            .into_iter()
+            .filter(|f| !hidden.contains(f.id()))
+            .collect(),
+        presets: entries
+            .iter()
+            .filter(|entry| !hidden.contains(&menu_entry_id(entry)))
+            .map(|entry| MenuPreset {
+                name: &entry.name,
+                file: &entry.path,
+            })
+            .collect(),
+    }
+}
+
+/// How a preset is remembered on or off the right-click menu: by its file,
+/// because two presets may share a name.
+pub fn menu_entry_id(entry: &ren_core::PresetEntry) -> String {
+    let file = entry.path.file_name().unwrap_or_default().to_string_lossy();
+    format!("preset:{file}")
 }
 
 impl eframe::App for RenameItApp {
@@ -3704,6 +3731,7 @@ impl RenameItApp {
                 updates: &mut self.updates,
                 busy: self.jobs.is_busy(),
                 context_menu: &mut self.context_menu,
+                menu_hidden: &mut self.menu_hidden,
             };
             let out = settings::ui(&ctx, &mut page, defaults, self.theme);
             if let Some(theme) = out.theme {
@@ -4565,6 +4593,7 @@ mod tests {
             simulate: true,
             update_mode: UpdateMode::Automatic,
             context_menu: Some(false),
+            menu_hidden: ["copy-names".to_owned()].into(),
             last_update_check: Some(1_800_000_000),
             update_attempt: Some(("1.7.0".to_owned(), 1_800_000_000)),
             operation: OpKind::default(),
@@ -4592,6 +4621,7 @@ mod tests {
         assert_eq!(back.simulate, original.simulate);
         assert_eq!(back.clicks, original.clicks);
         assert_eq!(back.context_menu, original.context_menu);
+        assert_eq!(back.menu_hidden, original.menu_hidden);
         assert_eq!(back.update_mode, original.update_mode);
         assert_eq!(back.last_update_check, original.last_update_check);
         assert_eq!(back.update_attempt, original.update_attempt);
@@ -5496,7 +5526,6 @@ mod tests {
 #[cfg(test)]
 mod menu_tests {
     use super::*;
-    use ren_platform::shell::MenuPreset;
     use std::sync::Mutex;
 
     /// The host, with the Explorer menu answered by this test instead.
@@ -5608,13 +5637,13 @@ mod menu_tests {
         fn set_context_menu(
             &self,
             installed: bool,
-            presets: &[MenuPreset<'_>],
+            menu: &ren_platform::shell::Menu<'_>,
         ) -> ren_platform::Result<()> {
             *self.installed.lock().unwrap() = Some(installed);
             self.writes
                 .lock()
                 .unwrap()
-                .push(presets.iter().map(|p| p.name.to_owned()).collect());
+                .push(menu.presets.iter().map(|p| p.name.to_owned()).collect());
             Ok(())
         }
     }
@@ -5873,10 +5902,23 @@ mod menu_tests {
                 steps: 1,
             },
         ];
-        let menu = menu_presets(&entries);
+        let menu = shell_menu(&entries, &Default::default()).presets;
         assert_eq!(menu.len(), 2, "two items, not one");
         assert_eq!(menu[0].name, "Tidy");
         assert_eq!(menu[0].file, Path::new("/p/a.toml"));
         assert_eq!(menu[1].file, Path::new("/p/b.toml"));
+
+        // Hidden by file, so hiding one "Tidy" keeps the other (P119).
+        let hidden = ["preset:a.toml".to_owned(), "copy-names".to_owned()].into();
+        let menu = shell_menu(&entries, &hidden);
+        assert_eq!(menu.presets.len(), 1);
+        assert_eq!(menu.presets[0].file, Path::new("/p/b.toml"));
+        assert_eq!(
+            menu.fixed,
+            [
+                ren_platform::shell::Fixed::StartHere,
+                ren_platform::shell::Fixed::LoadSelection
+            ]
+        );
     }
 }

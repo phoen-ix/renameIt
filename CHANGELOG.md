@@ -8,6 +8,17 @@ and the reasoning behind each default lives beside the code it governs.
 
 ## [1.9.3] - 2026-11-02
 
+### Added
+
+- Settings ▸ Right-click menu lets you choose which entries the Explorer menu
+  has — each fixed entry and each preset. With only one ticked, it sits
+  directly on the right-click menu instead of in a RenameIt submenu (**P119**).
+
+### Changed
+
+- The Right-click menu page is shorter: one line under the list, and the
+  notes folded under *Good to know* at normal size.
+
 ### Fixed
 
 - After selecting rows by dragging, clicking another row beside its name did

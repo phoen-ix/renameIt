@@ -438,7 +438,7 @@ mod tests {
         ];
         let plan = ShellPlan::build(
             std::path::Path::new(r"C:\Apps\Ren It\renameit.exe"),
-            &presets,
+            &ren_platform::shell::Menu::everything(presets.to_vec()),
         );
 
         // A label and the command underneath it. The `\command` subkey sorts
@@ -533,7 +533,7 @@ mod tests {
         }];
         let plan = ShellPlan::build(
             std::path::Path::new(r"C:\Apps\Ren It\renameit.exe"),
-            &presets,
+            &ren_platform::shell::Menu::everything(presets.to_vec()),
         );
 
         let mut checked = 0;

@@ -18,7 +18,7 @@
 
 use std::path::Path;
 
-use super::plan::{MENU_VERSION, MenuPreset, ShellPlan, Step, VERSION_VALUE, Value};
+use super::plan::{MENU_VERSION, Menu, ShellPlan, Step, VERSION_VALUE, Value};
 use crate::{PlatformError, Result};
 
 /// Where a plan is written, under `HKEY_CURRENT_USER`.
@@ -51,9 +51,9 @@ fn installed_under(under: Under<'_>) -> bool {
         .all(|root| reg::dword(&format!("{under}{root}"), VERSION_VALUE) == Some(MENU_VERSION))
 }
 
-/// Writes the whole menu, pointing at `exe`, with one item per preset.
-pub fn register(exe: &Path, presets: &[MenuPreset<'_>]) -> Result<()> {
-    apply(&ShellPlan::build(exe, presets), LIVE)
+/// Writes the whole menu, pointing at `exe`, with the entries chosen.
+pub fn register(exe: &Path, menu: &Menu<'_>) -> Result<()> {
+    apply(&ShellPlan::build(exe, menu), LIVE)
 }
 
 /// Removes it. Not an error if it is already gone — a user who cleaned up by
@@ -229,6 +229,7 @@ mod reg {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shell::MenuPreset;
     use std::sync::Mutex;
 
     /// Where every test but one writes.
@@ -281,7 +282,10 @@ mod tests {
     #[test]
     fn every_value_the_plan_holds_reaches_the_registry() {
         in_scratch("roundtrip", |under| {
-            let plan = ShellPlan::build(Path::new(r"C:\Apps\renameit.exe"), &presets());
+            let plan = ShellPlan::build(
+                Path::new(r"C:\Apps\renameit.exe"),
+                &Menu::everything(presets().to_vec()),
+            );
             apply(&plan, under).expect("HKCU needs no elevation");
 
             for step in &plan.steps {
@@ -306,7 +310,10 @@ mod tests {
     fn a_preset_name_with_punctuation_survives_the_write() {
         in_scratch("punctuation", |under| {
             apply(
-                &ShellPlan::build(Path::new(r"C:\Apps\renameit.exe"), &presets()),
+                &ShellPlan::build(
+                    Path::new(r"C:\Apps\renameit.exe"),
+                    &Menu::everything(presets().to_vec()),
+                ),
                 under,
             )
             .unwrap();
@@ -330,11 +337,19 @@ mod tests {
     fn a_second_install_removes_the_items_the_first_one_left() {
         in_scratch("rewrite", |under| {
             let exe = Path::new(r"C:\Apps\renameit.exe");
-            apply(&ShellPlan::build(exe, &presets()), under).unwrap();
+            apply(
+                &ShellPlan::build(exe, &Menu::everything(presets().to_vec())),
+                under,
+            )
+            .unwrap();
             let gone = format!(r"{under}Software\Classes\RenameIt.ContextMenu\shell\101_50% off");
             assert!(reg::key_exists(&gone));
 
-            apply(&ShellPlan::build(exe, &presets()[..1]), under).unwrap();
+            apply(
+                &ShellPlan::build(exe, &Menu::everything(presets()[..1].to_vec())),
+                under,
+            )
+            .unwrap();
             assert!(!reg::key_exists(&gone), "a stale item nothing would remove");
         });
     }
@@ -353,7 +368,10 @@ mod tests {
             assert!(!installed_under(under), "the old shape is not this menu");
 
             apply(
-                &ShellPlan::build(Path::new(r"C:\Apps\renameit.exe"), &presets()),
+                &ShellPlan::build(
+                    Path::new(r"C:\Apps\renameit.exe"),
+                    &Menu::everything(presets().to_vec()),
+                ),
                 under,
             )
             .unwrap();
@@ -371,7 +389,10 @@ mod tests {
     #[test]
     fn the_version_marker_is_what_answers_is_it_installed() {
         in_scratch("marker", |under| {
-            let plan = ShellPlan::build(Path::new(r"C:\Apps\renameit.exe"), &presets());
+            let plan = ShellPlan::build(
+                Path::new(r"C:\Apps\renameit.exe"),
+                &Menu::everything(presets().to_vec()),
+            );
             apply(&plan, under).unwrap();
             assert!(installed_under(under));
 
@@ -388,7 +409,10 @@ mod tests {
     fn removing_the_menu_takes_the_containers_with_it() {
         in_scratch("uninstall", |under| {
             apply(
-                &ShellPlan::build(Path::new(r"C:\Apps\renameit.exe"), &presets()),
+                &ShellPlan::build(
+                    Path::new(r"C:\Apps\renameit.exe"),
+                    &Menu::everything(presets().to_vec()),
+                ),
                 under,
             )
             .unwrap();
@@ -429,7 +453,7 @@ mod tests {
         let exe = std::env::current_exe().unwrap();
 
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            register(&exe, &presets()).expect("HKCU needs no elevation");
+            register(&exe, &Menu::everything(presets().to_vec())).expect("HKCU needs no elevation");
             assert!(is_registered());
 
             unregister().expect("removing our own keys");

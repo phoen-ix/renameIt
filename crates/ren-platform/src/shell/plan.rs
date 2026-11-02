@@ -42,6 +42,72 @@ pub struct MenuPreset<'a> {
     pub file: &'a Path,
 }
 
+/// An entry that is not a preset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fixed {
+    StartHere,
+    LoadSelection,
+    CopyNames,
+}
+
+impl Fixed {
+    pub const ALL: [Self; 3] = [Self::StartHere, Self::LoadSelection, Self::CopyNames];
+
+    /// What the menu item says, and what Settings calls it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::StartHere => "Start from this folder",
+            Self::LoadSelection => "Start and load selected files",
+            Self::CopyNames => "Copy filenames to clipboard",
+        }
+    }
+
+    /// A stable name for remembering the user's choice.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::StartHere => "start-here",
+            Self::LoadSelection => "load-selection",
+            Self::CopyNames => "copy-names",
+        }
+    }
+
+    /// Whether it needs a selection — a folder's background has none, so
+    /// these two would have nothing to act on there.
+    fn needs_selection(self) -> bool {
+        !matches!(self, Self::StartHere)
+    }
+
+    fn key(self) -> String {
+        format!("0{}0_{}", self as usize + 1, self.id())
+    }
+
+    fn args(self) -> &'static str {
+        match self {
+            Self::StartHere => " --start-in",
+            Self::LoadSelection => "",
+            Self::CopyNames => " --copy-names",
+        }
+    }
+}
+
+/// What the user chose to have on the menu (P119).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Menu<'a> {
+    /// In menu order.
+    pub fixed: Vec<Fixed>,
+    pub presets: Vec<MenuPreset<'a>>,
+}
+
+impl<'a> Menu<'a> {
+    /// Every fixed entry and every preset: the menu before anyone chose.
+    pub fn everything(presets: Vec<MenuPreset<'a>>) -> Self {
+        Self {
+            fixed: Fixed::ALL.to_vec(),
+            presets,
+        }
+    }
+}
+
 /// A registry value, in the two flavours this menu uses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
@@ -196,10 +262,14 @@ impl ShellPlan {
         keys
     }
 
-    /// The keys whose existence means "the menu is installed".
+    /// The keys whose existence means "the menu is installed": the roots on
+    /// files and drives. Every entry applies to a selection, so these are
+    /// written whenever anything is; the background's root is left out when
+    /// nothing chosen applies there (P119).
     pub fn verb_roots() -> Vec<String> {
         CLASSES
             .iter()
+            .filter(|class| class.has_selection)
             .map(|class| format!(r"{CLASSES_ROOT}\{}\{VERB}", class.shell_path))
             .collect()
     }
@@ -226,13 +296,16 @@ impl ShellPlan {
     /// a cascade parent's default value must be unset, with `MUIVerb` carrying
     /// the text instead. Stating it as a rule for the whole plan rather than a
     /// special case for the parent is what makes it impossible to half-apply.
-    pub fn build(exe: &Path, presets: &[MenuPreset<'_>]) -> Self {
+    pub fn build(exe: &Path, menu: &Menu<'_>) -> Self {
         let exe = exe.display().to_string();
         let icon = format!("\"{exe}\",0");
         let mut steps = Self::uninstall().steps;
 
-        let presets = &presets[..presets.len().min(MAX_PRESETS)];
+        let presets = &menu.presets[..menu.presets.len().min(MAX_PRESETS)];
 
+        // What each container ended up as: nothing, one entry hung straight
+        // on the verb root (P119), or a cascade.
+        let mut shapes: Vec<(&str, Shape)> = Vec::new();
         for container in [ITEMS_CONTAINER, BACKGROUND_CONTAINER] {
             let selection = container == ITEMS_CONTAINER;
             let token = if selection {
@@ -244,57 +317,48 @@ impl ShellPlan {
 
             // The fixed items. Two of the three have nothing to act on without
             // a selection, so the background menu carries only the first.
-            let mut fixed: Vec<(&str, &str, String)> = vec![(
-                "010_start-here",
-                "Start from this folder",
-                format!("\"{exe}\" --from-shell --start-in {token}"),
-            )];
-            if selection {
-                fixed.push((
-                    "020_load-selection",
-                    "Start and load selected files",
-                    format!("\"{exe}\" --from-shell {token}"),
-                ));
-                fixed.push((
-                    "030_copy-names",
-                    "Copy filenames to clipboard",
-                    format!("\"{exe}\" --from-shell --copy-names {token}"),
-                ));
-            }
-
-            let last_fixed = fixed.len() - 1;
-            for (index, (key, label, command)) in fixed.iter().enumerate() {
-                // The separator hangs off the last fixed item, and only when
-                // there is something below it — otherwise a fresh install with
-                // no presets draws a line under its last item with nothing
-                // after it.
-                let separator = index == last_fixed && !presets.is_empty();
-                Self::push_item(
-                    &mut steps,
-                    &format!(r"{root}\{key}"),
-                    label,
-                    &icon,
-                    command,
-                    selection,
-                    separator.then_some(ECF_SEPARATOR_AFTER),
-                );
-            }
-
-            for (index, preset) in presets.iter().enumerate() {
-                let key = format!(r"{root}\{}", preset_key(index, preset.name));
-                let command = format!(
+            let fixed: Vec<Item> = menu
+                .fixed
+                .iter()
+                .filter(|f| selection || !f.needs_selection())
+                .map(|f| Item {
+                    key: f.key(),
+                    label: f.label().to_owned(),
+                    command: format!("\"{exe}\" --from-shell{} {token}", f.args()),
+                })
+                .collect();
+            let preset_items = presets.iter().enumerate().map(|(index, preset)| Item {
+                key: preset_key(index, preset.name),
+                label: menu_label(preset.name),
+                command: format!(
                     "\"{exe}\" --from-shell --preset \"{}\" {token}",
                     preset.file.display()
-                );
-                Self::push_item(
-                    &mut steps,
-                    &key,
-                    &menu_label(preset.name),
-                    &icon,
-                    &command,
-                    selection,
-                    None,
-                );
+                ),
+            });
+            let fixed_count = fixed.len();
+            let items: Vec<Item> = fixed.into_iter().chain(preset_items).collect();
+
+            match items.len() {
+                0 => shapes.push((container, Shape::Empty)),
+                1 => shapes.push((container, Shape::Single(items.into_iter().next().unwrap()))),
+                _ => {
+                    for (index, item) in items.iter().enumerate() {
+                        // The separator hangs off the last fixed item, and only
+                        // when there are presets below it — otherwise a menu
+                        // with no presets draws a line with nothing after it.
+                        let separator = index + 1 == fixed_count && fixed_count < items.len();
+                        Self::push_item(
+                            &mut steps,
+                            &format!(r"{root}\{}", item.key),
+                            &item.label,
+                            &icon,
+                            &item.command,
+                            selection,
+                            separator.then_some(ECF_SEPARATOR_AFTER),
+                        );
+                    }
+                    shapes.push((container, Shape::Cascade));
+                }
             }
         }
 
@@ -302,10 +366,31 @@ impl ShellPlan {
         // writing one before its container is a window in which a menu opened
         // mid-apply shows an empty cascade.
         for class in CLASSES {
+            let shape = &shapes
+                .iter()
+                .find(|(container, _)| *container == class.container)
+                .expect("every container is shaped")
+                .1;
             let key = format!(r"{CLASSES_ROOT}\{}\{VERB}", class.shell_path);
-            steps.push(Step::sz(&key, "MUIVerb", MENU_LABEL));
-            steps.push(Step::sz(&key, "Icon", &icon));
-            steps.push(Step::sz(&key, "ExtendedSubCommandsKey", class.container));
+            match shape {
+                // Nothing chosen applies here: no verb, rather than an empty
+                // cascade.
+                Shape::Empty => continue,
+                Shape::Cascade => {
+                    steps.push(Step::sz(&key, "MUIVerb", MENU_LABEL));
+                    steps.push(Step::sz(&key, "Icon", &icon));
+                    steps.push(Step::sz(&key, "ExtendedSubCommandsKey", class.container));
+                }
+                // One entry needs no submenu: the verb itself is the item.
+                Shape::Single(item) => {
+                    steps.push(Step::sz(
+                        &key,
+                        "MUIVerb",
+                        &format!("{MENU_LABEL}: {}", item.label),
+                    ));
+                    steps.push(Step::sz(&key, "Icon", &icon));
+                }
+            }
             if class.has_selection {
                 steps.push(Step::sz(&key, "MultiSelectModel", "Player"));
             }
@@ -313,6 +398,9 @@ impl ShellPlan {
             // a class has no default verb, and ours becoming what a
             // double-click does would be a memorable bug.
             steps.push(Step::sz(&key, "NeverDefault", ""));
+            if let Shape::Single(item) = shape {
+                steps.push(Step::sz(&format!(r"{key}\command"), "", &item.command));
+            }
             // Last on the last key: whatever else fails, the marker that says
             // "this layout is complete" is the thing that did not get written.
             steps.push(Step::Set {
@@ -428,6 +516,22 @@ impl ShellPlan {
     }
 }
 
+/// One entry, before it is written anywhere.
+#[derive(Debug)]
+struct Item {
+    key: String,
+    label: String,
+    command: String,
+}
+
+/// How one container's entries reach the menu.
+#[derive(Debug)]
+enum Shape {
+    Empty,
+    Single(Item),
+    Cascade,
+}
+
 impl Step {
     fn sz(key: &str, name: &str, value: &str) -> Self {
         Self::Set {
@@ -509,7 +613,7 @@ mod tests {
             .iter()
             .map(|(name, file)| MenuPreset { name, file })
             .collect();
-        ShellPlan::build(&exe(), &presets)
+        ShellPlan::build(&exe(), &Menu::everything(presets))
     }
 
     /// The one input the snapshot is taken from.
@@ -530,7 +634,10 @@ mod tests {
                 file: Path::new(r"C:\Users\mk\presets\50% off.toml"),
             },
         ];
-        ShellPlan::build(Path::new(r"C:\Apps\RenameIt\renameit.exe"), &presets)
+        ShellPlan::build(
+            Path::new(r"C:\Apps\RenameIt\renameit.exe"),
+            &Menu::everything(presets.to_vec()),
+        )
     }
 
     /// Is this key inside that container?
@@ -642,6 +749,82 @@ mod tests {
             )
             .expect("and the items they point at");
         assert!(last_container < first_root);
+    }
+
+    /// The value set on a key, if any.
+    fn value<'p>(plan: &'p ShellPlan, key_end: &str, name: &str) -> Option<&'p Value> {
+        sets(plan)
+            .into_iter()
+            .find(|(key, n, _)| key.ends_with(key_end) && *n == name)
+            .map(|(_, _, value)| value)
+    }
+
+    /// One entry chosen: it goes straight on the menu with no submenu, on
+    /// files and drives — and the folder background, where "load selected
+    /// files" has nothing to act on, gets no RenameIt item at all (P119).
+    #[test]
+    fn one_entry_needs_no_submenu_and_a_place_it_does_not_apply_gets_none() {
+        let plan = ShellPlan::build(
+            &exe(),
+            &Menu {
+                fixed: vec![Fixed::LoadSelection],
+                presets: vec![],
+            },
+        );
+        let root = r"AllFilesystemObjects\shell\RenameIt";
+        assert_eq!(
+            value(&plan, root, "MUIVerb"),
+            Some(&Value::Sz("RenameIt: Start and load selected files".into()))
+        );
+        assert_eq!(value(&plan, root, "ExtendedSubCommandsKey"), None);
+        assert_eq!(
+            value(&plan, &format!(r"{root}\command"), ""),
+            Some(&Value::Sz(format!(
+                "\"{}\" --from-shell %1",
+                exe().display()
+            )))
+        );
+        assert!(
+            sets(&plan)
+                .iter()
+                .all(|(key, _, _)| !key.contains("RenameIt.ContextMenu")
+                    && !key.contains(r"Directory\Background")),
+            "no containers, and nothing on the background"
+        );
+        assert!(
+            value(&plan, root, VERSION_VALUE).is_some(),
+            "still reads as installed"
+        );
+    }
+
+    /// Two entries on files make a submenu there, while the background, where
+    /// only one of them applies, gets that one directly.
+    #[test]
+    fn each_place_is_shaped_by_what_applies_there() {
+        let plan = ShellPlan::build(
+            &exe(),
+            &Menu {
+                fixed: vec![Fixed::StartHere, Fixed::CopyNames],
+                presets: vec![],
+            },
+        );
+        assert_eq!(
+            value(
+                &plan,
+                r"AllFilesystemObjects\shell\RenameIt",
+                "ExtendedSubCommandsKey"
+            ),
+            Some(&Value::Sz(ITEMS_CONTAINER.into()))
+        );
+        assert_eq!(
+            value(&plan, r"Directory\Background\shell\RenameIt", "MUIVerb"),
+            Some(&Value::Sz("RenameIt: Start from this folder".into()))
+        );
+        assert_eq!(
+            plan.menu_labels(),
+            ["Start from this folder", "Copy filenames to clipboard"],
+            "the submenu holds the two chosen, and no separator is owed"
+        );
     }
 
     /// A fresh install has presets, but a user who deleted them all still gets

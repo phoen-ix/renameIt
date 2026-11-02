@@ -15,7 +15,7 @@
 
 pub mod plan;
 
-pub use plan::{MenuPreset, ShellPlan, Step, Value};
+pub use plan::{Fixed, Menu, MenuPreset, ShellPlan, Step, Value};
 
 #[cfg(windows)]
 mod apply;

@@ -496,7 +496,7 @@ The thumbnail pool is `(available_parallelism / 2).clamp(1, 4)` threads and deli
 | `guarded.rs` | The system folders and `first_guarded`, the one guard both front ends call (D127, D200). |
 | `visibility.rs` | Hidden, system and write-protected, as each OS means them (D126). |
 | `list_file.rs` | Decoding a `--list` file by its bytes (D212). |
-| `shell/` | The Explorer menu: `plan.rs` as data with no `cfg`, `apply.rs` writing it to HKCU (D132, D150, D154). |
+| `shell/` | The Explorer menu: `plan.rs` as data with no `cfg`, `apply.rs` writing it to HKCU (D132, D150, D154). The user picks the entries; one entry goes straight on the menu, none leaves a place without an item (P119). |
 
 ### `ren-cli` — the headless runner
 

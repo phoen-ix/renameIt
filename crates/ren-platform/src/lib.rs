@@ -437,7 +437,7 @@ pub trait Platform: Send + Sync + fmt::Debug {
         None
     }
 
-    /// Installs or removes it, with one item per preset. `HKCU` only, so no
+    /// Installs or removes it, with the entries `menu` holds. `HKCU` only, so no
     /// administrator to add it or to take it away again; the uninstaller
     /// removes it through [`Self::release_context_menu`].
     ///
@@ -446,7 +446,7 @@ pub trait Platform: Send + Sync + fmt::Debug {
     /// list is a snapshot: every call replaces the whole menu with the list it
     /// was given, and a preset added or deleted since the last call is only
     /// reflected by calling again.
-    fn set_context_menu(&self, _installed: bool, _presets: &[shell::MenuPreset<'_>]) -> Result<()> {
+    fn set_context_menu(&self, _installed: bool, _menu: &shell::Menu<'_>) -> Result<()> {
         Err(PlatformError::CapabilityUnsupported {
             capability: Capability::ShellContextMenu,
             platform: self.name(),
