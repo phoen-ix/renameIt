@@ -88,7 +88,9 @@ ci=$(run_for ci.yml main)
 gh run watch "$ci" --exit-status --interval 60 >/dev/null || die "CI failed: gh run view $ci"
 
 echo "== tag v$v"
-git tag -a "v$v" -m "$v"
+# The commit this script made, not whatever HEAD is by now: a commit made
+# while CI ran must never get the tag.
+git tag -a "v$v" -m "$v" "$sha"
 git push -q origin "v$v"
 rel=$(run_for release.yml "v$v")
 gh run watch "$rel" --exit-status --interval 60 >/dev/null || die "release build failed: gh run view $rel"
