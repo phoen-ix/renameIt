@@ -3620,7 +3620,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "ren-cli"
-version = "1.9.1"
+version = "1.9.2"
 dependencies = [
  "clap",
  "ren-core",
@@ -3630,7 +3630,7 @@ dependencies = [
 
 [[package]]
 name = "ren-core"
-version = "1.9.1"
+version = "1.9.2"
 dependencies = [
  "chrono",
  "crc32fast",
@@ -3659,7 +3659,7 @@ dependencies = [
 
 [[package]]
 name = "ren-gui"
-version = "1.9.1"
+version = "1.9.2"
 dependencies = [
  "arboard",
  "chrono",
@@ -3683,7 +3683,7 @@ dependencies = [
 
 [[package]]
 name = "ren-platform"
-version = "1.9.1"
+version = "1.9.2"
 dependencies = [
  "filetime",
  "libc",

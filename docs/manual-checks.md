@@ -283,6 +283,7 @@ the model half is CI's and the gesture half is yours.
 | 1 | Press **F2** on `song.mp3` | The stem `song` is selected and the caret sits before the dot. Type `track` and press Enter: `track.mp3`, and the editor opens on the **next** row |
 | 2 | Rename `a.txt` to `zz.txt` with F2 in a folder of `a b c` | The list re-sorts, and the editor opens on `b.txt` — the file that *was* next, wherever it landed |
 | 3 | Click a row, then Shift-click three rows down | Four rows selected, not two. Ctrl-click one of them: it drops out and the rest stay |
+| 3a | Press on a row, drag down three rows, then up one; drag on past the bottom of the list (P117) | Four selected, then three, live under the pointer. Past the last visible row the selection stops at the last row reached and nothing scrolls. A plain click afterwards selects only that row |
 | 4 | Arrow up and down the list | A ring follows the keyboard, one row at a time, and scrolls into view at the ends. Hold Ctrl: the ring moves and the highlight does not |
 | 5 | Click into a position spinner on a card, then press Down | The **number** changes and the list does not move. Then `Ctrl+A`: it selects the spinner's text, not every file |
 | 6 | With **Folders** on, put the keyboard on a folder and press Enter, then Backspace | Down into it, then back out — landing on the folder you left |

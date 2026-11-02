@@ -391,3 +391,4 @@ the rows in the sections above. F1 is deliberately unbound (P64).
 | 257 | No ⋯ menu: ⚙ opens Settings, About is the rail's last entry (D255) | ✅ e2e › the_gear_opens_settings_and_about_is_its_last_page |
 | 258 | The page's box records this user's choice | ✅ `panels/settings.rs` › the_box_records_the_users_choice |
 | 259 | First start sets the menu up after an install offered it; a "no" stays | ❌ (c) `crates/ren-gui/src/app.rs` › an_install_that_offered_the_menu_sets_it_up_at_first_start and its two siblings; `start_from` is reached only from `main`, and installer-smoke covers the installer half on Windows |
+| 260 | Drag across rows selects them; moving back deselects; Ctrl-drag adds (P117) | ✅ e2e › dragging_over_rows_selects_them_and_moving_back_deselects, a_ctrl_drag_adds_to_the_selection |

@@ -1603,3 +1603,76 @@ fn the_row_menus_rename_opens_the_inline_editor() {
     settle(&mut harness);
     assert_eq!(fixture.names(), ["other.mp3", "track.mp3"]);
 }
+
+// --- Drag to select (P117) ---------------------------------------------------
+
+/// Which files are selected, by name.
+fn selected(harness: &Harness<'_, RenameItApp>) -> Vec<String> {
+    let session = harness.state().session();
+    session
+        .selection
+        .iter()
+        .map(|i| session.entries()[i].file_name.clone())
+        .collect()
+}
+
+fn row_at(harness: &Harness<'_, RenameItApp>, name: &str) -> egui::Pos2 {
+    harness.get_by_label(name).rect().center()
+}
+
+/// Press on a row, sweep down three rows: four selected. Back up one: three.
+/// Release, then a plain click selects only the row clicked.
+#[test]
+fn dragging_over_rows_selects_them_and_moving_back_deselects() {
+    let fixture = Fixture::new(&["a.txt", "b.txt", "c.txt", "d.txt", "e.txt"]);
+    let mut harness = harness(fixture.app());
+    let (a, c, d) = (
+        row_at(&harness, "a.txt"),
+        row_at(&harness, "c.txt"),
+        row_at(&harness, "d.txt"),
+    );
+
+    harness.drag_at(a);
+    harness.run();
+    harness.hover_at(a + egui::vec2(0.0, 6.0));
+    harness.run();
+    harness.hover_at(d);
+    harness.run();
+    assert_eq!(selected(&harness), ["a.txt", "b.txt", "c.txt", "d.txt"]);
+
+    harness.hover_at(c);
+    harness.run();
+    assert_eq!(selected(&harness), ["a.txt", "b.txt", "c.txt"]);
+    harness.drop_at(c);
+    settle(&mut harness);
+    assert_eq!(
+        selected(&harness),
+        ["a.txt", "b.txt", "c.txt"],
+        "release keeps it"
+    );
+
+    click(&mut harness, "e.txt");
+    assert_eq!(selected(&harness), ["e.txt"]);
+}
+
+/// Ctrl-drag adds the swept rows to what is already selected.
+#[test]
+fn a_ctrl_drag_adds_to_the_selection() {
+    let fixture = Fixture::new(&["a.txt", "b.txt", "c.txt", "d.txt", "e.txt"]);
+    let mut harness = harness(fixture.app());
+    click(&mut harness, "a.txt");
+    let (c, d) = (row_at(&harness, "c.txt"), row_at(&harness, "d.txt"));
+
+    harness.event(egui::Event::ModifiersChanged(egui::Modifiers::COMMAND));
+    harness.drag_at(c);
+    harness.run();
+    harness.hover_at(c + egui::vec2(0.0, 6.0));
+    harness.run();
+    harness.hover_at(d);
+    harness.run();
+    harness.drop_at(d);
+    harness.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    settle(&mut harness);
+
+    assert_eq!(selected(&harness), ["a.txt", "c.txt", "d.txt"]);
+}

@@ -6,6 +6,20 @@ Two things this file does **not** track. Engine and UI decisions live in
 `docs/DECISIONS.md`, which is the authority on why anything behaves as it does;
 and the reasoning behind each default lives beside the code it governs.
 
+## [1.9.2] - 2026-11-02
+
+### Added
+
+- Drag across rows in the file list to select them: press on a row and move,
+  and the selection follows the pointer, shrinking again when you move back.
+  Hold Ctrl to add the rows to what is already selected (**P117**).
+
+### Changed
+
+- File names and other text in the list can no longer be selected as text,
+  so pressing on a name starts a row selection. *Copy to clipboard* in the
+  right-click menu copies names.
+
 ## [1.9.1] - 2026-11-02
 
 ### Removed

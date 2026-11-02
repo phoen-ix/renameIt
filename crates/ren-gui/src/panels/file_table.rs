@@ -30,6 +30,21 @@ const HEADER_EXTRA: f32 = 3.0;
 /// two columns' text touch.
 const CELL_GUTTER: f32 = 8.0;
 
+/// A drag across the rows that is selecting them (P117), held in egui's temp
+/// memory from the press to the release.
+#[derive(Clone)]
+struct Sweep {
+    /// Where the range starts: the pressed row, or with Shift the anchor.
+    anchor: usize,
+    /// What stays selected whatever the range does: the selection at the
+    /// press for a Ctrl-drag, nothing otherwise.
+    base: std::collections::BTreeSet<usize>,
+}
+
+fn sweep_id() -> egui::Id {
+    egui::Id::unique("renameit_file_table_sweep")
+}
+
 /// What the table needs to draw one frame.
 pub struct FileTable<'a> {
     pub entries: &'a [FileEntry],
@@ -144,6 +159,9 @@ impl<'a> FileTable<'a> {
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui) {
+        if !ui.input(|i| i.pointer.primary_down()) {
+            ui.data_mut(|d| d.remove::<Sweep>(sweep_id()));
+        }
         self.points_per_pixel = ui.pixels_per_point();
         self.row_text_height = ui.text_style_height(&egui::TextStyle::Body);
         let columns: Vec<egui_table::Column> = self
@@ -354,6 +372,50 @@ impl egui_table::TableDelegate for FileTable<'_> {
             );
         }
 
+        // Drag to select (P117). The whole row senses the drag, and the cells
+        // keep their clicks: egui resolves click and drag hits independently,
+        // and a press that moves is a drag and never a click. The F2 editor's
+        // text box senses drag itself and sits on top, so selecting text in it
+        // does not start a sweep.
+        let drag = ui.interact(
+            rect,
+            ui.scope_id().with(("row_sweep", index)),
+            egui::Sense::drag(),
+        );
+        // Not `drag_started`: a widget that senses only drag starts dragging
+        // on the press, so every plain click would start a sweep and select
+        // its row before the click — which then reads as a second click and
+        // opens the F2 editor. Wait until egui calls it a drag.
+        if drag.dragged()
+            && ui.input(|i| i.pointer.is_decidedly_dragging())
+            && ui.data(|d| d.get_temp::<Sweep>(sweep_id())).is_none()
+        {
+            let (ctrl, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
+            let sweep = Sweep {
+                anchor: if shift {
+                    self.selection.anchor().unwrap_or(index)
+                } else {
+                    index
+                },
+                base: if ctrl {
+                    self.selection.rows.clone()
+                } else {
+                    Default::default()
+                },
+            };
+            ui.data_mut(|d| d.insert_temp(sweep_id(), sweep));
+        }
+        // The row under the pointer ends the range — by height alone, so the
+        // pointer may wander sideways out of the columns.
+        if let Some(sweep) = ui.data(|d| d.get_temp::<Sweep>(sweep_id()))
+            && ui
+                .input(|i| i.pointer.interact_pos())
+                .is_some_and(|p| rect.y_range().contains(p.y))
+        {
+            self.selection
+                .sweep(sweep.anchor, index, &sweep.base, &self.visible);
+        }
+
         // Full Row Select: a click anywhere on the row selects it. The name
         // cell is drawn after this and sits on top, so it still wins where the
         // two overlap — which is what keeps its double-click and its slow
@@ -396,6 +458,10 @@ impl egui_table::TableDelegate for FileTable<'_> {
         // column edge with nothing to say it had been. A gutter separates the
         // columns; `Truncate` is what puts the ellipsis on.
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+        // A selectable label senses drag for its text selection and sits on
+        // top of the row, so pressing on a name started selecting its letters
+        // instead of the rows (P117). Copy to clipboard ▸ is how a name leaves.
+        ui.style_mut().interaction.selectable_labels = false;
         ui.add_space(CELL_GUTTER);
 
         // Full Row Select, again: registered per **cell** rather than once over

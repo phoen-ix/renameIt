@@ -297,6 +297,34 @@ impl Selection {
         self.anchor = Some(index);
     }
 
+    /// The row a Shift-extend measures from.
+    pub fn anchor(&self) -> Option<usize> {
+        self.anchor
+    }
+
+    /// A drag across the rows (P117): `base` plus every row from `anchor` to
+    /// `to` in `order`, so moving back over a row drops it again. `base` is
+    /// empty for a plain drag and the selection at the press for a Ctrl-drag.
+    ///
+    /// `order` is the rows on screen, for the reason `click` gives.
+    pub fn sweep(&mut self, anchor: usize, to: usize, base: &BTreeSet<usize>, order: &[usize]) {
+        let (Some(from), Some(end)) = (
+            order.iter().position(|&i| i == anchor),
+            order.iter().position(|&i| i == to),
+        ) else {
+            return;
+        };
+        let (lo, hi) = if from <= end {
+            (from, end)
+        } else {
+            (end, from)
+        };
+        self.rows = base.clone();
+        self.rows.extend(order[lo..=hi].iter().copied());
+        self.lead = Some(to);
+        self.anchor = Some(anchor);
+    }
+
     /// Moves the keyboard `delta` rows through what is on screen.
     ///
     /// Returns the entry it landed on, so the caller can scroll to it.
@@ -1144,6 +1172,49 @@ mod tests {
         selection.click(3, false, true, &order);
         assert_eq!(selection.iter().collect::<Vec<_>>(), [1, 2, 3]);
         assert_eq!(selection.lead, Some(3), "the keyboard follows the click");
+    }
+
+    /// A drag down three rows takes four; back up one takes three (P117).
+    #[test]
+    fn a_sweep_grows_and_shrinks_with_the_pointer() {
+        let order: Vec<usize> = (0..6).collect();
+        let mut selection = Selection::default();
+        let none = BTreeSet::new();
+        selection.sweep(1, 4, &none, &order);
+        assert_eq!(selection.iter().collect::<Vec<_>>(), [1, 2, 3, 4]);
+        selection.sweep(1, 3, &none, &order);
+        assert_eq!(selection.iter().collect::<Vec<_>>(), [1, 2, 3]);
+        assert_eq!(selection.lead, Some(3));
+        selection.sweep(1, 0, &none, &order);
+        assert_eq!(selection.iter().collect::<Vec<_>>(), [0, 1], "and upwards");
+        assert_eq!(
+            selection.anchor(),
+            Some(1),
+            "a Shift-click extends from the press"
+        );
+    }
+
+    /// Ctrl-drag adds the swept rows to what was already selected, and moving
+    /// back drops only rows the sweep took.
+    #[test]
+    fn a_sweep_keeps_its_base() {
+        let order: Vec<usize> = (0..8).collect();
+        let mut selection = Selection::default();
+        let base = BTreeSet::from([0, 6]);
+        selection.sweep(2, 4, &base, &order);
+        assert_eq!(selection.iter().collect::<Vec<_>>(), [0, 2, 3, 4, 6]);
+        selection.sweep(2, 2, &base, &order);
+        assert_eq!(selection.iter().collect::<Vec<_>>(), [0, 2, 6]);
+    }
+
+    /// The sweep walks what is on screen, as a Shift range does: a row the
+    /// Changed chip hides is never selected by passing over its place.
+    #[test]
+    fn a_sweep_skips_rows_that_are_not_on_screen() {
+        let order = [0, 2, 4];
+        let mut selection = Selection::default();
+        selection.sweep(0, 4, &BTreeSet::new(), &order);
+        assert_eq!(selection.iter().collect::<Vec<_>>(), [0, 2, 4]);
     }
 
     /// The anchor is the last row picked **without** Shift, so shrinking a
