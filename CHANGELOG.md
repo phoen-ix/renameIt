@@ -6,6 +6,12 @@ Two things this file does **not** track. Engine and UI decisions live in
 `docs/DECISIONS.md`, which is the authority on why anything behaves as it does;
 and the reasoning behind each default lives beside the code it governs.
 
+## [2.0.1] - 2026-11-03
+
+### Fixed
+
+- Dependencies: async-executor 1.14.0, which was yanked, is now 1.14.1.
+
 ## [2.0.0] - 2026-11-02
 
 **Rearrange**: build a new name from the old one's blocks.

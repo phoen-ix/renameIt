@@ -5,7 +5,7 @@ ships first. MIT licensed.
 
 <img src="docs/screenshots/main-preview.png" alt="The RenameIt window: a folder of holiday photos, a Find &amp; Replace card and a Set Casing card on the left, and the file list showing each old name beside its new one with the changed part highlighted" width="800">
 
-**Status:** 2.0.0, [released](https://github.com/phoen-ix/renameIt/releases/latest) for Windows and Linux (x64).
+**Status:** 2.0.1, [released](https://github.com/phoen-ix/renameIt/releases/latest) for Windows and Linux (x64).
 
 Every screen, with a sentence each: [screenshot gallery](docs/screenshots/README.md).
 
