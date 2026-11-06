@@ -7,7 +7,7 @@ them, see [Screenshots](../../README.md#screenshots) in the README.
 
 ## The main window
 
-A folder of holiday photos with two cards on the stack — Find & Replace turns
+A folder of holiday photos with two cards on the stack — Replace turns
 `_` into spaces, Set Casing makes the words Title Case — and the file list
 showing each old name beside its new one, the changed part in green.
 
@@ -132,7 +132,7 @@ A pipeline with `<Ask>` in it asks for the text when you press Rename.
 The ⌖ button beside a position or find box (or **F3**) shows the text that
 operation is handed; select part of it and press **Select** to fill the box.
 
-<img src="visual-assist.png" alt="The Visual Assist strip on a Find &amp; Replace card: the name beach_at_sunset with _at_ selected" width="800">
+<img src="visual-assist.png" alt="The Visual Assist strip on a Replace card: the name beach_at_sunset with _at_ selected" width="800">
 
 ## Settings
 
@@ -165,7 +165,7 @@ Thumbnail size and border, for the Thumb column and the grid.
 
 ### Which files show
 
-Hidden and system files, what the pattern box applies to, and the
+Hidden and system files, what the Filter applies to, and the
 system-folder guard.
 
 <img src="settings-file-system.png" alt="Settings, Which files show page" width="800">

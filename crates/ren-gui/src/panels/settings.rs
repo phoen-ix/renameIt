@@ -932,7 +932,7 @@ fn file_system_ui(ui: &mut egui::Ui, session: &mut SessionSettings) -> bool {
     ui.separator();
     ui.add_space(6.0);
 
-    ui.label(egui::RichText::new("Pattern box applies to").strong());
+    ui.label(egui::RichText::new("Filter applies to").strong());
     ui.horizontal(|ui| {
         for (scope, label) in [
             (PatternScope::Both, "Both"),
@@ -1002,7 +1002,7 @@ fn startup_ui(ui: &mut egui::Ui, startup: &mut Startup) {
             "So a start is never slow: a deep tree left switched on is walked before the \
              window appears.",
         );
-    ui.checkbox(&mut startup.clear_pattern, "Clear the pattern box")
+    ui.checkbox(&mut startup.clear_pattern, "Clear the Filter box")
         .on_hover_text("So a forgotten *.mp3 does not silently hide everything else");
     ui.checkbox(&mut startup.clear_pipeline, "Clear the pipeline")
         .on_hover_text(
@@ -1133,7 +1133,7 @@ fn help_ui(ui: &mut egui::Ui) {
     for (problem, answer) in [
         (
             "The Rename button is greyed out",
-            "It always says why, just above itself. A conflict blocks the whole run rather \
+            "It always says why, just below the button. A conflict blocks the whole run rather \
              than skipping a file, because the alternative is renaming some of your files \
              and not others.",
         ),
@@ -1144,7 +1144,7 @@ fn help_ui(ui: &mut egui::Ui) {
         ),
         (
             "Some files are missing from the list",
-            "Check the pattern box, the Files/Folders switches, and Settings ▸ Which files show. \
+            "Check the Filter box, the Files/Folders switches, and Settings ▸ Which files show. \
              Anything the walk could not read is counted beside the folder path.",
         ),
         (

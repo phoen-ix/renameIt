@@ -259,10 +259,10 @@ Press ⚙ at the top right, or **F8**. The rail on the left groups the pages und
 The app remembers where you were; these switches, all off by default, tell it what to forget. They take effect at the next start.
 
 - **Uncheck Subfolders**, so a start is never slow.
-- **Clear the pattern box**, so a forgotten `*.mp3` does not hide everything else.
+- **Clear the Filter box**, so a forgotten `*.mp3` does not hide everything else.
 - **Clear the pipeline**, so the next person at this machine does not see what you were renaming.
 
-<img src="screenshots/settings-startup.png" alt="Settings, When RenameIt starts: Uncheck Subfolders, Clear the pattern box and Clear the pipeline, all unticked" width="800">
+<img src="screenshots/settings-startup.png" alt="Settings, When RenameIt starts: Uncheck Subfolders, Clear the Filter box and Clear the pipeline, all unticked" width="800">
 
 ### Updates
 
@@ -294,10 +294,10 @@ On Windows:
 ### Which files show
 
 - **Show**: **Hidden files and folders**, **System files and folders**, **Write-protected files and folders**, all on by default.
-- **Pattern box applies to**: **Both**, **Files** or **Folders**. Only matters with both Files and Folders switched on.
+- **Filter applies to**: **Both**, **Files** or **Folders**. Only matters with both Files and Folders switched on.
 - **System folders**: **Refuse to rename inside operating-system folders** (on). With it on, Rename refuses inside `C:\Windows`, Program Files, `/usr`, `/etc` and the like, because undo cannot fix a machine that no longer boots.
 
-<img src="screenshots/settings-file-system.png" alt="Settings, Which files show: the three Show boxes ticked, Pattern box applies to Both, and Refuse to rename inside operating-system folders ticked" width="800">
+<img src="screenshots/settings-file-system.png" alt="Settings, Which files show: the three Show boxes ticked, Filter applies to Both, and Refuse to rename inside operating-system folders ticked" width="800">
 
 ### Default operation
 
@@ -340,13 +340,13 @@ On Windows 11 the menu is under **Show more options** (or **Shift+F10**). Window
 
 ### Where files are kept
 
-The **Undo journal**, **Presets** and **Scripts** folders this copy uses, each with 📂 to open it, and whether this is a portable copy. **Reset all settings…** puts every setting back to what the app ships with, after a confirmation that lists everything it restores, including the counter, the filename parts, the drop-downs' remembered values, Simulate, List or Grid and the filter. It never touches your files, presets, scripts, the undo journal, your pipeline or the folder you are in.
+The **Undo journal**, **Presets** and **Scripts** folders this copy uses, each with 📂 to open it, and whether this is a portable copy. **Reset all settings…** puts every setting back to what the app ships with, after a confirmation that lists everything it restores, including the counter, the filename parts, the drop-downs' remembered values, Simulate and List or Grid. It never touches your files, presets, scripts, the undo journal, your pipeline, the folder you are in or the Filter box.
 
 1. Press **Reset all settings…**.
 2. Read the list.
 3. Press **Restore every setting**, or **Leave my settings alone**.
 
-<img src="screenshots/dialog-reset.png" alt="The dialog Restore every setting to its defaults? over Settings: what goes back, the five things outside the window, what it leaves alone, and the buttons Leave my settings alone and Restore every setting" width="800">
+<img src="screenshots/dialog-reset.png" alt="The dialog Restore every setting to its defaults? over Settings: what goes back, the four things outside the window, what it leaves alone, and the buttons Leave my settings alone and Restore every setting" width="800">
 
 ### Help
 

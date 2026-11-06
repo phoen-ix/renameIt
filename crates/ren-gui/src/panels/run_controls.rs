@@ -16,6 +16,7 @@ use std::path::Path;
 
 use ren_core::{Counts, Plan, PlannedOp};
 
+use crate::panels::settings::Page;
 use crate::viewmodel::{History, RowFilter, Session};
 
 /// What the run controls want the app to do.
@@ -369,8 +370,9 @@ fn blocked_reason(
     if let Some(folder) = guarded {
         return Some(format!(
             "{} belongs to the operating system. Renaming inside it can break this machine in \
-             ways undo cannot fix. Turn the guard off in Settings ▸ File System if you mean it.",
-            folder.display()
+             ways undo cannot fix. Turn the guard off in Settings ▸ {} if you mean it.",
+            folder.display(),
+            Page::FileSystem.label()
         ));
     }
     // Then the empty pipeline, because it is the identity: every row would come

@@ -3770,6 +3770,8 @@ fn a_guarded_folder_blocks_the_run_with_a_reason() {
     let reason = harness.state().blocked_reason().expect("the guard blocks");
     assert!(reason.contains("operating system"), "{reason}");
     assert!(reason.contains("undo cannot fix"), "{reason}");
+    // It names the page the switch is on, by that page's title.
+    assert!(reason.contains("Settings ▸ Which files show"), "{reason}");
 
     // And it is a decision the user can take.
     harness.key_press(egui::Key::F8);
@@ -6610,7 +6612,6 @@ fn the_reset_dialog_names_everything_outside_the_window_it_puts_back() {
         "remembered",
         "Simulate",
         "List or Grid",
-        "include filter",
     ] {
         assert!(
             harness.query_all_by_label_contains(what).count() >= 1,

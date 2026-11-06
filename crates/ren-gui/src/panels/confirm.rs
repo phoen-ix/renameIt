@@ -24,6 +24,8 @@
 
 use ren_core::{Plan, PlannedOp, Undoability};
 
+use crate::panels::settings::Page;
+
 /// The dialog while it is up — a **snapshot** of the plan it was opened for.
 ///
 /// Everything is computed once, in [`Confirm::new`]. Two reasons, and the
@@ -250,9 +252,10 @@ pub fn ui(ctx: &egui::Context, state: &Confirm) -> Outcome {
 /// it names, one by one, everything it puts back that is **not** on a Settings
 /// page, because those are the ones nobody would guess: the run-wide settings
 /// the cards share (the counter, Setup Parts and the tag policy, which a saved
-/// pipeline also carries, D254), the remembered values behind every drop-down, Simulate, List or
-/// Grid, and the include filter. The list is `RenameItApp::reset_settings`,
-/// field by field; D156 as amended says the same.
+/// pipeline also carries, D254), the remembered values behind every drop-down,
+/// Simulate, and List or Grid. The Filter box is not on it: what you filtered
+/// to stays (P121). The list is `RenameItApp::reset_settings`, field by field;
+/// D156 as amended says the same.
 pub fn reset_ui(ctx: &egui::Context) -> Outcome {
     let mut outcome = Outcome::Open;
 
@@ -261,12 +264,15 @@ pub fn reset_ui(ctx: &egui::Context) -> Outcome {
         ui.heading("Restore every setting to its defaults?");
         ui.add_space(6.0);
         ui.label(
-            egui::RichText::new(
+            egui::RichText::new(format!(
                 "⚠ This cannot be undone. The settings in this window go back to what the app \
                  ships with — your Batch Replace rules, music styles, casing exception words, \
-                 columns, thumbnails, theme, interface size, the switches on the Display, \
-                 File System and Startup pages, and when to look for updates.",
-            )
+                 columns, thumbnails, theme, interface size, the switches on the {}, {} and \
+                 {} pages, and when to look for updates.",
+                Page::Columns.label(),
+                Page::FileSystem.label(),
+                Page::Startup.label(),
+            ))
             .color(ui.visuals().warn_fg_color),
         );
         ui.add_space(6.0);
@@ -300,12 +306,11 @@ pub fn reset_ui(ctx: &egui::Context) -> Outcome {
 
 /// What the reset puts back that no Settings page shows, in the order the
 /// dialog lists it.
-const RESET_OUTSIDE_THE_WINDOW: [&str; 5] = [
+const RESET_OUTSIDE_THE_WINDOW: [&str; 4] = [
     "the counter, the filename parts and \"Only rename if all tags are available\", shared by the cards",
     "the values every drop-down has remembered",
     "Simulate",
     "List or Grid",
-    "the include filter in the source bar",
 ];
 
 #[cfg(test)]

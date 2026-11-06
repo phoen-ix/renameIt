@@ -612,7 +612,7 @@ pub(super) fn empty_state(
         // files" (P63's principle: never let rows vanish quietly).
         (
             "Every row is filtered out",
-            "The Files/Folders switches, the pattern box and the All/Changed/Conflicts \
+            "The Files/Folders switches, the Filter box and the All/Changed/Conflicts \
              chips each hide rows.",
         )
     } else if listing {

@@ -19,6 +19,7 @@ use ren_core::ops::MusicRename;
 use ren_core::template::TextTemplate;
 
 use super::EditorCx;
+use crate::panels::settings::Page;
 use crate::widgets::form::{After, Form};
 use crate::widgets::tag_field::tag_field;
 
@@ -42,7 +43,10 @@ pub fn ui(ui: &mut egui::Ui, op: &mut MusicRename, cx: &EditorCx<'_>) -> bool {
         ui.label(egui::RichText::new("Rename music based on tags").strong());
         if ui
             .link("(edit styles)")
-            .on_hover_text("Settings ▸ Music Styles — the list these radios offer")
+            .on_hover_text(format!(
+                "Settings ▸ {} — the list these radios offer",
+                Page::MusicStyles.label()
+            ))
             .clicked()
         {
             cx.requests.edit_music_styles.set(true);
