@@ -44,6 +44,7 @@ ships first. MIT-licensed.
 
 - `docs/DECISIONS.md` — decision record (D* locked decisions, P* default policies)
 - `docs/DESIGN.md` — consolidated architecture
+- `docs/manual.md` — the user guide: every task and Settings page in the app
 - `docs/cli.md` — `ren-cli`, exit codes, legacy switches, where the files live
 - `docs/tags.md` — the `<tag>` reference
 - `docs/MIGRATION-legacy-scripts.md` — porting a legacy `.frs` script to Koto

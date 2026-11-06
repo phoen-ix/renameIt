@@ -37,6 +37,7 @@ Copy-Item crates/ren-gui/assets/fonts/egui/*.txt "$Out/font-licences"
 Copy-Item docs/tags.md                     "$Out/docs"
 Copy-Item docs/MIGRATION-legacy-scripts.md "$Out/docs"
 Copy-Item docs/cli.md                      "$Out/docs"
+Copy-Item docs/manual.md                   "$Out/docs"
 foreach ($example in @("camera-import", "cleanup", "music-rename", "numbered", "photo-cleanup")) {
     Copy-Item "examples/$example.toml" "$Out/examples"
 }
@@ -58,7 +59,7 @@ $needed = @(
     "OFL.txt", "THIRD-PARTY-FONTS.md", "THIRD-PARTY-LICENSES.html",
     "font-licences/UFL.txt", "font-licences/Hack-Regular.txt",
     "font-licences/emoji-icon-font-mit-license.txt",
-    "docs/tags.md", "docs/MIGRATION-legacy-scripts.md", "docs/cli.md"
+    "docs/tags.md", "docs/MIGRATION-legacy-scripts.md", "docs/cli.md", "docs/manual.md"
 )
 foreach ($file in $needed) {
     if (-not (Test-Path "$Out/$file")) { throw "missing from the archive: $file" }

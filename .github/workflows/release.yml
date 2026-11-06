@@ -189,7 +189,7 @@ jobs:
           cp dist/notices/THIRD-PARTY-LICENSES.html "$stage"
           cp crates/ren-gui/assets/fonts/OFL.txt "$stage/OFL.txt"
           cp crates/ren-gui/assets/fonts/egui/*.txt "$stage/font-licences"
-          cp docs/tags.md docs/MIGRATION-legacy-scripts.md docs/cli.md "$stage/docs"
+          cp docs/tags.md docs/MIGRATION-legacy-scripts.md docs/cli.md docs/manual.md "$stage/docs"
           for example in camera-import cleanup music-rename numbered photo-cleanup; do
             cp "examples/$example.toml" "$stage/examples"
           done
@@ -205,7 +205,7 @@ jobs:
           for needed in OFL.txt THIRD-PARTY-FONTS.md THIRD-PARTY-LICENSES.html \
               font-licences/UFL.txt font-licences/Hack-Regular.txt \
               font-licences/emoji-icon-font-mit-license.txt \
-              docs/tags.md docs/MIGRATION-legacy-scripts.md docs/cli.md; do
+              docs/tags.md docs/MIGRATION-legacy-scripts.md docs/cli.md docs/manual.md; do
             if [ ! -f "$stage/$needed" ]; then
               echo "missing from the archive: $needed" >&2
               exit 1
