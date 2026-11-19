@@ -79,6 +79,10 @@ deny = [
 
 [advisories]
 yanked = "deny"
+# By default cargo-deny reports unsound advisories only for direct dependencies;
+# "all" also checks transitive ones, as cargo-audit does, so both tools see
+# circular-buffer (RUSTSEC-2026-0256, under koto_bytecode) and the entry below.
+unsound = "all"
 # Every entry here is a decision, not a convenience. Say which crate, why the
 # advisory does not reach us, and what would make it reach us.
 ignore = [
@@ -115,6 +119,20 @@ ignore = [
     # second use of the crate. Drop this entry once koto moves to circular-buffer
     # 2.x, where it is fixed (2.0.1).
     { id = "RUSTSEC-2026-0256", reason = "circular-buffer: unsound only for elements whose Drop panics; koto_bytecode stores a plain u8+bool struct" },
+    # `chrono` arrives only under `koto_runtime` (koto 0.16.1, the latest
+    # release; upstream main as well), whose `os` module builds `os.time` and its
+    # DateTime on it. The advisory is "unmaintained, use jiff", not a
+    # vulnerability. Our own date code moved to jiff (D259), and koto has no
+    # feature that leaves chrono out.
+    #
+    # Why it does not reach us: chrono is used only in koto's `core_lib/os.rs`,
+    # and the script engine removes `os` from the prelude (REMOVED_FROM_PRELUDE
+    # in ren-core's script/engine.rs), so no script can call into it.
+    #
+    # What would make it reach us: a *vulnerability* advisory against chrono, or
+    # putting `os` back in the prelude. Drop this entry once a koto release
+    # builds without chrono.
+    { id = "RUSTSEC-2026-0543", reason = "chrono: unmaintained; only under koto_runtime's os module, which the script engine removes from the prelude" },
     # `zvariant`, `zvariant_derive` and `zbus_names` arrive under zbus 5, which
     # eframe's screen-reader support (D218) uses on Linux: egui-winit ->
     # accesskit_winit -> accesskit_unix -> atspi / zbus 5. The advisories are
