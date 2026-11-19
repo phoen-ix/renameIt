@@ -177,7 +177,7 @@ Planner: nodes = renames; edge A→B if A's target equals B's current source (fo
 | `<Crc32>` | `crc32fast` | MIT OR Apache-2.0 |
 | Regex (needs lookaround + backrefs) | `fancy-regex` | MIT |
 | CSV | `csv` | Unlicense OR MIT |
-| Core plumbing | `rayon`, `serde`, `chrono`, ~~`unicase`~~, `walkdir`, `filetime`, `thiserror`, `windows-sys`, `libc` (Unix, D201) | all MIT and/or Apache-2.0/Unlicense |
+| Core plumbing | `rayon`, `serde`, `jiff` (was `chrono`, D259), ~~`unicase`~~, `walkdir`, `filetime`, `thiserror`, `windows-sys`, `libc` (Unix, D201) | all MIT and/or Apache-2.0/Unlicense |
 
 Explicitly **avoided**: TagLib (LGPL), FreeImage (FIPL/GPL), symphonia (MPL-2.0, unnecessary — lofty supplies bitrate/length/channels). ~~WMA/ASF and AVI/MPEG headers have no good permissive crate: ship tiny in-house read-only parsers in `meta/riff.rs` / `meta/asf.rs` (both are simple chunked formats; ~300 lines each) for `<Width>/<Height>/<Fps>/<Codec>` and WMA tag *reads*.~~ — **half superseded (M6): `meta/asf.rs` was not written and will not be. D55 drops WMA/ASF and TTA, reversing P3.** The AVI/RIFF half stands and belongs to M8. ExifTool stays an optional user-installed external process (`Exif-*` passthrough) — process invocation creates no license coupling.
 

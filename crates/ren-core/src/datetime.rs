@@ -1,12 +1,14 @@
 //! The date arithmetic Set Date needs, with no IO and no clock.
 //!
-//! Generic over [`chrono::TimeZone`] on purpose. Production passes `Local`;
-//! tests pass `Utc` for determinism and a hand-built zone for the two daylight
-//! saving cases, which are otherwise unreachable — CI runs under UTC and
-//! Asia/Kolkata (P61), neither of which has daylight saving, and setting `TZ`
-//! from a test is `unsafe` in edition 2024 and racy across threads.
+//! The zone is a parameter on purpose. Production passes
+//! [`TimeZone::system`]; tests pass UTC for determinism and a POSIX rule for
+//! the two daylight saving cases, which are otherwise unreachable — CI runs
+//! under UTC and Asia/Kolkata (P61), neither of which has daylight saving, and
+//! setting `TZ` from a test is `unsafe` in edition 2024 and racy across threads.
 
-use chrono::{Datelike, Days, Months, NaiveDate, NaiveDateTime, TimeZone, Timelike};
+use jiff::Span;
+use jiff::civil::{Date, DateTime};
+use jiff::tz::{AmbiguousOffset, TimeZone};
 
 use crate::effect::TimeStamp;
 
@@ -78,15 +80,26 @@ pub enum DateProblem {
     NoPreviousValue(&'static str),
 }
 
-fn days_in_month(year: i32, month: u32) -> u32 {
-    let (next_year, next_month) = if month == 12 {
-        (year + 1, 1)
-    } else {
-        (year, month + 1)
-    };
-    NaiveDate::from_ymd_opt(next_year, next_month, 1)
-        .and_then(|first| first.pred_opt())
-        .map_or(28, |last| last.day())
+/// A wall-clock reading from its six numbers; `None` when it is not a real
+/// date, or lies outside the years -9999 to 9999 jiff holds.
+pub fn civil(
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+) -> Option<DateTime> {
+    DateTime::new(
+        year.try_into().ok()?,
+        month.try_into().ok()?,
+        day.try_into().ok()?,
+        hour.try_into().ok()?,
+        minute.try_into().ok()?,
+        second.try_into().ok()?,
+        0,
+    )
+    .ok()
 }
 
 /// Merges the components the mask selects from `candidate` into `previous`.
@@ -98,11 +111,7 @@ fn days_in_month(year: i32, month: u32) -> u32 {
 /// Sub-second precision rides with the `Sec.` box: ticked, it comes from the
 /// source; unticked, the previous nanoseconds survive. Nothing in the dialog
 /// addresses sub-seconds, so this is our decision to make.
-pub fn merge(
-    previous: NaiveDateTime,
-    candidate: NaiveDateTime,
-    mask: DateComponents,
-) -> Option<NaiveDateTime> {
+pub fn merge(previous: DateTime, candidate: DateTime, mask: DateComponents) -> Option<DateTime> {
     let year = if mask.year {
         candidate.year()
     } else {
@@ -129,13 +138,13 @@ pub fn merge(
         previous.minute()
     };
     let (second, nano) = if mask.second {
-        (candidate.second(), candidate.nanosecond())
+        (candidate.second(), candidate.subsec_nanosecond())
     } else {
-        (previous.second(), previous.nanosecond())
+        (previous.second(), previous.subsec_nanosecond())
     };
 
-    NaiveDate::from_ymd_opt(year, month, day.min(days_in_month(year, month)))?
-        .and_hms_nano_opt(hour, minute, second, nano)
+    let last = Date::new(year, month, 1).ok()?.days_in_month();
+    DateTime::new(year, month, day.min(last), hour, minute, second, nano).ok()
 }
 
 /// How far to move a date, and in what units.
@@ -178,50 +187,25 @@ impl IntervalUnit {
 
 /// Moves `base` by `amount` units. Negative subtracts.
 ///
-/// Calendar units go through chrono's `Months`/`Days`, which clamp the same way
-/// `merge` does: 31 January plus one month is 28 or 29 February, never 2 or 3
-/// March. `None` when the result leaves the representable range — reported,
-/// never wrapped.
-pub fn shift(base: NaiveDateTime, amount: i64, unit: IntervalUnit) -> Option<NaiveDateTime> {
-    let magnitude = amount.unsigned_abs();
-    let forward = amount >= 0;
-    match unit {
-        IntervalUnit::Years | IntervalUnit::Months => {
-            let per_unit = if unit == IntervalUnit::Years { 12 } else { 1 };
-            let months = Months::new(u32::try_from(magnitude.checked_mul(per_unit)?).ok()?);
-            if forward {
-                base.checked_add_months(months)
-            } else {
-                base.checked_sub_months(months)
-            }
-        }
-        IntervalUnit::Days => {
-            let days = Days::new(magnitude);
-            if forward {
-                base.checked_add_days(days)
-            } else {
-                base.checked_sub_days(days)
-            }
-        }
-        IntervalUnit::Hours | IntervalUnit::Minutes | IntervalUnit::Seconds => {
-            let seconds = magnitude.checked_mul(match unit {
-                IntervalUnit::Hours => 3600,
-                IntervalUnit::Minutes => 60,
-                _ => 1,
-            })?;
-            let delta = chrono::TimeDelta::try_seconds(i64::try_from(seconds).ok()?)?;
-            if forward {
-                base.checked_add_signed(delta)
-            } else {
-                base.checked_sub_signed(delta)
-            }
-        }
-    }
+/// Calendar units clamp the same way `merge` does: 31 January plus one month
+/// is 28 or 29 February, never 2 or 3 March. Time units count on the wall
+/// clock, with no zone. `None` when the result leaves the representable range
+/// — reported, never wrapped.
+pub fn shift(base: DateTime, amount: i64, unit: IntervalUnit) -> Option<DateTime> {
+    let span = match unit {
+        IntervalUnit::Years => Span::new().try_years(amount),
+        IntervalUnit::Months => Span::new().try_months(amount),
+        IntervalUnit::Days => Span::new().try_days(amount),
+        IntervalUnit::Hours => Span::new().try_hours(amount),
+        IntervalUnit::Minutes => Span::new().try_minutes(amount),
+        IntervalUnit::Seconds => Span::new().try_seconds(amount),
+    };
+    base.checked_add(span.ok()?).ok()
 }
 
 /// Rejects anything outside the supported range.
-pub fn check_range(when: NaiveDateTime) -> Result<(), DateProblem> {
-    if (YEAR_MIN..=YEAR_MAX).contains(&when.year()) {
+pub fn check_range(when: DateTime) -> Result<(), DateProblem> {
+    if (YEAR_MIN..=YEAR_MAX).contains(&i32::from(when.year())) {
         Ok(())
     } else {
         Err(DateProblem::OutOfRange(format(when)))
@@ -238,24 +222,27 @@ pub fn check_range(when: NaiveDateTime) -> Result<(), DateProblem> {
 /// * **Skipped** — the hour that does not exist in spring. Reported, never
 ///   nudged forward by an hour. Quietly writing a different time than the one
 ///   asked for is the kind of thing nobody finds until much later.
-pub fn localise<Tz: TimeZone>(tz: &Tz, local: NaiveDateTime) -> Result<TimeStamp, DateProblem> {
-    use chrono::offset::LocalResult;
-    let instant = match tz.from_local_datetime(&local) {
-        LocalResult::Single(dt) => dt,
-        LocalResult::Ambiguous(earlier, _) => earlier,
-        LocalResult::None => return Err(DateProblem::SkippedByDaylightSaving(format(local))),
-    };
+pub fn localise(tz: &TimeZone, local: DateTime) -> Result<TimeStamp, DateProblem> {
+    let ambiguous = tz.to_ambiguous_timestamp(local);
+    if let AmbiguousOffset::Gap { .. } = ambiguous.offset() {
+        return Err(DateProblem::SkippedByDaylightSaving(format(local)));
+    }
+    let instant = ambiguous
+        .earlier()
+        .map_err(|_| DateProblem::OutOfRange(format(local)))?;
+    // `TimeStamp` borrows a second before the epoch; jiff signs both parts.
+    let nanos = instant.as_nanosecond();
     Ok(TimeStamp {
-        secs: instant.timestamp(),
-        nanos: instant.timestamp_subsec_nanos().min(999_999_999),
+        secs: nanos.div_euclid(1_000_000_000) as i64,
+        nanos: nanos.rem_euclid(1_000_000_000) as u32,
     })
 }
 
 /// The wall-clock reading of an instant, so a mask can be applied to it.
-pub fn to_local<Tz: TimeZone>(tz: &Tz, stamp: TimeStamp) -> Option<NaiveDateTime> {
-    tz.timestamp_opt(stamp.secs, stamp.nanos)
-        .single()
-        .map(|dt| dt.naive_local())
+/// `None` beyond the years -9999 to 9999.
+pub fn to_local(tz: &TimeZone, stamp: TimeStamp) -> Option<DateTime> {
+    let instant = jiff::Timestamp::new(stamp.secs, i32::try_from(stamp.nanos).ok()?).ok()?;
+    Some(tz.to_datetime(instant))
 }
 
 /// `1999-05-09 10:18:05` — one format everywhere, deliberately not the system's.
@@ -263,8 +250,8 @@ pub fn to_local<Tz: TimeZone>(tz: &Tz, stamp: TimeStamp) -> Option<NaiveDateTime
 /// D30 already rejects locale-dependence: the same preset has to mean the same
 /// thing on every machine, and a date a user reads in the preview has to be the
 /// one they can type back in.
-pub fn format(when: NaiveDateTime) -> String {
-    when.format("%Y-%m-%d %H:%M:%S").to_string()
+pub fn format(when: DateTime) -> String {
+    when.strftime("%Y-%m-%d %H:%M:%S").to_string()
 }
 
 /// Reads a two-digit year through a DOS-style window: 80–99 are 19xx, 00–79 are
@@ -290,89 +277,18 @@ pub fn widen_year(text: &str) -> Option<i32> {
 }
 
 #[cfg(test)]
-pub(crate) mod testing {
-    //! A time zone that changes offset at a known instant, so the two daylight
-    //! saving branches can be reached without depending on the host's `TZ`.
-
-    use chrono::{FixedOffset, LocalResult, NaiveDate, NaiveDateTime, Offset, TimeZone};
-
-    /// Winter is +01:00, summer +02:00, and the clocks go forward at
-    /// 1999-03-28 02:00 local — so 02:30 that day does not exist, and 02:30 on
-    /// 1999-10-31 happens twice.
-    #[derive(Debug, Clone, Copy)]
-    pub struct DstZone;
-
-    const SPRING: (i32, u32, u32) = (1999, 3, 28);
-    const AUTUMN: (i32, u32, u32) = (1999, 10, 31);
-
-    fn at(y: i32, m: u32, d: u32, h: u32) -> NaiveDateTime {
-        NaiveDate::from_ymd_opt(y, m, d)
-            .unwrap()
-            .and_hms_opt(h, 0, 0)
-            .unwrap()
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct DstOffset(FixedOffset);
-
-    impl Offset for DstOffset {
-        fn fix(&self) -> FixedOffset {
-            self.0
-        }
-    }
-
-    impl TimeZone for DstZone {
-        type Offset = DstOffset;
-
-        fn from_offset(_: &Self::Offset) -> Self {
-            Self
-        }
-
-        fn offset_from_local_date(&self, _: &chrono::NaiveDate) -> LocalResult<Self::Offset> {
-            LocalResult::Single(DstOffset(FixedOffset::east_opt(3600).unwrap()))
-        }
-
-        fn offset_from_local_datetime(&self, local: &NaiveDateTime) -> LocalResult<Self::Offset> {
-            let winter = DstOffset(FixedOffset::east_opt(3600).unwrap());
-            let summer = DstOffset(FixedOffset::east_opt(7200).unwrap());
-            let (sy, sm, sd) = SPRING;
-            let (ay, am, ad) = AUTUMN;
-            // The hour that does not exist.
-            if *local >= at(sy, sm, sd, 2) && *local < at(sy, sm, sd, 3) {
-                return LocalResult::None;
-            }
-            // The hour that happens twice.
-            if *local >= at(ay, am, ad, 2) && *local < at(ay, am, ad, 3) {
-                return LocalResult::Ambiguous(summer, winter);
-            }
-            if *local >= at(sy, sm, sd, 3) && *local < at(ay, am, ad, 2) {
-                LocalResult::Single(summer)
-            } else {
-                LocalResult::Single(winter)
-            }
-        }
-
-        fn offset_from_utc_date(&self, _: &chrono::NaiveDate) -> Self::Offset {
-            DstOffset(FixedOffset::east_opt(3600).unwrap())
-        }
-
-        fn offset_from_utc_datetime(&self, _: &NaiveDateTime) -> Self::Offset {
-            DstOffset(FixedOffset::east_opt(3600).unwrap())
-        }
-    }
-}
-
-#[cfg(test)]
 mod tests {
-    use super::testing::DstZone;
     use super::*;
-    use chrono::Utc;
 
-    fn at(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> NaiveDateTime {
-        NaiveDate::from_ymd_opt(y, mo, d)
-            .unwrap()
-            .and_hms_opt(h, mi, s)
-            .unwrap()
+    fn at(y: i16, mo: i8, d: i8, h: i8, mi: i8, s: i8) -> DateTime {
+        jiff::civil::datetime(y, mo, d, h, mi, s, 0)
+    }
+
+    /// Central European rules: winter +01:00, summer +02:00, and the clocks go
+    /// forward at 1999-03-28 02:00 local — so 02:30 that day does not exist,
+    /// and 02:30 on 1999-10-31 happens twice.
+    fn dst_zone() -> TimeZone {
+        TimeZone::posix("CET-1CEST,M3.5.0,M10.5.0/3").unwrap()
     }
 
     fn only(component: &str) -> DateComponents {
@@ -509,7 +425,7 @@ mod tests {
         );
     }
 
-    /// An interval must not wrap silently at the edge of what chrono can hold.
+    /// An interval must not wrap silently at the edge of what jiff can hold.
     #[test]
     fn an_absurd_interval_is_reported_rather_than_wrapped() {
         assert_eq!(
@@ -536,9 +452,12 @@ mod tests {
 
     #[test]
     fn an_ordinary_local_time_becomes_an_instant() {
-        let stamp = localise(&Utc, at(2000, 1, 1, 0, 0, 0)).unwrap();
+        let stamp = localise(&TimeZone::UTC, at(2000, 1, 1, 0, 0, 0)).unwrap();
         assert_eq!(stamp.secs, 946_684_800);
-        assert_eq!(to_local(&Utc, stamp), Some(at(2000, 1, 1, 0, 0, 0)));
+        assert_eq!(
+            to_local(&TimeZone::UTC, stamp),
+            Some(at(2000, 1, 1, 0, 0, 0))
+        );
     }
 
     /// The hour that happens twice: whichever we pick, it has to be the same
@@ -546,27 +465,27 @@ mod tests {
     #[test]
     fn an_ambiguous_local_time_takes_the_earlier_of_the_two() {
         let ambiguous = at(1999, 10, 31, 2, 30, 0);
-        let first = localise(&DstZone, ambiguous).unwrap();
-        let again = localise(&DstZone, ambiguous).unwrap();
+        let first = localise(&dst_zone(), ambiguous).unwrap();
+        let again = localise(&dst_zone(), ambiguous).unwrap();
         assert_eq!(first, again);
         // Earlier in real time means the summer offset, i.e. the smaller
         // timestamp of the two candidates.
-        let winter = localise(&DstZone, at(1999, 10, 31, 3, 30, 0)).unwrap();
+        let winter = localise(&dst_zone(), at(1999, 10, 31, 3, 30, 0)).unwrap();
         assert!(first.secs < winter.secs);
     }
 
     /// The hour that does not exist: reported, never nudged.
     #[test]
     fn a_time_that_daylight_saving_skips_is_reported_not_nudged() {
-        let err = localise(&DstZone, at(1999, 3, 28, 2, 30, 0)).unwrap_err();
+        let err = localise(&dst_zone(), at(1999, 3, 28, 2, 30, 0)).unwrap_err();
         assert!(
             matches!(err, DateProblem::SkippedByDaylightSaving(_)),
             "{err:?}"
         );
         assert!(err.to_string().contains("1999-03-28 02:30:00"), "{err}");
         // The hour either side is perfectly fine.
-        assert!(localise(&DstZone, at(1999, 3, 28, 1, 30, 0)).is_ok());
-        assert!(localise(&DstZone, at(1999, 3, 28, 3, 30, 0)).is_ok());
+        assert!(localise(&dst_zone(), at(1999, 3, 28, 1, 30, 0)).is_ok());
+        assert!(localise(&dst_zone(), at(1999, 3, 28, 3, 30, 0)).is_ok());
     }
 
     /// D30: one format everywhere, not the system's.

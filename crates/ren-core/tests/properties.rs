@@ -155,11 +155,8 @@ fn op_kind() -> impl Strategy<Value = OpKind> {
         template().prop_map(|pattern| OpKind::FreeFormat(FreeFormat::new(pattern))),
         // The modified date — the one stamp every platform can write, so a
         // generated run is not simply refused as unsupported (P5) on Linux.
-        (0u32..28).prop_map(|day| {
-            let when = chrono::NaiveDate::from_ymd_opt(2001, 9, day + 1)
-                .unwrap()
-                .and_hms_opt(12, 0, 0)
-                .unwrap();
+        (0i8..28).prop_map(|day| {
+            let when = jiff::civil::datetime(2001, 9, day + 1, 12, 0, 0, 0);
             OpKind::SetDate(SetDate {
                 date: WallClock::from_naive(when),
                 targets: DateTargets::default(),

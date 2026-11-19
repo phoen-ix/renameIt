@@ -1414,7 +1414,7 @@ fn a_set_attributes_card_with_every_box_grey_touches_nothing() {
 
 // --- Set Date & Time ---------------------------------------------------------
 
-fn set_date_to(when: chrono::NaiveDateTime, targets: ren_core::ops::DateTargets) -> Pipeline {
+fn set_date_to(when: jiff::civil::DateTime, targets: ren_core::ops::DateTargets) -> Pipeline {
     let op = ren_core::ops::SetDate {
         date: ren_core::ops::WallClock::from_naive(when),
         targets,
@@ -1423,11 +1423,8 @@ fn set_date_to(when: chrono::NaiveDateTime, targets: ren_core::ops::DateTargets)
     Pipeline::new().with(Step::Action(Box::new(op)), StepConfig::default())
 }
 
-fn wall(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> chrono::NaiveDateTime {
-    chrono::NaiveDate::from_ymd_opt(y, mo, d)
-        .unwrap()
-        .and_hms_opt(h, mi, s)
-        .unwrap()
+fn wall(y: i16, mo: i8, d: i8, h: i8, mi: i8, s: i8) -> jiff::civil::DateTime {
+    jiff::civil::datetime(y, mo, d, h, mi, s, 0)
 }
 
 /// M5's acceptance: *"all three date kinds actually change"* and *"journaled undo
@@ -1459,7 +1456,7 @@ fn setting_the_dates_changes_them_on_disk_and_undo_puts_them_back() {
     let report = apply(&plan, platform.as_ref(), &fixture.options()).unwrap();
     assert_eq!(report.acted.len(), 2);
 
-    let expected = ren_core::datetime::localise(&chrono::Local, when).unwrap();
+    let expected = ren_core::datetime::localise(&jiff::tz::TimeZone::system(), when).unwrap();
     for name in ["a.txt", "b.txt"] {
         let now = platform.get_times(&fixture.path(name)).unwrap();
         for (stamp, which, asked) in [
@@ -1535,7 +1532,8 @@ fn changing_only_the_year_leaves_the_rest_of_the_date_alone() {
 
     let now = platform.get_times(&fixture.path("a.txt")).unwrap();
     let expected =
-        ren_core::datetime::localise(&chrono::Local, wall(2008, 5, 9, 10, 18, 5)).unwrap();
+        ren_core::datetime::localise(&jiff::tz::TimeZone::system(), wall(2008, 5, 9, 10, 18, 5))
+            .unwrap();
     assert_eq!(
         ren_core::TimeStamp::from_system(now.modified.unwrap()).secs,
         expected.secs,

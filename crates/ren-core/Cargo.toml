@@ -14,7 +14,6 @@ workspace = true
 [dependencies]
 ren-platform.workspace = true
 
-chrono.workspace = true
 csv.workspace = true
 image.workspace = true
 kamadak-exif.workspace = true
@@ -25,6 +24,7 @@ crc32fast.workspace = true
 fancy-regex.workspace = true
 regex.workspace = true
 infer.workspace = true
+jiff.workspace = true
 rayon.workspace = true
 rust_decimal.workspace = true
 serde = { workspace = true }

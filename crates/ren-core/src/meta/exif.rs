@@ -26,7 +26,7 @@ use super::cache::{MetaCache, Stamp};
 /// image, and its failure mode is indistinguishable from "no Exif".
 const MIN_IMAGE_BYTES: u64 = 16;
 
-use chrono::{NaiveDate, NaiveDateTime};
+use jiff::civil::DateTime;
 
 /// The "smart" order.
 ///
@@ -48,14 +48,14 @@ const IMAGE_EXTENSIONS: [&str; 8] = ["jpg", "jpeg", "jpe", "jfif", "tif", "tiff"
 /// value, a malformed one. To a renamer they are the same fact, and none of
 /// them is an error: a folder of 500 photos with three PNGs in it must still
 /// run, which it could not if this blocked (P4 stops on any row error).
-pub fn date_of(path: &Path) -> Option<NaiveDateTime> {
+pub fn date_of(path: &Path) -> Option<DateTime> {
     date_at(path, Stamp::stat(path)?)
 }
 
 /// The same, for a listed entry — the parallel pass's way in, keyed on the
 /// entry's own stamp so it costs no syscall (see `meta::cache`). A folder row
 /// answers with the first image inside it.
-pub fn date_of_entry(entry: &crate::model::FileEntry) -> Option<NaiveDateTime> {
+pub fn date_of_entry(entry: &crate::model::FileEntry) -> Option<DateTime> {
     let stamp = Stamp::of_entry(entry);
     if entry.is_dir {
         folder_date_at(&entry.path, stamp)
@@ -64,7 +64,7 @@ pub fn date_of_entry(entry: &crate::model::FileEntry) -> Option<NaiveDateTime> {
     }
 }
 
-fn date_at(path: &Path, stamp: Stamp) -> Option<NaiveDateTime> {
+fn date_at(path: &Path, stamp: Stamp) -> Option<DateTime> {
     // A folder has no Exif of its own: the only way it gets a date is the
     // peek, which is `folder_date_at`. Answered before the cache, because the
     // peek caches under the same path — and where the two stamps agree, a
@@ -81,11 +81,11 @@ fn date_at(path: &Path, stamp: Stamp) -> Option<NaiveDateTime> {
 /// First by name among the direct children, so two runs agree. Cached on the
 /// folder's own mtime, so a 10 000-folder listing costs one pass rather than
 /// one per keystroke.
-pub fn folder_date(dir: &Path) -> Option<NaiveDateTime> {
+pub fn folder_date(dir: &Path) -> Option<DateTime> {
     folder_date_at(dir, Stamp::stat(dir)?)
 }
 
-fn folder_date_at(dir: &Path, stamp: Stamp) -> Option<NaiveDateTime> {
+fn folder_date_at(dir: &Path, stamp: Stamp) -> Option<DateTime> {
     dates().get_or_read(dir, stamp, || {
         // "the first image": the first that actually yields a date, so a
         // thumbnail with no Exif does not veto the photo beside it.
@@ -275,7 +275,7 @@ fn trim_decimal(value: f64) -> String {
     }
 }
 
-fn read_uncached(path: &Path) -> Option<NaiveDateTime> {
+fn read_uncached(path: &Path) -> Option<DateTime> {
     let exif = open_exif(path)?;
 
     // Always the primary IFD: the thumbnail carries its own dates, and they are
@@ -347,14 +347,12 @@ fn exif_from<R: std::io::BufRead + std::io::Seek>(reader: &mut R, len: u64) -> O
 /// Zone offsets (`OffsetTimeOriginal`, EXIF 2.31+) are deliberately ignored:
 /// the Exif date is treated as local wall-clock time, consistent with how
 /// `<Date>` already renders and with what a camera actually records.
-fn parse(bytes: &[u8]) -> Option<NaiveDateTime> {
+fn parse(bytes: &[u8]) -> Option<DateTime> {
     let parsed = exif::DateTime::from_ascii(bytes).ok()?;
-    NaiveDate::from_ymd_opt(
+    crate::datetime::civil(
         i32::from(parsed.year),
         u32::from(parsed.month),
         u32::from(parsed.day),
-    )?
-    .and_hms_opt(
         u32::from(parsed.hour),
         u32::from(parsed.minute),
         u32::from(parsed.second),
@@ -367,7 +365,7 @@ fn parse(bytes: &[u8]) -> Option<NaiveDateTime> {
 /// the preview worker. Shared with every other reader through
 /// [`super::cache::MetaCache`]; keying on the mtime means Set Date's own write
 /// invalidates the entry for free.
-static READ: OnceLock<MetaCache<Option<NaiveDateTime>>> = OnceLock::new();
+static READ: OnceLock<MetaCache<Option<DateTime>>> = OnceLock::new();
 
 /// The same cache, for the whole field set rather than the date.
 ///
@@ -378,7 +376,7 @@ static FIELDS: OnceLock<MetaCache<Option<Fields>>> = OnceLock::new();
 /// Every primary-IFD field of one image, shared between hits.
 type Fields = Arc<BTreeMap<String, String>>;
 
-fn dates() -> &'static MetaCache<Option<NaiveDateTime>> {
+fn dates() -> &'static MetaCache<Option<DateTime>> {
     READ.get_or_init(Default::default)
 }
 
@@ -416,11 +414,8 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn at(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> NaiveDateTime {
-        NaiveDate::from_ymd_opt(y, mo, d)
-            .unwrap()
-            .and_hms_opt(h, mi, s)
-            .unwrap()
+    fn at(y: i16, mo: i8, d: i8, h: i8, mi: i8, s: i8) -> DateTime {
+        jiff::civil::datetime(y, mo, d, h, mi, s, 0)
     }
 
     fn write(dir: &TempDir, name: &str, bytes: &[u8]) -> PathBuf {

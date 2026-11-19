@@ -1383,7 +1383,7 @@ impl RenameItApp {
         }
         if let OpKind::SetDate(set_date) = &mut op {
             set_date.date =
-                ren_core::ops::WallClock::from_naive(chrono::Local::now().naive_local());
+                ren_core::ops::WallClock::from_naive(jiff::ZonedDateTime::now().datetime());
         }
         op
     }

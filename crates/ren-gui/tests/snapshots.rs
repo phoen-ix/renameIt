@@ -16,7 +16,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use chrono::TimeZone as _;
 use egui_kittest::kittest::Queryable;
 use egui_kittest::{Harness, SnapshotOptions};
 use ren_core::meta::testing::Mp3;
@@ -112,16 +111,19 @@ impl Demo {
             .map(|e| e.expect("entry").path())
             .collect();
         names.sort();
-        let base = chrono::Local
-            .with_ymd_and_hms(2026, 6, 15, 10, 0, 0)
-            .single()
-            .expect("a plain local time");
+        let base = jiff::civil::datetime(2026, 6, 15, 10, 0, 0, 0)
+            .to_zoned_datetime(jiff::tz::TimeZone::system())
+            .expect("a plain local time")
+            .timestamp();
         for (i, path) in names.iter().enumerate() {
-            let when = base + chrono::TimeDelta::minutes(i as i64 * 7);
+            let when: std::time::SystemTime = (base
+                + jiff::SignedDuration::from_mins(i as i64 * 7))
+            .try_into()
+            .expect("a representable time");
             fs::File::options()
                 .write(true)
                 .open(path)
-                .and_then(|f| f.set_modified(when.into()))
+                .and_then(|f| f.set_modified(when))
                 .expect("set mtime");
         }
         self

@@ -116,7 +116,7 @@ jobs:
 
       # Deliberately **not** UTC. GitHub's runners are, and so is the machine
       # this is usually developed on — which means a test written against
-      # `chrono::Local` passes just as happily against a UTC-hardcoded
+      # the machine's zone passes just as happily against a UTC-hardcoded
       # implementation, because in UTC the two are the same function. That is
       # not hypothetical: the file list rendered its Modified column in UTC
       # while every date the engine puts into a filename is local, and no test

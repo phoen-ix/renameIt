@@ -27,7 +27,6 @@ arboard = { version = "3.7.0", default-features = false }
 ren-core = { path = "crates/ren-core", version = "2.0.1" }
 ren-platform = { path = "crates/ren-platform", version = "2.0.1" }
 
-chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
 clap = { version = "4.6.7", features = ["derive"] }
 crc32fast = "1.5.3"
 criterion = "0.8.2"
@@ -87,6 +86,16 @@ filetime = "0.2.29"
 # Apache-2.0, and already in the graph under `filetime`.
 libc = "0.2.191"
 infer = "0.22.0"
+# Dates, and the machine's zone for them. Unlicense OR MIT; replaces chrono,
+# which RUSTSEC-2026-0543 reports unmaintained. The system zone (`TZ`,
+# /etc/localtime, or Windows' zone mapped onto the tzdb jiff bundles there)
+# and nothing else: tz-fat and perf-inline only buy lookup speed.
+jiff = { version = "1.0.1", default-features = false, features = [
+    "std",
+    "tz-system",
+    "tzdb-bundle-platform",
+    "tzdb-zoneinfo",
+] }
 rayon = "1.12.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

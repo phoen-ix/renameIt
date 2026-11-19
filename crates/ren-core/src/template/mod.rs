@@ -1270,7 +1270,7 @@ mod tests {
         assert!(second.ends_with(" gif"), "{second}");
     }
 
-    /// A filesystem can hand back a modified time far outside what chrono
+    /// A filesystem can hand back a modified time far outside what jiff
     /// represents (tmpfs and btrfs keep 64-bit seconds). The date tags answer
     /// *missing* for it rather than panicking the whole pass.
     #[test]

@@ -39,7 +39,7 @@ pub fn ui(ui: &mut egui::Ui, op: &mut SetDate, platform: &dyn Platform) -> bool 
         //
         // Text fields with a fixed ISO format rather than a calendar popup:
         // `egui_extras`' date picker is behind a feature that pulls in a second
-        // date library beside chrono, and D30 already rejects locale-dependent
+        // date library beside jiff, and D30 already rejects locale-dependent
         // formats — the same preset has to mean the same thing on every machine.
         // The crate itself is no longer a dependency: this comment was the only
         // thing in the tree that mentioned it.
@@ -108,7 +108,7 @@ pub fn ui(ui: &mut egui::Ui, op: &mut SetDate, platform: &dyn Platform) -> bool 
                             .on_hover_text("Fill in this moment")
                             .clicked()
                         {
-                            op.date = WallClock::from_naive(chrono::Local::now().naive_local());
+                            op.date = WallClock::from_naive(jiff::ZonedDateTime::now().datetime());
                             forget_typed(ui, "set_date_date");
                             forget_typed(ui, "set_date_time");
                             changed = true;

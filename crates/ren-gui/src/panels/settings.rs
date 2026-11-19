@@ -467,11 +467,12 @@ fn updates_ui(
         }
         let checked = updates
             .last_check
-            .and_then(|stamp| chrono::DateTime::from_timestamp(stamp, 0))
+            .and_then(|stamp| jiff::Timestamp::from_second(stamp).ok())
             .map_or("Never checked".to_owned(), |when| {
                 format!(
                     "Last checked {}",
-                    when.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M")
+                    when.to_zoned_datetime(jiff::tz::TimeZone::system())
+                        .strftime("%Y-%m-%d %H:%M")
                 )
             });
         note(ui, checked);

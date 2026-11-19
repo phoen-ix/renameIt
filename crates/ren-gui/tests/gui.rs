@@ -432,7 +432,7 @@ fn a_new_set_date_card_starts_at_today() {
         .add_operation(OpKind::SetDate(Default::default()));
     settle(&mut harness);
 
-    let today = chrono::Local::now().date_naive();
+    let today = jiff::ZonedDateTime::now().date();
     let card = harness
         .state()
         .stack()
@@ -443,9 +443,9 @@ fn a_new_set_date_card_starts_at_today() {
             _ => None,
         })
         .expect("the card is on the stack");
-    assert_eq!(card.year, chrono::Datelike::year(&today));
-    assert_eq!(card.month, chrono::Datelike::month(&today));
-    assert_eq!(card.day, chrono::Datelike::day(&today));
+    assert_eq!(card.year, i32::from(today.year()));
+    assert_eq!(card.month, today.month() as u32);
+    assert_eq!(card.day, today.day() as u32);
 }
 
 #[test]

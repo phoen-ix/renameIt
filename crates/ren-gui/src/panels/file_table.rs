@@ -694,15 +694,15 @@ fn human_size(bytes: u64) -> String {
 ///
 /// Local because everything else is. This column used to do its own
 /// days-since-epoch arithmetic and render UTC, while every date the engine puts
-/// into a filename goes through `chrono::Local` (P48). In any zone but UTC the
+/// into a filename goes through the machine's zone (P48). In any zone but UTC the
 /// same file therefore read one time in the list and renamed to another — and
 /// the gap moved by an hour across a daylight-saving boundary.
 ///
-/// A stamp outside the calendar chrono can represent — a filesystem that
-/// stores one hundred thousand years from now will — shows as `—` rather
-/// than a date.
+/// A stamp outside the calendar jiff can represent (years -9999 to 9999) — a
+/// filesystem that stores one hundred thousand years from now will — shows as
+/// `—` rather than a date.
 pub(crate) fn human_time(time: std::time::SystemTime) -> String {
-    human_time_in(&chrono::Local, time).unwrap_or_else(|| "—".to_owned())
+    human_time_in(&jiff::tz::TimeZone::system(), time).unwrap_or_else(|| "—".to_owned())
 }
 
 /// The same, in a zone you name.
@@ -714,13 +714,13 @@ pub(crate) fn human_time(time: std::time::SystemTime) -> String {
 /// makes the offset observable everywhere.
 ///
 /// Through [`ren_core::datetime::to_local`], the engine's own checked
-/// conversion. `SystemTime` into `chrono::DateTime` is an `unwrap` inside
-/// chrono, and this runs while the table is painted, outside any worker's
+/// conversion. An unchecked `SystemTime` conversion panics past the calendar,
+/// and this runs while the table is painted, outside any worker's
 /// `catch_unwind` — one file with a far-future mtime would have taken the
 /// whole window down the moment its row was shown.
-fn human_time_in<Tz: chrono::TimeZone>(tz: &Tz, time: std::time::SystemTime) -> Option<String> {
+fn human_time_in(tz: &jiff::tz::TimeZone, time: std::time::SystemTime) -> Option<String> {
     ren_core::datetime::to_local(tz, ren_core::TimeStamp::from_system(time))
-        .map(|local| local.format("%Y-%m-%d %H:%M").to_string())
+        .map(|local| local.strftime("%Y-%m-%d %H:%M").to_string())
 }
 
 /// Keeps the **end** of a long path, which is the half that identifies it.
@@ -753,12 +753,12 @@ mod tests {
     /// the bug. A fixed +05:30 cannot be confused with UTC anywhere.
     #[test]
     fn the_modified_column_renders_in_the_zone_it_is_given() {
-        use chrono::TimeZone;
-        let india = chrono::FixedOffset::east_opt(5 * 3600 + 1800).unwrap();
+        use jiff::tz::{Offset, TimeZone};
+        let india = TimeZone::fixed(Offset::from_seconds(5 * 3600 + 1800).unwrap());
         let t = std::time::UNIX_EPOCH;
 
         let shown = |tz: &dyn Fn(std::time::SystemTime) -> Option<String>, t| tz(t).unwrap();
-        let utc = |t| human_time_in(&chrono::Utc, t);
+        let utc = |t| human_time_in(&TimeZone::UTC, t);
         let in_india = |t| human_time_in(&india, t);
         assert_eq!(shown(&utc, t), "1970-01-01 00:00");
         assert_eq!(shown(&in_india, t), "1970-01-01 05:30");
@@ -769,22 +769,20 @@ mod tests {
         assert_eq!(shown(&in_india, late), "1970-01-02 01:30");
 
         // `human_time` is the same function bound to the machine's zone.
-        let expected = chrono::Local
-            .timestamp_opt(0, 0)
-            .single()
-            .expect("a real instant")
-            .format("%Y-%m-%d %H:%M")
+        let expected = jiff::Timestamp::UNIX_EPOCH
+            .to_zoned_datetime(TimeZone::system())
+            .strftime("%Y-%m-%d %H:%M")
             .to_string();
         assert_eq!(human_time(t), expected);
     }
 
-    /// A stamp chrono cannot put on a calendar is a dash, not a panic on the UI
+    /// A stamp jiff cannot put on a calendar is a dash, not a panic on the UI
     /// thread. A filesystem that stores 64-bit seconds — tmpfs, btrfs, a share —
     /// will keep an mtime of `@100000000000000` for anyone who sets one.
     #[test]
     fn a_date_past_the_calendar_shows_a_dash_rather_than_taking_the_window_down() {
         // Unrepresentable as a `SystemTime` on some platforms — Windows' ends
-        // long before chrono's calendar does, so the case cannot arise there
+        // in the year 60056 — so the case cannot arise there
         // and `+` would panic building it. Same guard as the engine's test
         // (`a_timestamp_beyond_the_calendar_is_missing_rather_than_a_panic`).
         let Some(far) =
@@ -792,12 +790,12 @@ mod tests {
         else {
             return;
         };
-        assert_eq!(human_time_in(&chrono::Utc, far), None);
+        assert_eq!(human_time_in(&jiff::tz::TimeZone::UTC, far), None);
         assert_eq!(human_time(far), "—");
     }
 
     /// The engine and the table must agree about what time it is: `<Date>` and
-    /// `<Time>` go through `chrono::Local` (P48), and so does the column now.
+    /// `<Time>` go through the machine's zone (P48), and so does the column now.
     ///
     /// This one only *discriminates* off UTC — on a UTC agent the old buggy
     /// column agreed too. It is the invariant that matters, so it stays; the

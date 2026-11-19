@@ -4,10 +4,11 @@
 //! six interval units for the two that shift a date.
 //!
 //! The largest operation in the app. Almost all of the actual arithmetic lives
-//! in [`crate::datetime`], which is pure and generic over the time zone; what
+//! in [`crate::datetime`], which is pure and takes the time zone in; what
 //! is here is *which* date to use and *which* stamps to write it to.
 
-use chrono::{Local, NaiveDate, NaiveDateTime};
+use jiff::civil::DateTime;
+use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
 
 use super::{EvalCx, OpError, SideEffectAction};
@@ -143,20 +144,23 @@ impl Default for WallClock {
 }
 
 impl WallClock {
-    pub fn from_naive(when: NaiveDateTime) -> Self {
-        use chrono::{Datelike, Timelike};
+    pub fn from_naive(when: DateTime) -> Self {
+        // Every field is in range, so the casts cannot wrap.
         Self {
-            year: when.year(),
-            month: when.month(),
-            day: when.day(),
-            hour: when.hour(),
-            minute: when.minute(),
-            second: when.second(),
+            year: when.year().into(),
+            month: when.month() as u32,
+            day: when.day() as u32,
+            hour: when.hour() as u32,
+            minute: when.minute() as u32,
+            second: when.second() as u32,
         }
     }
 
-    pub fn to_naive(self) -> Option<NaiveDateTime> {
-        NaiveDate::from_ymd_opt(self.year, self.month, self.day)?.and_hms_opt(
+    pub fn to_naive(self) -> Option<DateTime> {
+        datetime::civil(
+            self.year,
+            self.month,
+            self.day,
             self.hour,
             self.minute,
             self.second,
@@ -201,7 +205,7 @@ impl Default for SetDate {
 /// What a source resolved to for one file.
 enum Resolved {
     /// One value, written to every selected target.
-    Fixed(NaiveDateTime),
+    Fixed(DateTime),
     /// Computed from **each selected target's own** current value.
     Shift { amount: i64, unit: IntervalUnit },
     /// This file cannot supply one. Not an error — a row left alone.
@@ -244,13 +248,13 @@ impl SetDate {
         let entry = cx.entry;
         let local = |t: Option<std::time::SystemTime>| {
             t.map(TimeStamp::from_system)
-                .and_then(|s| datetime::to_local(&Local, s))
+                .and_then(|s| datetime::to_local(&TimeZone::system(), s))
         };
         Ok(match self.source {
             DateSource::EnterNewDate => match self.date.to_naive() {
                 Some(when) => Resolved::Fixed(when),
                 None => {
-                    return Err(DateProblem::NotADate(format!(
+                    let text = format!(
                         "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
                         self.date.year,
                         self.date.month,
@@ -258,7 +262,13 @@ impl SetDate {
                         self.date.hour,
                         self.date.minute,
                         self.date.second
-                    )));
+                    );
+                    // A year past jiff's calendar is still a date out of range.
+                    return Err(if (-9999..=9999).contains(&self.date.year) {
+                        DateProblem::NotADate(text)
+                    } else {
+                        DateProblem::OutOfRange(text)
+                    });
                 }
             },
             DateSource::ImageExif => {
@@ -318,7 +328,7 @@ impl SetDate {
     ///
     /// It also means an earlier Replace card can tidy a name before the date is
     /// read out of it — which is the pipeline paying for itself.
-    fn date_in_filename(&self, cx: &EvalCx<'_>) -> Option<NaiveDateTime> {
+    fn date_in_filename(&self, cx: &EvalCx<'_>) -> Option<DateTime> {
         let (stem, _) = crate::model::split_name(cx.current, cx.entry.is_dir);
         let parts = cx.run.parts.split(stem);
         // Year is required; everything else has a sensible floor, so a
@@ -330,7 +340,10 @@ impl SetDate {
                 _ => Some(fallback),
             }
         };
-        NaiveDate::from_ymd_opt(year, number(5, 1)?, number(6, 1)?)?.and_hms_opt(
+        datetime::civil(
+            year,
+            number(5, 1)?,
+            number(6, 1)?,
             number(7, 0)?,
             number(8, 0)?,
             number(9, 0)?,
@@ -347,7 +360,7 @@ impl SetDate {
         let previous = which
             .of(cx.entry)
             .map(TimeStamp::from_system)
-            .and_then(|s| datetime::to_local(&Local, s));
+            .and_then(|s| datetime::to_local(&TimeZone::system(), s));
 
         let candidate = match resolved {
             Resolved::Unavailable => return Ok(None),
@@ -383,7 +396,7 @@ impl SetDate {
         // year of 2150 with `Year` unticked never reaches disk, and rejecting
         // it would be wrong.
         datetime::check_range(merged)?;
-        datetime::localise(&Local, merged).map(Some)
+        datetime::localise(&TimeZone::system(), merged).map(Some)
     }
 }
 
@@ -458,7 +471,7 @@ impl SideEffectAction for SetDate {
         let when = named
             .iter()
             .find_map(|(_, stamp)| *stamp)
-            .and_then(|s| datetime::to_local(&Local, s))
+            .and_then(|s| datetime::to_local(&TimeZone::system(), s))
             .map(datetime::format)
             .unwrap_or_default();
         format!("{} → {when}", set.join(", "))
@@ -492,17 +505,14 @@ mod tests {
     use crate::run::{Answers, RunContext, RunSettings};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    fn naive(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> NaiveDateTime {
-        NaiveDate::from_ymd_opt(y, mo, d)
-            .unwrap()
-            .and_hms_opt(h, mi, s)
-            .unwrap()
+    fn naive(y: i16, mo: i8, d: i8, h: i8, mi: i8, s: i8) -> DateTime {
+        jiff::civil::datetime(y, mo, d, h, mi, s, 0)
     }
 
     /// A `SystemTime` whose *local* reading is the wall clock given, so the
     /// tests read as wall-clock dates regardless of the runner's zone.
-    fn system_at(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> SystemTime {
-        let stamp = datetime::localise(&Local, naive(y, mo, d, h, mi, s)).unwrap();
+    fn system_at(y: i16, mo: i8, d: i8, h: i8, mi: i8, s: i8) -> SystemTime {
+        let stamp = datetime::localise(&TimeZone::system(), naive(y, mo, d, h, mi, s)).unwrap();
         UNIX_EPOCH + Duration::new(stamp.secs as u64, stamp.nanos)
     }
 
@@ -525,8 +535,8 @@ mod tests {
         }
     }
 
-    fn local_of(stamp: Option<TimeStamp>) -> Option<NaiveDateTime> {
-        datetime::to_local(&Local, stamp?)
+    fn local_of(stamp: Option<TimeStamp>) -> Option<DateTime> {
+        datetime::to_local(&TimeZone::system(), stamp?)
     }
 
     /// The dropdown, in order — a preset stores the variant, and the card

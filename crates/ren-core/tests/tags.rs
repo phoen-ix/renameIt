@@ -300,16 +300,14 @@ fn an_exif_time_in_a_skipped_hour_still_renders() {
 
     // In the child. The zone has to really skip the hour, or this proves
     // nothing.
-    use chrono::TimeZone;
-    let skipped = chrono::NaiveDate::from_ymd_opt(2021, 3, 28)
-        .unwrap()
-        .and_hms_opt(2, 30, 0)
-        .unwrap();
+    let skipped = jiff::civil::datetime(2021, 3, 28, 2, 30, 0, 0);
     assert!(
-        chrono::Local
-            .from_local_datetime(&skipped)
-            .earliest()
-            .is_none(),
+        matches!(
+            jiff::tz::TimeZone::system()
+                .to_ambiguous_timestamp(skipped)
+                .offset(),
+            jiff::tz::AmbiguousOffset::Gap { .. }
+        ),
         "TZ=Europe/Berlin was not honoured"
     );
 

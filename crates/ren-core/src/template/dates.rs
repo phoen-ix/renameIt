@@ -1,7 +1,7 @@
 //! The date format mini-language.
 //!
 //! The format codes are the Visual Basic `Format` date codes, a small language
-//! with genuine oddities that a naive chrono mapping would get wrong:
+//! with genuine oddities that a naive strftime mapping would get wrong:
 //!
 //! * **`m` after `h` or `Hh` means *minute*, not month.** That is the
 //!   difference between `10:05` and `10:18`. Separators and literal text in
@@ -35,7 +35,8 @@
 //! answer for a time that zone skips, so a photograph taken in the hour a
 //! daylight-saving change removes lost its date.
 
-use chrono::{Datelike, Local, NaiveDateTime, Timelike};
+use jiff::civil::DateTime;
+use jiff::tz::TimeZone;
 
 /// `yyyy-mm-dd Hh:Mm:Ss` — ISO 8601, and the most useful default because a
 /// listing sorts correctly by it.
@@ -188,19 +189,19 @@ impl DateFormat {
 
     /// Renders an instant as the machine's wall clock shows it.
     ///
-    /// `None` for an instant outside the calendar chrono can hold — some
-    /// hundreds of thousands of years out, which a filesystem storing 64-bit
-    /// seconds (tmpfs, btrfs, a network share) can still report. The unchecked
+    /// `None` for an instant outside the calendar jiff can hold — the years
+    /// -9999 to 9999 — which a filesystem storing 64-bit seconds (tmpfs,
+    /// btrfs, a network share) can still report. The unchecked
     /// `SystemTime` conversion panics there, and one such file took the whole
     /// preview down; a date tag answers *missing* instead.
     pub fn render(&self, time: std::time::SystemTime) -> Option<String> {
         let stamp = crate::effect::TimeStamp::from_system(time);
-        let local = crate::datetime::to_local(&Local, stamp)?;
+        let local = crate::datetime::to_local(&TimeZone::system(), stamp)?;
         Some(self.render_naive(local))
     }
 
     /// Renders a wall-clock reading as it stands, with no zone involved.
-    pub fn render_naive(&self, at: NaiveDateTime) -> String {
+    pub fn render_naive(&self, at: DateTime) -> String {
         // An hour token is 12-hour when the format also carries an AM/PM
         // designator, which is the only thing that makes "Medium Time" read as
         // a clock rather than a duration.
@@ -317,7 +318,7 @@ fn next_token(chars: &[char], at: usize, after_hour: bool) -> (Token, usize) {
     }
 }
 
-fn render_token(token: &Token, at: &NaiveDateTime, twelve_hour: bool, out: &mut String) {
+fn render_token(token: &Token, at: &DateTime, twelve_hour: bool, out: &mut String) {
     use std::fmt::Write;
     let hour = if twelve_hour {
         let h = at.hour() % 12;
@@ -347,7 +348,7 @@ fn render_token(token: &Token, at: &NaiveDateTime, twelve_hour: bool, out: &mut 
                 "{} {} {} {:04}",
                 WEEKDAYS[weekday_index(at)],
                 at.day(),
-                MONTHS[at.month0() as usize],
+                MONTHS[month0(at)],
                 at.year()
             );
         }
@@ -360,7 +361,7 @@ fn render_token(token: &Token, at: &NaiveDateTime, twelve_hour: bool, out: &mut 
         // belongs to the ISO week-year instead, which no code renders, so
         // `yyyy-ww` filed 1 January 2021 as `2021-53`.
         Token::Ww => {
-            let ordinal0 = i64::from(at.ordinal0());
+            let ordinal0 = i64::from(at.day_of_year() - 1);
             let jan1 = (weekday_index(at) as i64 - ordinal0).rem_euclid(7);
             let _ = write!(out, "{}", (ordinal0 + jan1) / 7 + 1);
         }
@@ -370,14 +371,14 @@ fn render_token(token: &Token, at: &NaiveDateTime, twelve_hour: bool, out: &mut 
         Token::Mm => {
             let _ = write!(out, "{:02}", at.month());
         }
-        Token::Mmm => out.push_str(&MONTHS[at.month0() as usize][..3]),
-        Token::Mmmm => out.push_str(MONTHS[at.month0() as usize]),
+        Token::Mmm => out.push_str(&MONTHS[month0(at)][..3]),
+        Token::Mmmm => out.push_str(MONTHS[month0(at)]),
         Token::Q => {
             let _ = write!(out, "{}", (at.month() - 1) / 3 + 1);
         }
         // The day of the year, 1–366.
         Token::Y => {
-            let _ = write!(out, "{}", at.ordinal());
+            let _ = write!(out, "{}", at.day_of_year());
         }
         Token::Yy => {
             let _ = write!(out, "{:02}", at.year().rem_euclid(100));
@@ -447,19 +448,31 @@ fn render_token(token: &Token, at: &NaiveDateTime, twelve_hour: bool, out: &mut 
 }
 
 /// Sunday = 0, matching the `w` numbering.
-fn weekday_index(at: &NaiveDateTime) -> usize {
-    at.weekday().num_days_from_sunday() as usize
+fn weekday_index(at: &DateTime) -> usize {
+    at.weekday().to_sunday_zero_offset() as usize
+}
+
+/// January = 0, indexing `MONTHS`.
+fn month0(at: &DateTime) -> usize {
+    (at.month() - 1) as usize
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
+
+    fn local(y: i16, m: i8, d: i8, h: i8, mi: i8, s: i8) -> std::time::SystemTime {
+        jiff::civil::datetime(y, m, d, h, mi, s, 0)
+            .to_zoned_datetime(TimeZone::system())
+            .unwrap()
+            .timestamp()
+            .try_into()
+            .unwrap()
+    }
 
     /// 1977-05-09 10:18:05 local time: every field distinct, and a Monday.
     fn sample() -> std::time::SystemTime {
-        let local = Local.with_ymd_and_hms(1977, 5, 9, 10, 18, 5).unwrap();
-        local.into()
+        local(1977, 5, 9, 10, 18, 5)
     }
 
     fn render(spec: &str) -> String {
@@ -536,8 +549,7 @@ mod tests {
         assert_eq!(render("A/P"), "A");
         assert_eq!(render("a/p"), "a");
 
-        let afternoon: std::time::SystemTime =
-            Local.with_ymd_and_hms(1977, 5, 9, 15, 0, 0).unwrap().into();
+        let afternoon = local(1977, 5, 9, 15, 0, 0);
         assert_eq!(DateFormat::parse("AM/PM").render(afternoon).unwrap(), "PM");
         assert_eq!(DateFormat::parse("a/p").render(afternoon).unwrap(), "p");
     }
@@ -593,9 +605,10 @@ mod tests {
         assert_eq!(render(""), "");
     }
 
-    fn render_on(y: i32, m: u32, d: u32, spec: &str) -> String {
-        let noon: std::time::SystemTime = Local.with_ymd_and_hms(y, m, d, 12, 0, 0).unwrap().into();
-        DateFormat::parse(spec).render(noon).unwrap()
+    fn render_on(y: i16, m: i8, d: i8, spec: &str) -> String {
+        DateFormat::parse(spec)
+            .render(local(y, m, d, 12, 0, 0))
+            .unwrap()
     }
 
     /// `ww` is the week of the *calendar* year that `yyyy` prints: weeks start
