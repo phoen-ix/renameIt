@@ -175,10 +175,7 @@ impl IncludeFilter {
                 return Ok(true);
             }
         }
-        if self.whole_path && matcher.is_match(path)? {
-            return Ok(true);
-        }
-        Ok(false)
+        Ok(self.whole_path && matcher.is_match(path)?)
     }
 }
 
