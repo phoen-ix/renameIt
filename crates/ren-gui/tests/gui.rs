@@ -6,6 +6,8 @@
 //! tree a screen reader sees — which means a test that finds a button by its
 //! label is also checking the button is labelled.
 
+use std::path::Path;
+
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use ren_core::ops::{
@@ -3752,20 +3754,31 @@ fn the_name_column_cannot_be_turned_off() {
 
 /// The system-folder guard blocks the run and says why (D127).
 ///
-/// Driven through the setting rather than by pointing the app at `/usr`: the
-/// guard is what is under test, not whether this machine has one.
+/// Driven through the platform rather than by pointing the app at `/usr` or
+/// `C:\Windows`: the guard is what is under test, not whether this machine has
+/// one, nor how fast it lists it. The guard answers when a listing lands, and
+/// a busy Windows runner once took longer to list `C:\Windows` than `settle`
+/// waits (CI run 46149913521). The real roots are `ren_platform::guarded`'s
+/// own tests.
 #[test]
 fn a_guarded_folder_blocks_the_run_with_a_reason() {
     let fixture = Fixture::new(&["one.txt"]);
-    let mut harness = harness(fixture.app());
+    let system = TempDir::new().expect("tempdir");
+    let app = RenameItApp::headless_with_platform(
+        fixture.dir.path().to_path_buf(),
+        fixture.journal.path().to_path_buf(),
+        std::sync::Arc::new(Guarding {
+            inner: ren_platform::host(),
+            folder: system.path().to_path_buf(),
+        }),
+    );
+    let mut harness = harness(app);
     *harness.state_mut().operation_mut() = OpKind::Replace(Replace::new("o", "0"));
     settle(&mut harness);
     assert_eq!(harness.state().blocked_reason(), None);
 
     // Point it at somewhere the OS owns.
-    harness
-        .state_mut()
-        .set_dir(std::path::PathBuf::from(GUARDED_DIR));
+    harness.state_mut().set_dir(system.path().to_path_buf());
     settle(&mut harness);
     let reason = harness.state().blocked_reason().expect("the guard blocks");
     assert!(reason.contains("operating system"), "{reason}");
@@ -3798,10 +3811,58 @@ fn a_guarded_folder_blocks_the_run_with_a_reason() {
     );
 }
 
-#[cfg(unix)]
-const GUARDED_DIR: &str = "/usr";
-#[cfg(windows)]
-const GUARDED_DIR: &str = r"C:\Windows";
+/// The host, with one folder it calls the operating system's.
+#[derive(Debug)]
+struct Guarding {
+    inner: std::sync::Arc<dyn ren_platform::Platform>,
+    folder: std::path::PathBuf,
+}
+
+impl ren_platform::Platform for Guarding {
+    fn name(&self) -> &'static str {
+        self.inner.name()
+    }
+    fn capabilities(&self) -> &'static [ren_platform::Capability] {
+        self.inner.capabilities()
+    }
+    fn rename(&self, from: &Path, to: &Path) -> ren_platform::Result<()> {
+        self.inner.rename(from, to)
+    }
+    fn replace_file(&self, temp: &Path, target: &Path) -> ren_platform::Result<()> {
+        self.inner.replace_file(temp, target)
+    }
+    fn get_attributes(&self, path: &Path) -> ren_platform::Result<ren_platform::FileAttributes> {
+        self.inner.get_attributes(path)
+    }
+    fn set_attributes(
+        &self,
+        path: &Path,
+        change: ren_platform::AttributeChange,
+    ) -> ren_platform::Result<()> {
+        self.inner.set_attributes(path, change)
+    }
+    fn get_times(&self, path: &Path) -> ren_platform::Result<ren_platform::FileTimes> {
+        self.inner.get_times(path)
+    }
+    fn set_times(&self, path: &Path, change: ren_platform::TimeChange) -> ren_platform::Result<()> {
+        self.inner.set_times(path, change)
+    }
+    fn naming_rules(&self, path: &Path) -> &'static ren_platform::NamingRules {
+        self.inner.naming_rules(path)
+    }
+    fn is_system_folder(&self, path: &Path) -> bool {
+        path == self.folder || self.inner.is_system_folder(path)
+    }
+    fn case_sensitivity(&self, dir: &Path) -> ren_platform::CaseSensitivity {
+        self.inner.case_sensitivity(dir)
+    }
+    fn reveal_in_file_manager(&self, path: &Path) -> ren_platform::Result<()> {
+        self.inner.reveal_in_file_manager(path)
+    }
+    fn notify_shell_changed(&self, path: &Path) {
+        self.inner.notify_shell_changed(path);
+    }
+}
 
 /// Settings ▸ Casing Exceptions edits the list a *new* card copies, and never
 /// a card that already exists (D35).
