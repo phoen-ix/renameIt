@@ -843,6 +843,7 @@ impl RenameItApp {
     fn drain_listing_request(&mut self) {
         if std::mem::take(&mut self.session.relist_wanted) {
             self.session.make_paths_absolute();
+            self.session.guard_before_walk();
             self.listing.request(self.session.source());
         }
     }

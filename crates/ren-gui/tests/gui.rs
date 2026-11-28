@@ -3756,9 +3756,9 @@ fn the_name_column_cannot_be_turned_off() {
 ///
 /// Driven through the platform rather than by pointing the app at `/usr` or
 /// `C:\Windows`: the guard is what is under test, not whether this machine has
-/// one, nor how fast it lists it. The guard answers when a listing lands, and
-/// a busy Windows runner once took longer to list `C:\Windows` than `settle`
-/// waits (CI run 46149913521). The real roots are `ren_platform::guarded`'s
+/// one, nor how fast it lists it. The guard answered only when a listing
+/// landed then, and a busy Windows runner once took longer to list
+/// `C:\Windows` than `settle` waits (CI run 46149913521). The real roots are `ren_platform::guarded`'s
 /// own tests.
 #[test]
 fn a_guarded_folder_blocks_the_run_with_a_reason() {
@@ -3809,6 +3809,46 @@ fn a_guarded_folder_blocks_the_run_with_a_reason() {
             .contains("operating system"),
         "{reason:?}"
     );
+}
+
+/// The browsed folder is refused as its walk starts, not when it ends (D200):
+/// a slow `C:\Windows` used to say nothing until it had been listed.
+///
+/// Read straight after construction, which sends the first listing request
+/// and polls for none — the one public point where a request is out and its
+/// answer cannot have been installed. A frame drains a request and polls in
+/// the same pass, so after `set_dir` it would race the worker.
+#[test]
+fn a_guarded_folder_is_refused_before_its_listing_lands() {
+    let fixture = Fixture::new(&["one.txt"]);
+    let system = TempDir::new().expect("tempdir");
+    // A row, so a listing that had landed would show.
+    std::fs::write(system.path().join("win.ini"), b"x").expect("write");
+    let mut app = RenameItApp::headless_with_platform(
+        system.path().to_path_buf(),
+        fixture.journal.path().to_path_buf(),
+        std::sync::Arc::new(Guarding {
+            inner: ren_platform::host(),
+            folder: system.path().to_path_buf(),
+        }),
+    );
+    *app.operation_mut() = OpKind::Replace(Replace::new("o", "0"));
+    assert!(app.session().is_empty(), "the listing has not landed");
+    let reason = app.blocked_reason().expect("the guard blocks");
+    assert!(reason.contains("operating system"), "{reason}");
+    assert!(reason.contains("undo cannot fix"), "{reason}");
+    assert!(reason.contains("Settings ▸ Which files show"), "{reason}");
+
+    // Leaving it for an ordinary folder leaves no refusal behind.
+    app.settle();
+    assert!(!app.session().is_empty(), "the guarded listing landed");
+    assert!(
+        app.blocked_reason()
+            .is_some_and(|r| r.contains("operating system"))
+    );
+    app.set_dir(fixture.dir.path().to_path_buf());
+    app.settle();
+    assert_eq!(app.blocked_reason(), None);
 }
 
 /// The host, with one folder it calls the operating system's.

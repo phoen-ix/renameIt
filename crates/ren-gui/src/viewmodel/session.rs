@@ -459,7 +459,8 @@ pub struct Session {
     /// is real and usable, and hiding it would be the bug this replaced (P63).
     pub problems: Vec<ren_core::listing::ListProblem>,
     /// A folder the run would touch that the OS needs left alone, found once
-    /// per listing rather than once per frame (D127).
+    /// per listing rather than once per frame (D127): the browsed folder as
+    /// its walk starts, and everything again when the listing lands (D200).
     pub guarded: Option<PathBuf>,
     /// Set by anything that changes what the listing should hold — a drop, a
     /// cleared free-select set, a folder change — and drained by the app,
@@ -632,7 +633,21 @@ impl Session {
             }
         }
         self.sort_entries();
-        self.guarded = self.find_guarded();
+        self.guarded = self.find_guarded(self.entries.iter().map(|entry| entry.path.as_path()));
+    }
+
+    /// The browsed folder alone, checked as its walk starts (D200), so a slow
+    /// `C:\Windows` is refused while it is still being listed.
+    ///
+    /// Leaving a guarded folder clears the refusal here too, before the new
+    /// rows land. The rows still on screen are the old folder's, but a run is
+    /// refused while a listing is out anyway, and a refusal naming the folder
+    /// just left would be wrong for the whole walk. Free Select has no folder
+    /// and keeps its answer until its listing lands.
+    pub fn guard_before_walk(&mut self) {
+        if self.settings.mode == SourceMode::Browser {
+            self.guarded = self.find_guarded([]);
+        }
     }
 
     /// The first folder this listing would touch that the OS needs left alone.
@@ -642,17 +657,13 @@ impl Session {
     /// (an empty `C:\Windows` is refused before the user adds an operation and
     /// wonders why nothing happened), each distinct parent, and an entry that
     /// is itself a guarded root.
-    fn find_guarded(&self) -> Option<PathBuf> {
+    fn find_guarded<'a>(&self, entries: impl IntoIterator<Item = &'a Path>) -> Option<PathBuf> {
         if !self.settings.guard_system_folders {
             return None;
         }
         let dir =
             (self.settings.mode == SourceMode::Browser).then_some(self.settings.dir.as_path());
-        ren_platform::guarded::first_guarded(
-            self.platform.as_ref(),
-            dir,
-            self.entries.iter().map(|entry| entry.path.as_path()),
-        )
+        ren_platform::guarded::first_guarded(self.platform.as_ref(), dir, entries)
     }
 
     /// The folder `path` would be renamed in, if the operating system owns
